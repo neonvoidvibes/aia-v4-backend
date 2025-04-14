@@ -6,6 +6,7 @@ python-dotenv>=1.0.0
 anthropic>=0.29.0,<0.30.0 # Pinned as before
 openai>=1.14.3,<2.0.0    # Use version from magic_chat
 tiktoken>=0.7.0,<0.8.0   # Use version from magic_chat
+httpx>=0.27.0,<0.28.0
 
 # Langchain (Keep versions compatible with magic_chat's Pydantic v1 constraint)
 langchain>=0.1.20,<0.2.0
@@ -33,7 +34,6 @@ typing-extensions>=4.7.0 # Already present
 tenacity>=8.2.0,<9.0.0   # Already present
 
 # Optional, might be pulled in:
-# httpx (likely by anthropic/openai)
 # regex (likely by whisper/openai)
 # python-magic (if needed for file type detection later)
 # schedule (if integrating scheduler directly)

@@ -1,4 +1,3 @@
-# /aia-v4-backend/api_server.py
 import os
 import sys
 import logging
@@ -10,12 +9,12 @@ import json
 from datetime import datetime, timezone
 
 # Import necessary modules from our project
-from magic_audio import MagicAudio
+from magic_audio import MagicAudio # Import the copied module
 from utils.retrieval_handler import RetrievalHandler
 from utils.transcript_utils import TranscriptState, read_new_transcript_content, read_all_transcripts_in_folder, get_latest_transcript_file
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
-    get_agent_docs, save_chat_to_s3, format_chat_history
+    get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client # Added get_s3_client
 )
 from utils.pinecone_utils import init_pinecone # Ensure Pinecone is init'd if needed by RetrievalHandler
 
@@ -24,6 +23,9 @@ from anthropic import Anthropic, APIStatusError, AnthropicError
 
 # Retry mechanism
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
+
+# CORS
+from flask_cors import CORS # Import CORS
 
 # --- Load environment variables ---
 load_dotenv()
@@ -39,7 +41,9 @@ def setup_logging(debug=False):
     except Exception as e: print(f"Error setting up file logger: {e}", file=sys.stderr)
     ch = logging.StreamHandler(sys.stdout); ch.setLevel(log_level)
     cf = logging.Formatter('[%(levelname)-8s] %(name)s: %(message)s'); ch.setFormatter(cf); root_logger.addHandler(ch)
-    for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone']: logging.getLogger(lib).setLevel(logging.WARNING)
+    # Be more specific about silencing libraries
+    for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug']: # Added werkzeug
+        logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO) # Log our utils
     logging.info(f"Logging setup complete. Level: {logging.getLevelName(log_level)}")
     return root_logger
@@ -47,6 +51,7 @@ logger = setup_logging(debug=os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
+CORS(app) # <-- Enable CORS for all origins
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 
 # --- Global State (Simplified for POC) ---
@@ -58,7 +63,13 @@ recording_status = { "is_recording": False, "is_paused": False, "start_time": No
 # Chat (Anthropic Client is global)
 anthropic_client: Anthropic | None = None
 # Initialize Pinecone globally if RetrievalHandler needs it readily available
-init_pinecone()
+# This might still raise an error if PINECONE_API_KEY is missing, but won't block server start
+try:
+    init_pinecone()
+    logger.info("Pinecone initialized (or skipped if keys missing).")
+except Exception as e:
+    logger.warning(f"Pinecone initialization failed during startup: {e}")
+
 
 # Chat History & State (Potentially per-request or per-session later)
 # For POC, let's manage history conceptually per API call for now
@@ -108,12 +119,36 @@ def health_check():
     logger.info("Health check requested")
     anthropic_ok = anthropic_client is not None
     # Add checks for S3, Pinecone if needed
-    return jsonify({"status": "ok", "message": "Backend is running", "anthropic_client": anthropic_ok}), 200
+    s3_ok = get_s3_client() is not None
+    # Pinecone check is tricky as init might fail silently if keys missing
+    return jsonify({"status": "ok", "message": "Backend is running", "anthropic_client": anthropic_ok, "s3_client": s3_ok}), 200
 
-# --- Transcription Control API Routes (Keep as before) ---
+@app.route('/api/status', methods=['GET'])
+def get_app_status():
+    """Returns the status of backend features like memory and transcript listening."""
+    # For POC, these are based on initial config flags or assumptions.
+    # TODO: Integrate config loading properly to reflect actual runtime state.
+    is_memory_enabled = True # Assume memory is intended to be used based on old logic
+    is_transcript_listening = False # Assume false unless explicitly started/configured
+
+    with magic_audio_lock:
+         rec_status = recording_status.copy() # Get current recording status
+
+    status_data = {
+        'agent_name': rec_status.get("agent", "N/A"),
+        'event_id': rec_status.get("event", "N/A"),
+        'listen_transcript': is_transcript_listening, # Placeholder
+        'memory_enabled': is_memory_enabled,         # Placeholder
+        'is_recording': rec_status.get("is_recording", False),
+        'is_paused': rec_status.get("is_paused", False),
+    }
+    logger.debug(f"Reporting app status: {status_data}")
+    return jsonify(status_data), 200
+
+
+# --- Transcription Control API Routes ---
 @app.route('/api/recording/start', methods=['POST'])
 def start_recording():
-    # ... (Keep existing implementation) ...
     global magic_audio_instance, recording_status
     with magic_audio_lock:
         if recording_status["is_recording"]: return jsonify({"status": "error", "message": "Already recording"}), 400
@@ -136,7 +171,6 @@ def start_recording():
 
 @app.route('/api/recording/stop', methods=['POST'])
 def stop_recording():
-    # ... (Keep existing implementation) ...
     global magic_audio_instance, recording_status
     with magic_audio_lock:
         if not recording_status["is_recording"] or not magic_audio_instance: return jsonify({"status": "success", "message": "Not recording"}), 200
@@ -160,7 +194,6 @@ def stop_recording():
 
 @app.route('/api/recording/pause', methods=['POST'])
 def pause_recording():
-    # ... (Keep existing implementation) ...
     global magic_audio_instance, recording_status
     with magic_audio_lock:
         if not recording_status["is_recording"] or not magic_audio_instance: return jsonify({"status": "error", "message": "Not recording"}), 400
@@ -176,7 +209,6 @@ def pause_recording():
 
 @app.route('/api/recording/resume', methods=['POST'])
 def resume_recording():
-    # ... (Keep existing implementation) ...
     global magic_audio_instance, recording_status
     with magic_audio_lock:
         if not recording_status["is_recording"] or not magic_audio_instance: return jsonify({"status": "error", "message": "Not recording"}), 400
@@ -196,16 +228,17 @@ def resume_recording():
 
 @app.route('/api/recording/status', methods=['GET'])
 def get_recording_status():
-    # ... (Keep existing implementation) ...
     with magic_audio_lock:
         current_elapsed = recording_status["elapsed_time"]
         if recording_status["is_recording"] and not recording_status["is_paused"] and recording_status["start_time"]: current_elapsed = time.time() - recording_status["start_time"]
         status_data = {"is_recording": recording_status["is_recording"], "is_paused": recording_status["is_paused"], "elapsed_time": int(current_elapsed), "agent": recording_status.get("agent"), "event": recording_status.get("event")}
-    return jsonify(status_data)
+    return jsonify(status_data), 200 # Explicitly return 200 OK
+
 
 # --- Chat API Route ---
 @app.route('/api/chat', methods=['POST'])
 def handle_chat():
+    logger.info(f"Received request for /api/chat with method: {request.method}") # <-- ADDED LOGGING
     global transcript_state_cache # Access global cache
 
     if not anthropic_client:
@@ -218,8 +251,6 @@ def handle_chat():
             return jsonify({"error": "Missing 'messages' in request body"}), 400
 
         # --- Get Agent & Event Context ---
-        # Assume these are passed in the request body or headers from the Next.js proxy
-        # which gets them from URL params
         agent_name = data.get('agent')
         event_id = data.get('event', '0000') # Default to '0000' if not provided
         session_id = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) # Or generate if missing
@@ -231,12 +262,10 @@ def handle_chat():
 
         # --- Prepare Messages & History ---
         incoming_messages = data['messages']
-        # For now, use only the messages sent in this request for the API call history
-        # A more robust solution would involve session management or passing history
         llm_messages = [
              {"role": msg["role"], "content": msg["content"]}
              for msg in incoming_messages
-             if msg.get("role") in ["user", "assistant"] # Filter out system/other roles if present
+             if msg.get("role") in ["user", "assistant"]
          ]
         if not llm_messages: return jsonify({"error": "No valid user/assistant messages found"}), 400
 
@@ -249,25 +278,24 @@ def handle_chat():
             logger.debug("Loaded prompts/context/docs from S3.")
         except Exception as e:
              logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True)
-             # Use defaults or error message if loading fails critically
              base_system_prompt = "Error: Could not load configuration."
              frameworks = event_context = agent_docs = None
 
         # --- Assemble System Prompt ---
-        # Combine instructions into the base prompt permanently during loading
         source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify the exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) from which you derive information using Markdown footnotes like `[^1]`. \n2. Place the footnote marker directly after the sentence or paragraph containing the information. \n3. List all cited sources at the end under a `### Sources` heading, formatted as `[^1]: source_file_name.ext`."
         realtime_instr = "\n\nIMPORTANT: Prioritize [REAL-TIME Meeting Transcript Update] content for answering questions about the 'current' or 'latest' state of the conversation."
-        # synth_instr = "\nSynthesizing from Context: When answering, combine related pieces of information from different context sources or transcript segments into a coherent response. Avoid simply listing chunks. Do not state 'incomplete context' if you have *some* relevant information; synthesize what you have."
-        final_system_prompt = base_system_prompt + source_instr + realtime_instr #+ synth_instr
+        final_system_prompt = base_system_prompt + source_instr + realtime_instr
 
         if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
-        if event_context: final_system_prompt += "\n\n## Context\n" + event_context # Combined Org/Event Context
+        if event_context: final_system_prompt += "\n\n## Context\n" + event_context
         if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
-        # TODO: Add Memory Loading Here if needed, similar to web_chat.py/magic_chat.py
+        # TODO: Add Memory Loading Here
 
         # --- Add RAG Context ---
         rag_context_block = ""
         try:
+            # NOTE: This will fail if Pinecone index 'magicchat' doesn't exist or keys are wrong.
+            # We expect this based on user comment, so we'll log the error and continue.
             retriever = RetrievalHandler(
                 index_name=os.getenv('PINECONE_INDEX_NAME', 'magicchat'),
                 agent_name=agent_name,
@@ -275,7 +303,6 @@ def handle_chat():
                 event_id=event_id,
                 anthropic_client=anthropic_client # Pass the client
             )
-            # Use the last user message as the query for RAG
             last_user_message = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
             if last_user_message:
                 retrieved_docs = retriever.get_relevant_context(query=last_user_message, top_k=5) # Get 5 docs for POC
@@ -285,15 +312,18 @@ def handle_chat():
                     logger.debug(f"Added {len(retrieved_docs)} RAG context docs ({len(rag_context_block)} chars).")
             else:
                 logger.debug("No user message found to generate RAG context.")
+        except RuntimeError as e:
+             # Catch the specific "Failed connection" error from RetrievalHandler __init__
+             logger.warning(f"RAG context retrieval skipped: {e}")
+             rag_context_block = "\n\n[Note: Document retrieval failed or index not available]"
         except Exception as e:
-            logger.error(f"Error during RAG context retrieval: {e}", exc_info=True)
-            rag_context_block = "\n\nError retrieving context."
+            logger.error(f"Unexpected error during RAG context retrieval: {e}", exc_info=True)
+            rag_context_block = "\n\n[Note: Error retrieving documents]"
 
         final_system_prompt += rag_context_block
 
         # --- Add Transcript Context ---
         transcript_content_to_add = ""
-        # Get or create TranscriptState for this agent/event
         state_key = (agent_name, event_id)
         with transcript_state_lock:
             if state_key not in transcript_state_cache:
@@ -302,14 +332,11 @@ def handle_chat():
             current_transcript_state = transcript_state_cache[state_key]
 
         try:
-            # Fetch *new* transcript content since last check for this state
             new_transcript = read_new_transcript_content(current_transcript_state, agent_name, event_id)
             if new_transcript:
-                # Simple approach for POC: just add the latest update block
                 label = "[REAL-TIME Meeting Transcript Update]"
                 transcript_content_to_add = f"{label}\n{new_transcript}"
                 logger.info(f"Adding recent transcript update ({len(new_transcript)} chars).")
-                # Inject as a user message *before* the actual current user message
                 llm_messages.insert(-1, {'role': 'user', 'content': transcript_content_to_add})
             else:
                 logger.debug("No new transcript updates found.")
@@ -329,8 +356,9 @@ def handle_chat():
 
         logger.debug(f"Final System Prompt Length: {len(final_system_prompt)}")
         logger.debug(f"Messages for API ({len(llm_messages)}):")
+        # Log last 5 messages for context debugging
         if logger.isEnabledFor(logging.DEBUG):
-             for i, msg in enumerate(llm_messages[-5:]): # Log last 5 messages
+             for i, msg in enumerate(llm_messages[-5:]):
                   logger.debug(f"  Msg [-{len(llm_messages)-i}]: Role={msg['role']}, Len={len(msg['content'])}, Content='{msg['content'][:100]}...'")
 
         # --- Streaming Response ---
@@ -346,7 +374,9 @@ def handle_chat():
                 ) as stream:
                     for text in stream.text_stream:
                         response_content += text
-                        yield f"data: {json.dumps({'delta': text})}\n\n"
+                        # Format as Server-Sent Event (SSE)
+                        sse_data = json.dumps({'delta': text})
+                        yield f"data: {sse_data}\n\n" # Ensure double newline separator
                 logger.info(f"LLM stream completed successfully ({len(response_content)} chars).")
 
             except RetryError as e:
@@ -367,23 +397,24 @@ def handle_chat():
                       logger.error(f"LLM stream error: {e}", exc_info=True)
                       stream_error = f"An unexpected error occurred: {str(e)}"
 
-            # Send error message if any occurred
+            # Send error message if any occurred, formatted as SSE
             if stream_error:
-                yield f"data: {json.dumps({'error': stream_error})}\n\n"
+                sse_error_data = json.dumps({'error': stream_error})
+                yield f"data: {sse_error_data}\n\n"
 
             # TODO: Add chat archiving logic here using s3_utils if needed
-            # If archiving: use the original incoming_messages + the response_content
+            # Consider archiving the `incoming_messages` + the final `response_content`
 
-            # Signal completion
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            # Signal completion (optional, but good practice)
+            sse_done_data = json.dumps({'done': True})
+            yield f"data: {sse_done_data}\n\n"
 
-        # Return the streaming response
+        # Return the streaming response with correct MIME type for SSE
         return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
 
     except Exception as e:
         logger.error(f"Error in /api/chat endpoint: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
-
 
 # --- Main Execution ---
 if __name__ == '__main__':
@@ -391,4 +422,6 @@ if __name__ == '__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
     # Use host='0.0.0.0' for Render/Docker
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+    # Turn off Flask's default reloader if debug is True, as it can interfere
+    use_reloader = False if debug_mode else False
+    app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=use_reloader)
