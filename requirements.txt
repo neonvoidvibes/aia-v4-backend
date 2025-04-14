@@ -1,36 +1,39 @@
-# Core LLM and Langchain
-anthropic==0.29.0 # Pinned due to previous httpx/proxy issue potential
-openai==1.14.3 # Pinned due to dependency interactions
-tiktoken==0.7.0 # Pinned due to previous tiktoken errors
+# Core Flask & Web
+Flask>=3.0.0
+python-dotenv>=1.0.0
 
-# Allow more flexibility for langchain internal compatibility
-langchain>=0.1.20,<0.2.0 # Allow patches on 0.1.x
-langchain-core>=0.1.52,<0.2.0 # Allow compatible core versions for 0.1.x
-langchain-openai>=0.1.0,<0.2.0 # Allow compatible openai integration versions
+# LLM & Embeddings
+anthropic>=0.29.0,<0.30.0 # Pinned as before
+openai>=1.14.3,<2.0.0    # Use version from magic_chat
+tiktoken>=0.7.0,<0.8.0   # Use version from magic_chat
 
-# Pinecone
+# Langchain (Keep versions compatible with magic_chat's Pydantic v1 constraint)
+langchain>=0.1.20,<0.2.0
+langchain-core>=0.1.52,<0.2.0
+langchain-openai>=0.1.0,<0.2.0
+langchain-pinecone>=0.1.0,<0.2.0
+pydantic<2.0.0 # CRITICAL: Langchain 0.1.x needs Pydantic v1
+
+# Vector DB
 pinecone-client>=3.0.0,<4.0.0
-langchain-pinecone>=0.1.0,<0.2.0 # Allow compatible pinecone integration versions
 
 # AWS
-boto3==1.34.141 # Specific boto3 version
+boto3>=1.34.141 # Use specific version from magic_chat
 
-# Web Interface
-Flask>=3.0.0
-
-# HTTP Client (Pinning to resolve init conflict)
-httpx==0.25.2 # Older version often compatible with older anthropic/openai
+# Audio & Transcription (from magic_app)
+sounddevice>=0.4.6,<0.5.0 # Use version from magic_app reqs snapshot
+numpy>=1.26.2,<2.0.0      # Use version from magic_app reqs snapshot (compatible with sounddevice)
+scipy>=1.13.1,<2.0.0      # Use version from magic_app reqs snapshot
+webrtcvad>=2.0.10,<3.0.0  # Use version from magic_app reqs snapshot
+requests>=2.32.3,<3.0.0   # Use version from magic_app reqs snapshot
+pytz>=2024.1             # Added for timezone handling in magic_audio
 
 # Utilities
-python-dotenv==1.0.1
-argparse>=1.4.0
-typing-extensions>=4.7.0
-tenacity>=8.2.0,<9.0.0 # Keep upper bound
-numpy>=1.24.0
-loguru>=0.5.0
-pydantic<2.0.0 # Keep v1 pydantic constraint
-schedule>=1.2.0
+typing-extensions>=4.7.0 # Already present
+tenacity>=8.2.0,<9.0.0   # Already present
 
-# Dependencies potentially pulled by others, let pip manage:
-# langchain-community
-# langsmith
+# Optional, might be pulled in:
+# httpx (likely by anthropic/openai)
+# regex (likely by whisper/openai)
+# python-magic (if needed for file type detection later)
+# schedule (if integrating scheduler directly)
