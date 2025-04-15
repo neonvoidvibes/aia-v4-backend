@@ -12074,3 +12074,135 @@ anthropic.APIStatusError: {'type': 'error', 'error': {'details': None, 'type': '
 2025-04-15 08:41:16,063 [INFO] root: Recording started successfully.
 2025-04-15 08:41:17,937 [INFO] root: Stopping recording...
 2025-04-15 08:41:20,075 [INFO] root: Recording stopped and transcript saved.
+2025-04-15 09:55:35,110 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 09:55:35,120 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 09:55:35,121 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 09:55:35,128 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 09:55:35,129 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 09:59:57,707 [INFO] root: Received request for /api/chat with method: POST
+2025-04-15 09:59:57,712 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-04-15 09:59:58,005 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-04-15 09:59:58,333 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-04-15 09:59:58,333 [INFO] utils.s3_utils: Final system prompt length: 14745
+2025-04-15 09:59:58,456 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-04-15 09:59:58,456 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-04-15 09:59:58,456 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-04-15 09:59:58,456 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-04-15 09:59:58,520 [INFO] utils.s3_utils: Loaded organization context.
+2025-04-15 09:59:58,520 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-04-15 09:59:58,546 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-04-15 09:59:58,570 [INFO] utils.retrieval_handler: Retriever: Initialized Embeddings model 'text-embedding-ada-002'.
+2025-04-15 09:59:58,572 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 09:59:59,040 [INFO] utils.retrieval_handler: Retriever: Connected to index 'river'. Default top_k=10
+2025-04-15 09:59:59,603 [INFO] utils.retrieval_handler: Retriever: Using transformed query: ''hello'...'
+2025-04-15 10:00:01,403 [INFO] utils.retrieval_handler: Found 5 matches in ns 'river'.
+2025-04-15 10:00:01,404 [INFO] utils.retrieval_handler: Retriever: Returning 5 processed contexts.
+2025-04-15 10:00:01,404 [INFO] root: Created new TranscriptState for river/0000
+2025-04-15 10:00:01,448 [WARNING] utils.transcript_utils: No transcript files found (Mode: 'regular') in ['organizations/river/agents/river/events/0000/transcripts/']
+2025-04-15 10:00:03,204 [INFO] root: LLM stream completed successfully (34 chars).
+2025-04-15 10:00:09,400 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-04-15 10:00:09,542 [INFO] root: Recording started successfully.
+2025-04-15 10:00:10,001 [INFO] root: Pausing recording...
+2025-04-15 10:00:10,053 [INFO] root: Recording paused.
+2025-04-15 10:00:13,031 [INFO] root: Received request for /api/chat with method: POST
+2025-04-15 10:00:13,032 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-04-15 10:00:13,195 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-04-15 10:00:13,195 [INFO] utils.s3_utils: Final system prompt length: 14745
+2025-04-15 10:00:13,287 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-04-15 10:00:13,287 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-04-15 10:00:13,287 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-04-15 10:00:13,287 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-04-15 10:00:13,342 [INFO] utils.s3_utils: Loaded organization context.
+2025-04-15 10:00:13,342 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-04-15 10:00:13,365 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-04-15 10:00:13,375 [INFO] utils.retrieval_handler: Retriever: Initialized Embeddings model 'text-embedding-ada-002'.
+2025-04-15 10:00:13,378 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 10:00:13,378 [INFO] utils.retrieval_handler: Retriever: Connected to index 'river'. Default top_k=10
+2025-04-15 10:00:13,851 [INFO] utils.retrieval_handler: Retriever: Using transformed query: ''river'...'
+2025-04-15 10:00:15,083 [INFO] utils.retrieval_handler: Found 5 matches in ns 'river'.
+2025-04-15 10:00:15,083 [INFO] utils.retrieval_handler: Retriever: Returning 5 processed contexts.
+2025-04-15 10:00:15,126 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100009_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100009.txt. Resetting read position to 0.
+2025-04-15 10:00:15,144 [INFO] utils.transcript_utils: S3 get_object successful. Read 88 bytes.
+2025-04-15 10:00:15,144 [INFO] utils.transcript_utils: Decoded 88 characters.
+2025-04-15 10:00:15,144 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100009_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100009.txt: Position set to 88 (current S3 size).
+2025-04-15 10:00:15,144 [INFO] root: Adding recent transcript update (194 chars).
+2025-04-15 10:00:17,714 [INFO] root: Received request for /api/chat with method: POST
+2025-04-15 10:00:17,715 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-04-15 10:00:17,818 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-04-15 10:00:17,818 [INFO] utils.s3_utils: Final system prompt length: 14745
+2025-04-15 10:00:17,897 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-04-15 10:00:17,897 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-04-15 10:00:17,897 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-04-15 10:00:17,897 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-04-15 10:00:17,954 [INFO] utils.s3_utils: Loaded organization context.
+2025-04-15 10:00:17,955 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-04-15 10:00:17,978 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-04-15 10:00:17,993 [INFO] utils.retrieval_handler: Retriever: Initialized Embeddings model 'text-embedding-ada-002'.
+2025-04-15 10:00:17,996 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 10:00:17,996 [INFO] utils.retrieval_handler: Retriever: Connected to index 'river'. Default top_k=10
+2025-04-15 10:00:18,376 [INFO] root: Resuming recording...
+2025-04-15 10:00:18,458 [INFO] utils.retrieval_handler: Retriever: Using transformed query: ''river hydrology geography physical characteristics'...'
+2025-04-15 10:00:18,593 [INFO] root: Recording resumed.
+2025-04-15 10:00:19,764 [INFO] utils.retrieval_handler: Found 5 matches in ns 'river'.
+2025-04-15 10:00:19,765 [INFO] utils.retrieval_handler: Retriever: Returning 5 processed contexts.
+2025-04-15 10:00:19,811 [INFO] utils.transcript_utils: Tx organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100009_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100009.txt updated. Planning to read from position 88 (S3 size: 187).
+2025-04-15 10:00:19,840 [INFO] utils.transcript_utils: S3 get_object successful. Read 99 bytes.
+2025-04-15 10:00:19,840 [INFO] utils.transcript_utils: Decoded 99 characters.
+2025-04-15 10:00:19,840 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100009_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100009.txt: Position set to 187 (current S3 size).
+2025-04-15 10:00:19,840 [INFO] root: Adding recent transcript update (205 chars).
+2025-04-15 10:00:21,256 [INFO] root: LLM stream completed successfully (919 chars).
+2025-04-15 10:00:25,259 [INFO] root: LLM stream completed successfully (808 chars).
+2025-04-15 10:09:03,356 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 10:09:03,366 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 10:09:03,367 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 10:09:03,373 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 10:09:03,374 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 10:09:12,688 [INFO] root: Received request for /api/chat with method: POST
+2025-04-15 10:09:12,689 [INFO] root: Received request for /api/chat with method: POST
+2025-04-15 10:09:12,691 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-04-15 10:09:12,691 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-04-15 10:09:12,910 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-04-15 10:09:12,971 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-04-15 10:09:13,169 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-04-15 10:09:13,169 [INFO] utils.s3_utils: Final system prompt length: 14745
+2025-04-15 10:09:13,171 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-04-15 10:09:13,171 [INFO] utils.s3_utils: Final system prompt length: 14745
+2025-04-15 10:09:13,275 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-04-15 10:09:13,275 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-04-15 10:09:13,275 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-04-15 10:09:13,275 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-04-15 10:09:13,276 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-04-15 10:09:13,276 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-04-15 10:09:13,276 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-04-15 10:09:13,276 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-04-15 10:09:13,331 [INFO] utils.s3_utils: Loaded organization context.
+2025-04-15 10:09:13,331 [INFO] utils.s3_utils: Loaded organization context.
+2025-04-15 10:09:13,331 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-04-15 10:09:13,331 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-04-15 10:09:13,353 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-04-15 10:09:13,357 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-04-15 10:09:13,372 [INFO] utils.retrieval_handler: Retriever: Initialized Embeddings model 'text-embedding-ada-002'.
+2025-04-15 10:09:13,372 [INFO] utils.retrieval_handler: Retriever: Initialized Embeddings model 'text-embedding-ada-002'.
+2025-04-15 10:09:13,374 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 10:09:13,375 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 10:09:13,827 [INFO] utils.retrieval_handler: Retriever: Connected to index 'river'. Default top_k=10
+2025-04-15 10:09:13,860 [INFO] utils.retrieval_handler: Retriever: Connected to index 'river'. Default top_k=10
+2025-04-15 10:09:14,338 [INFO] utils.retrieval_handler: Retriever: Using transformed query: ''river definition'...'
+2025-04-15 10:09:14,449 [INFO] utils.retrieval_handler: Retriever: Using transformed query: '"definition of river, characteristics of rivers, key components of rivers"...'
+2025-04-15 10:09:15,500 [INFO] utils.retrieval_handler: Found 5 matches in ns 'river'.
+2025-04-15 10:09:15,501 [INFO] utils.retrieval_handler: Found 5 matches in ns 'river'.
+2025-04-15 10:09:15,502 [INFO] utils.retrieval_handler: Retriever: Returning 5 processed contexts.
+2025-04-15 10:09:15,502 [INFO] utils.retrieval_handler: Retriever: Returning 5 processed contexts.
+2025-04-15 10:09:15,503 [INFO] root: Created new TranscriptState for river/0000
+2025-04-15 10:09:15,574 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100659_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100659.txt. Resetting read position to 0.
+2025-04-15 10:09:15,575 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100659_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100659.txt. Resetting read position to 0.
+2025-04-15 10:09:15,603 [INFO] utils.transcript_utils: S3 get_object successful. Read 1599 bytes.
+2025-04-15 10:09:15,604 [INFO] utils.transcript_utils: S3 get_object successful. Read 1599 bytes.
+2025-04-15 10:09:15,604 [INFO] utils.transcript_utils: Decoded 1599 characters.
+2025-04-15 10:09:15,604 [INFO] utils.transcript_utils: Decoded 1599 characters.
+2025-04-15 10:09:15,604 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100659_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100659.txt: Position set to 1599 (current S3 size).
+2025-04-15 10:09:15,604 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250415-T100659_uID-0112_oID-river_aID-river_eID-0000_sID-20250415_100659.txt: Position set to 1599 (current S3 size).
+2025-04-15 10:09:15,604 [INFO] root: Adding recent transcript update (1705 chars).
+2025-04-15 10:09:15,604 [INFO] root: Adding recent transcript update (1705 chars).
+2025-04-15 10:09:16,879 [INFO] root: LLM stream completed successfully (0 chars).
+2025-04-15 10:09:16,889 [INFO] root: LLM stream completed successfully (0 chars).

@@ -16,7 +16,9 @@ from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client # Added get_s3_client
 )
-from utils.pinecone_utils import init_pinecone # Ensure Pinecone is init'd if needed by RetrievalHandler
+# Import specific Pinecone exception
+from utils.pinecone_utils import init_pinecone
+from pinecone.exceptions import NotFoundException
 
 # LLM Client
 from anthropic import Anthropic, APIStatusError, AnthropicError
@@ -233,6 +235,50 @@ def get_recording_status():
         if recording_status["is_recording"] and not recording_status["is_paused"] and recording_status["start_time"]: current_elapsed = time.time() - recording_status["start_time"]
         status_data = {"is_recording": recording_status["is_recording"], "is_paused": recording_status["is_paused"], "elapsed_time": int(current_elapsed), "agent": recording_status.get("agent"), "event": recording_status.get("event")}
     return jsonify(status_data), 200 # Explicitly return 200 OK
+
+
+# --- Pinecone Index Info Route ---
+@app.route('/api/index/<string:index_name>/stats', methods=['GET'])
+def get_pinecone_index_stats(index_name: str):
+    """Retrieves statistics for the specified Pinecone index."""
+    logger.info(f"Request received for stats of index: {index_name}")
+    try:
+        # Initialize Pinecone client (assuming keys are available)
+        pc = init_pinecone()
+        if not pc:
+            logger.error(f"Failed to initialize Pinecone client for stats request.")
+            return jsonify({"error": "Pinecone client initialization failed"}), 500
+
+        # Check if index exists and get handle
+        try:
+            index = pc.Index(index_name)
+            logger.info(f"Accessing Pinecone index '{index_name}'")
+        except NotFoundException:
+            logger.warning(f"Index '{index_name}' not found.")
+            return jsonify({"error": f"Index '{index_name}' not found"}), 404
+        except Exception as e:
+             logger.error(f"Error accessing index '{index_name}': {e}", exc_info=True)
+             return jsonify({"error": f"Failed to access index '{index_name}'"}), 500
+
+        # Get statistics
+        stats = index.describe_index_stats()
+        # The stats object might have different structures, convert to dict safely
+        stats_dict = {}
+        if hasattr(stats, 'to_dict'):
+            stats_dict = stats.to_dict()
+        elif isinstance(stats, dict):
+             stats_dict = stats
+        else:
+             # Fallback if the structure is unexpected
+             stats_dict = {"raw_stats": str(stats)}
+
+        logger.info(f"Successfully retrieved stats for index '{index_name}'.")
+        # Return the full stats object for now, frontend can parse namespaces
+        return jsonify(stats_dict), 200
+
+    except Exception as e:
+        logger.error(f"Error getting stats for index '{index_name}': {e}", exc_info=True)
+        return jsonify({"error": "An unexpected error occurred"}), 500
 
 
 # --- Chat API Route ---
