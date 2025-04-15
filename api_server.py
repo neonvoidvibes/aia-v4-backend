@@ -30,7 +30,7 @@ from flask_cors import CORS # Import CORS
 # --- Load environment variables ---
 load_dotenv()
 
-# --- Logging Setup (same as before) ---
+# --- Logging Setup ---
 def setup_logging(debug=False):
     log_filename = 'api_server.log'; root_logger = logging.getLogger(); log_level = logging.DEBUG if debug else logging.INFO
     root_logger.setLevel(log_level)
@@ -238,7 +238,7 @@ def get_recording_status():
 # --- Chat API Route ---
 @app.route('/api/chat', methods=['POST'])
 def handle_chat():
-    logger.info(f"Received request for /api/chat with method: {request.method}") # <-- ADDED LOGGING
+    logger.info(f"Received request for /api/chat with method: {request.method}") # Log request method
     global transcript_state_cache # Access global cache
 
     if not anthropic_client:
@@ -294,18 +294,17 @@ def handle_chat():
         # --- Add RAG Context ---
         rag_context_block = ""
         try:
-            # NOTE: This will fail if Pinecone index 'magicchat' doesn't exist or keys are wrong.
-            # We expect this based on user comment, so we'll log the error and continue.
+            # Initialize RetrievalHandler with agent_name as index_name
             retriever = RetrievalHandler(
-                index_name=os.getenv('PINECONE_INDEX_NAME', 'river'),
+                index_name=agent_name, # <-- USE AGENT NAME FOR INDEX NAME
                 agent_name=agent_name,
-                session_id=session_id, # Pass session/event if needed by retriever logic
+                session_id=session_id,
                 event_id=event_id,
-                anthropic_client=anthropic_client # Pass the client
+                anthropic_client=anthropic_client
             )
             last_user_message = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
             if last_user_message:
-                retrieved_docs = retriever.get_relevant_context(query=last_user_message, top_k=5) # Get 5 docs for POC
+                retrieved_docs = retriever.get_relevant_context(query=last_user_message, top_k=5)
                 if retrieved_docs:
                     items = [f"[Ctx {i+1} from {d.metadata.get('file_name','?')}(Score:{d.metadata.get('score',0):.2f})]:\n{d.page_content}" for i, d in enumerate(retrieved_docs)]
                     rag_context_block = "\n\n---\nRetrieved Context (for potential relevance):\n" + "\n\n".join(items)
@@ -313,9 +312,9 @@ def handle_chat():
             else:
                 logger.debug("No user message found to generate RAG context.")
         except RuntimeError as e:
-             # Catch the specific "Failed connection" error from RetrievalHandler __init__
+             # Catch specific "Failed connection" or other init errors
              logger.warning(f"RAG context retrieval skipped: {e}")
-             rag_context_block = "\n\n[Note: Document retrieval failed or index not available]"
+             rag_context_block = f"\n\n[Note: Document retrieval failed for index '{agent_name}']"
         except Exception as e:
             logger.error(f"Unexpected error during RAG context retrieval: {e}", exc_info=True)
             rag_context_block = "\n\n[Note: Error retrieving documents]"
@@ -351,12 +350,11 @@ def handle_chat():
         final_system_prompt += time_context
 
         # --- Prepare for LLM Call ---
-        llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-3-5-sonnet-20240620") # Use 3.5 Sonnet as default
+        llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-3-5-sonnet-20240620")
         llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
 
         logger.debug(f"Final System Prompt Length: {len(final_system_prompt)}")
         logger.debug(f"Messages for API ({len(llm_messages)}):")
-        # Log last 5 messages for context debugging
         if logger.isEnabledFor(logging.DEBUG):
              for i, msg in enumerate(llm_messages[-5:]):
                   logger.debug(f"  Msg [-{len(llm_messages)-i}]: Role={msg['role']}, Len={len(msg['content'])}, Content='{msg['content'][:100]}...'")
@@ -365,7 +363,6 @@ def handle_chat():
         def generate_stream():
             response_content = ""; stream_error = None
             try:
-                # Use the retry-enabled helper method
                 with _call_anthropic_stream_with_retry(
                     model=llm_model_name,
                     max_tokens=llm_max_tokens,
@@ -386,7 +383,7 @@ def handle_chat():
                 logger.error(f"Anthropic API Status Error (non-retryable or final attempt): {e}", exc_info=True)
                 stream_error = f"API Error: {e.message}" if hasattr(e, 'message') else str(e)
                 if 'overloaded' in str(e).lower(): stream_error = "Assistant API is temporarily overloaded. Please try again."
-            except AnthropicError as e: # Catch other Anthropic specific errors
+            except AnthropicError as e:
                 logger.error(f"Anthropic API Error: {e}", exc_info=True)
                 stream_error = f"Anthropic Error: {str(e)}"
             except Exception as e:
@@ -397,15 +394,12 @@ def handle_chat():
                       logger.error(f"LLM stream error: {e}", exc_info=True)
                       stream_error = f"An unexpected error occurred: {str(e)}"
 
-            # Send error message if any occurred, formatted as SSE
             if stream_error:
                 sse_error_data = json.dumps({'error': stream_error})
                 yield f"data: {sse_error_data}\n\n"
 
             # TODO: Add chat archiving logic here using s3_utils if needed
-            # Consider archiving the `incoming_messages` + the final `response_content`
 
-            # Signal completion (optional, but good practice)
             sse_done_data = json.dumps({'done': True})
             yield f"data: {sse_done_data}\n\n"
 
