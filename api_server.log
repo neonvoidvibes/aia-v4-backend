@@ -12219,3 +12219,159 @@ anthropic.APIStatusError: {'type': 'error', 'error': {'details': None, 'type': '
 2025-04-15 16:59:29,039 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
 2025-04-15 16:59:29,039 [INFO] root: Accessing Pinecone index 'river'
 2025-04-15 16:59:29,661 [INFO] root: Successfully retrieved stats for index 'river'.
+2025-04-15 17:00:35,179 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 17:00:35,181 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:00:35,181 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 17:00:35,186 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 17:00:35,187 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 17:00:52,321 [INFO] root: Request received to list IDs in index 'river', namespace 'river' (limit: 1000, token: None)
+2025-04-15 17:00:52,324 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:00:52,975 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 17:00:52,975 [ERROR] root: Error listing vector IDs for index 'river', namespace 'river': 'generator' object has no attribute 'vectors'
+Traceback (most recent call last):
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/api_server.py", line 321, in list_vector_ids_in_namespace
+    vector_ids = [v.id for v in list_response.vectors] if list_response.vectors else []
+                                                          ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'generator' object has no attribute 'vectors'
+2025-04-15 17:02:46,991 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 17:02:46,993 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:02:46,993 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 17:02:46,997 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 17:02:46,999 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 17:04:21,458 [INFO] root: Request received to list IDs in index 'river', namespace 'river' (limit: 10, token: None)
+2025-04-15 17:04:21,480 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:04:22,439 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 17:04:23,104 [ERROR] root: Error iterating through list generator: 'list' object has no attribute 'id'
+Traceback (most recent call last):
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/api_server.py", line 327, in list_vector_ids_in_namespace
+    vector_ids.append(vector_metadata.id)
+                      ^^^^^^^^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'id'
+2025-04-15 17:04:23,108 [INFO] root: Found 0 vector IDs in namespace 'river'.
+2025-04-15 17:05:49,429 [INFO] root: Request received for stats of index: river
+2025-04-15 17:05:49,433 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:05:49,434 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 17:05:49,972 [INFO] root: Successfully retrieved stats for index 'river'.
+2025-04-15 17:06:50,699 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 17:06:50,711 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:06:50,711 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 17:06:50,716 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 17:06:50,718 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 17:06:58,134 [INFO] root: Request received to list IDs in index 'river', namespace 'river' (limit: 10, token: None)
+2025-04-15 17:06:58,136 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:06:59,616 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 17:06:59,618 [INFO] root: Querying Pinecone namespace: 'river' (URL requested: 'river')
+2025-04-15 17:07:00,399 [ERROR] root: Error iterating through list generator: 'list' object has no attribute 'id'
+Traceback (most recent call last):
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/api_server.py", line 331, in list_vector_ids_in_namespace
+    vector_ids.append(vector_metadata.id)
+                      ^^^^^^^^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'id'
+2025-04-15 17:07:00,401 [INFO] root: Found 0 vector IDs in queried namespace 'river'.
+2025-04-15 17:07:18,969 [INFO] root: Request received to list IDs in index 'river', namespace '_default' (limit: 10, token: None)
+2025-04-15 17:07:18,972 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:07:18,973 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 17:07:18,973 [INFO] root: Querying Pinecone namespace: '' (URL requested: '_default')
+2025-04-15 17:07:19,521 [INFO] root: Found 0 vector IDs in queried namespace ''.
+2025-04-15 17:08:41,716 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 17:08:41,728 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:08:41,728 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 17:08:41,734 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 17:08:41,736 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 17:08:46,275 [INFO] root: Request received to list IDs in index 'river', namespace 'river' (limit: 10, token: None)
+2025-04-15 17:08:46,278 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:08:48,318 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 17:08:48,318 [INFO] root: Querying Pinecone namespace: 'river' (URL requested: 'river')
+2025-04-15 17:08:48,874 [WARNING] root: Iterable list response item missing 'id': ['Advancing+Human+Sovereignty+-+Daniel+Schmachtenberger.pdf_0', 'Advancing+Human+Sovereignty+-+Daniel+Schmachtenberger.pdf_1', 'Advancing+Human+Sovereignty+-+Daniel+Schmachtenberger.pdf_2', 'Naturalizing+relevance+realization.pdf_0', 'Naturalizing+relevance+realization.pdf_1', 'Naturalizing+relevance+realization.pdf_2', 'Naturalizing+relevance+realization.pdf_3', 'Naturalizing+relevance+realization.pdf_4', 'Naturalizing+relevance+realization.pdf_5', 'Naturalizing+relevance+realization.pdf_6']
+2025-04-15 17:08:49,016 [WARNING] root: Iterable list response item missing 'id': ['Naturalizing+relevance+realization.pdf_7', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_0', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_1', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_10', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_11', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_12', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_13', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_14', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_15', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_16']
+2025-04-15 17:08:49,162 [WARNING] root: Iterable list response item missing 'id': ['River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_17', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_18', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_19', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_2', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_3', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_4', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_5', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_6', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_7', 'River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_8']
+2025-04-15 17:08:49,295 [WARNING] root: Iterable list response item missing 'id': ['River+-+A+Living+System+for+Regenerative+Impact+Contributor+Brief+April+15+2025.txt_9', 'River+Constitution+2.pdf_0', 'River+Constitution+2.pdf_1', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_0', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_1', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_10', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_11', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_12', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_13', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_14']
+2025-04-15 17:08:49,527 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_15', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_16', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_17', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_18', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_19', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_2', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_20', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_21', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_22', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_23']
+2025-04-15 17:08:49,665 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_24', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_25', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_26', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_27', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_28', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_29', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_3', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_30', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_31', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_32']
+2025-04-15 17:08:49,808 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_33', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_34', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_35', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_36', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_37', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_38', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_39', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_4', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_40', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_41']
+2025-04-15 17:08:49,942 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_42', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_43', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_44', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_45', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_46', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_47', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_48', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_49', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_5', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_50']
+2025-04-15 17:08:50,081 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_51', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_52', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_53', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_54', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_55', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_56', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_57', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_58', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_59', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_6']
+2025-04-15 17:08:50,223 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_60', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_61', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_62', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_63', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_64', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_65', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_66', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_67', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_68', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_69']
+2025-04-15 17:08:50,365 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_7', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_70', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_71', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_72', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_73', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_74', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_75', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_76', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_77', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_78']
+2025-04-15 17:08:50,500 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_79', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_8', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_80', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_81', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_82', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_83', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_84', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_85', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_86', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_87']
+2025-04-15 17:08:50,628 [WARNING] root: Iterable list response item missing 'id': ['River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_88', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_89', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_9', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_90', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_91', 'River+Original+White+Paper+547139dac9214f3681ab0ffc0efb6b1b.txt_92', 'River+White+Paper+3+0+draft+52154186d56a452bbc2498275a804d60.pdf_0', 'River+White+Paper+3+0+draft+52154186d56a452bbc2498275a804d60.pdf_1', 'Sovereignty+%26+Omni-Win+8072aaca2d2a42118f368052f2677053.pdf_0', 'Sovereignty+%26+Omni-Win+8072aaca2d2a42118f368052f2677053.pdf_1']
+2025-04-15 17:08:50,769 [WARNING] root: Iterable list response item missing 'id': ['Sovereignty+is+the+Way+-+Welf+von+Ho%CC%88ren.pdf_0', 'Sovereignty+is+the+Way+-+Welf+von+Ho%CC%88ren.pdf_1', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_0', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_1', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_10', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_11', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_12', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_13', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_14', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_15']
+2025-04-15 17:08:50,913 [WARNING] root: Iterable list response item missing 'id': ['chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_16', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_2', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_3', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_4', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_5', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_6', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_7', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_8', 'chat_D20250411-T202252_aID-river_eID-0000_SAVED.txt_9']
+2025-04-15 17:08:50,914 [INFO] root: Found 0 vector IDs in queried namespace 'river'.
+2025-04-15 17:08:50,915 [INFO] root: Found 0 vector IDs in queried namespace 'river'.
+2025-04-15 17:11:04,250 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 17:11:04,265 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:11:04,265 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 17:11:04,272 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 17:11:04,275 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 17:11:15,358 [INFO] root: Request received to list IDs in index 'river', namespace 'river' (limit: 10, token: None)
+2025-04-15 17:11:15,360 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:11:15,645 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 17:11:15,645 [INFO] root: Querying Pinecone namespace: 'river' (URL requested: 'river')
+2025-04-15 17:11:16,191 [INFO] root: Found 10 vector IDs in queried namespace 'river'. Next Token: None
+2025-04-15 17:11:16,191 [INFO] root: Found 10 vector IDs in queried namespace 'river'.
+2025-04-15 17:12:58,335 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 17:12:58,387 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:12:58,387 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 17:12:58,395 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 17:12:58,397 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 17:13:16,479 [INFO] root: Request received to list unique docs in index 'river', namespace 'river' (fetching up to 1000 IDs)
+2025-04-15 17:13:16,483 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:13:16,807 [INFO] root: Querying Pinecone namespace: 'river' for vector IDs to parse.
+2025-04-15 17:13:17,353 [ERROR] root: Error listing vector IDs for parsing: (400)
+Reason: Bad Request
+HTTP response headers: HTTPHeaderDict({'Date': 'Tue, 15 Apr 2025 15:13:17 GMT', 'Content-Type': 'application/json', 'Content-Length': '106', 'Connection': 'keep-alive', 'x-pinecone-request-latency-ms': '2', 'x-pinecone-request-id': '4175131761348151520', 'x-envoy-upstream-service-time': '2', 'server': 'envoy'})
+HTTP response body: {"code":3,"message":"Limit must be greater than 0 and less than 100. Request limit was 1000","details":[]}
+Traceback (most recent call last):
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/api_server.py", line 440, in list_unique_docs_in_namespace
+    for id_batch in list_response:
+                    ^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/data/index.py", line 571, in list
+    results = self.list_paginated(**kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/utils/error_handling.py", line 10, in inner_func
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/data/index.py", line 545, in list_paginated
+    return self._vector_api.list(**args_dict, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/api_client.py", line 772, in __call__
+    return self.callable(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/api/data_plane_api.py", line 712, in __list
+    return self.call_with_http_info(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/api_client.py", line 834, in call_with_http_info
+    return self.api_client.call_api(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/api_client.py", line 409, in call_api
+    return self.__call_api(resource_path, method,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/api_client.py", line 203, in __call_api
+    raise e
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/api_client.py", line 196, in __call_api
+    response_data = self.request(
+                    ^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/api_client.py", line 435, in request
+    return self.rest_client.GET(url,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/rest.py", line 267, in GET
+    return self.request("GET", url,
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/neonvoid/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projekt/River/River Resources/Code/aia-v4-backend/venv/lib/python3.12/site-packages/pinecone/core/client/rest.py", line 261, in request
+    raise PineconeApiException(http_resp=r)
+pinecone.core.client.exceptions.PineconeApiException: (400)
+Reason: Bad Request
+HTTP response headers: HTTPHeaderDict({'Date': 'Tue, 15 Apr 2025 15:13:17 GMT', 'Content-Type': 'application/json', 'Content-Length': '106', 'Connection': 'keep-alive', 'x-pinecone-request-latency-ms': '2', 'x-pinecone-request-id': '4175131761348151520', 'x-envoy-upstream-service-time': '2', 'server': 'envoy'})
+HTTP response body: {"code":3,"message":"Limit must be greater than 0 and less than 100. Request limit was 1000","details":[]}
+
+2025-04-15 17:16:25,886 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 17:16:25,903 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:16:25,903 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 17:16:25,908 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 17:16:25,910 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 17:16:44,640 [INFO] root: Request received to list unique docs in index 'river', namespace 'river' (fetching up to 100 IDs)
+2025-04-15 17:16:44,644 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 17:16:46,680 [INFO] root: Querying Pinecone namespace: 'river' for vector IDs to parse.
+2025-04-15 17:16:47,362 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-04-15 17:16:47,362 [INFO] root: Found 5 unique document names in namespace 'river'.

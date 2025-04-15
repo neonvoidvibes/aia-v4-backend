@@ -7,7 +7,10 @@ import threading
 import time
 import json
 from datetime import datetime, timezone
+import urllib.parse # For decoding filenames in IDs
 
+# Import necessary modules from our project
+from magic_audio import MagicAudio # Import the copied module
 # Import necessary modules from our project
 from magic_audio import MagicAudio # Import the copied module
 from utils.retrieval_handler import RetrievalHandler
@@ -312,16 +315,73 @@ def list_vector_ids_in_namespace(index_name: str, namespace_name: str):
              return jsonify({"error": f"Failed to access index '{index_name}'"}), 500
 
         # List vector IDs from the specified namespace
+        # Use empty string for the default namespace if requested via '_default'
+        query_namespace = "" if namespace_name == "_default" else namespace_name
+        logger.info(f"Querying Pinecone namespace: '{query_namespace}' (URL requested: '{namespace_name}')")
+
         list_response = index.list(
-            namespace=namespace_name,
-            limit=limit,
-            pagination_token=next_token
+            namespace=query_namespace,
+            limit=limit
+            # pagination_token=next_token # Generators might not use token directly this way
+            # For full pagination with generators, you'd typically loop and call list() again if needed.
+            # Let's focus on getting the first batch for now.
         )
 
-        vector_ids = [v.id for v in list_response.vectors] if list_response.vectors else []
-        next_page_token = list_response.pagination.next if list_response.pagination else None
+        vector_ids = []
+        next_page_token = None # Initialize pagination token
 
-        logger.info(f"Found {len(vector_ids)} vector IDs in namespace '{namespace_name}'. Next token: {next_page_token}")
+        try:
+            # Check if the response is directly iterable (likely a generator)
+            if hasattr(list_response, '__iter__'):
+                 logger.debug("Processing response as an iterator/generator")
+                 for id_batch in list_response: # Iterate through the generator
+                     # Check if the yielded item is a list of strings (IDs)
+                     if isinstance(id_batch, list) and all(isinstance(item, str) for item in id_batch):
+                         logger.debug(f"Processing batch of {len(id_batch)} IDs.")
+                         vector_ids.extend(id_batch)
+                         # Stop if we've reached the requested limit
+                         if len(vector_ids) >= limit:
+                             vector_ids = vector_ids[:limit] # Trim excess if batch pushed over
+                             break
+                     # Check if yielded item is an object with an 'ids' attribute (older client versions?)
+                     elif hasattr(id_batch, 'ids') and isinstance(id_batch.ids, list):
+                         logger.debug(f"Processing batch object with .ids attribute (length {len(id_batch.ids)})")
+                         vector_ids.extend(id_batch.ids)
+                         if len(vector_ids) >= limit:
+                              vector_ids = vector_ids[:limit]
+                              break
+                     else:
+                          # Log unexpected item structure from generator
+                          logger.warning(f"Unexpected item type yielded by list generator: {type(id_batch)}. Content (sample): {str(id_batch)[:100]}")
+
+                 # Pagination token handling might be different with generators.
+                 # It might be an attribute of the generator object itself after iteration,
+                 # or pagination might be handled by just calling list() again.
+                 # For now, we assume no easily accessible token from the generator post-iteration.
+                 next_page_token = None
+                 # Example placeholder if token was found differently:
+                 # if hasattr(list_response, 'next_page_token_attribute'):
+                 #    next_page_token = list_response.next_page_token_attribute
+
+            else:
+                # Handle non-iterable response types if necessary (older clients?)
+                logger.warning(f"index.list() did not return an iterable object. Type: {type(list_response)}")
+                if hasattr(list_response, 'ids') and isinstance(list_response.ids, list):
+                     vector_ids = list_response.ids[:limit]
+                elif hasattr(list_response, 'vectors') and isinstance(list_response.vectors, list):
+                     vector_ids = [v.id for v in list_response.vectors][:limit]
+
+                # Check for pagination on the response object itself
+                if hasattr(list_response, 'pagination') and list_response.pagination and hasattr(list_response.pagination, 'next'):
+                    next_page_token = list_response.pagination.next
+
+        except Exception as proc_e:
+             logger.error(f"Error processing list response: {proc_e}", exc_info=True)
+
+        logger.info(f"Found {len(vector_ids)} vector IDs in queried namespace '{query_namespace}'. Next Token: {next_page_token}")
+        #     next_page_token = list_response.pagination.next
+
+        logger.info(f"Found {len(vector_ids)} vector IDs in queried namespace '{query_namespace}'.")
 
         return jsonify({
             "namespace": namespace_name,
@@ -332,6 +392,104 @@ def list_vector_ids_in_namespace(index_name: str, namespace_name: str):
     except Exception as e:
         logger.error(f"Error listing vector IDs for index '{index_name}', namespace '{namespace_name}': {e}", exc_info=True)
         return jsonify({"error": "An unexpected error occurred while listing vector IDs"}), 500
+
+
+# --- Pinecone Unique Document Listing Route ---
+@app.route('/api/index/<string:index_name>/namespace/<string:namespace_name>/list_docs', methods=['GET'])
+def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
+    """
+    Lists unique source document filenames by parsing vector IDs within a namespace.
+    # Note: This fetches vector IDs and parses them. For very large indexes,
+    # consider alternative methods if performance becomes an issue. Fetches up to 100 IDs per page.
+    """
+    # Use Pinecone's max limit as the default
+    limit = request.args.get('limit', default=100, type=int)
+    # For true completeness on huge indexes, pagination would be needed here,
+    # calling index.list repeatedly with tokens. Simplified for now.
+    # next_token = request.args.get('next_token', default=None, type=str)
+
+    logger.info(f"Request received to list unique docs in index '{index_name}', namespace '{namespace_name}' (fetching up to {limit} IDs)")
+
+    # Validate limit against Pinecone's actual constraint (1-100)
+    if not 1 <= limit <= 100:
+        logger.warning(f"Invalid limit requested: {limit}. Clamping to 100.")
+        limit = 100
+
+    try:
+        pc = init_pinecone()
+        if not pc:
+            return jsonify({"error": "Pinecone client initialization failed"}), 500
+
+        try:
+            index = pc.Index(index_name)
+        except NotFoundException:
+            return jsonify({"error": f"Index '{index_name}' not found"}), 404
+        except Exception as e:
+             logger.error(f"Error accessing index '{index_name}': {e}", exc_info=True)
+             return jsonify({"error": f"Failed to access index '{index_name}'"}), 500
+
+        query_namespace = "" if namespace_name == "_default" else namespace_name
+        logger.info(f"Querying Pinecone namespace: '{query_namespace}' for vector IDs to parse.")
+
+        vector_ids_to_parse = []
+        try:
+            # Fetch IDs using the list generator
+            list_response = index.list(namespace=query_namespace, limit=limit)
+            if hasattr(list_response, '__iter__'):
+                 logger.debug("Processing list response as an iterator...")
+                 count = 0
+                 for id_batch in list_response:
+                     if isinstance(id_batch, list) and all(isinstance(item, str) for item in id_batch):
+                         vector_ids_to_parse.extend(id_batch)
+                         count += len(id_batch)
+                         if count >= limit: # Should respect limit from call, but double-check
+                             break
+                     else:
+                          logger.warning(f"Unexpected item type yielded by list generator: {type(id_batch)}")
+            else:
+                 logger.warning(f"index.list() did not return an iterable object. Type: {type(list_response)}")
+                 # Add fallbacks for older response types if needed here
+
+            logger.info(f"Retrieved {len(vector_ids_to_parse)} vector IDs for parsing.")
+
+        except Exception as list_e:
+            logger.error(f"Error listing vector IDs for parsing: {list_e}", exc_info=True)
+            return jsonify({"error": "Failed to list vector IDs from Pinecone"}), 500
+
+        # --- Parse IDs to get unique document names ---
+        unique_doc_names = set()
+        for vec_id in vector_ids_to_parse:
+            try:
+                # Find the last underscore
+                last_underscore_index = vec_id.rfind('_')
+                if last_underscore_index != -1:
+                    # Get the part before the last underscore
+                    sanitized_name_part = vec_id[:last_underscore_index]
+                    # URL-decode the sanitized name part
+                    original_name = urllib.parse.unquote_plus(sanitized_name_part)
+                    unique_doc_names.add(original_name)
+                else:
+                    # If no underscore, maybe it's an old ID format? Log it.
+                    logger.warning(f"Vector ID '{vec_id}' does not contain expected '_chunkindex' suffix.")
+                    # Optionally add the whole ID if it might be a filename itself
+                    # unique_doc_names.add(urllib.parse.unquote_plus(vec_id))
+            except Exception as parse_e:
+                logger.error(f"Error parsing vector ID '{vec_id}': {parse_e}")
+                continue # Skip problematic IDs
+
+        sorted_doc_names = sorted(list(unique_doc_names))
+        logger.info(f"Found {len(sorted_doc_names)} unique document names in namespace '{query_namespace}'.")
+
+        return jsonify({
+            "index": index_name,
+            "namespace": namespace_name, # Return the requested name
+            "unique_document_names": sorted_doc_names,
+            "vector_ids_checked": len(vector_ids_to_parse) # Info about how many IDs were checked
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error listing unique docs for index '{index_name}', namespace '{namespace_name}': {e}", exc_info=True)
+        return jsonify({"error": "An unexpected error occurred while listing documents"}), 500
 
 
 # --- Chat API Route ---
