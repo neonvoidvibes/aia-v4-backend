@@ -11935,3 +11935,8 @@ anthropic.APIStatusError: {'type': 'error', 'error': {'details': None, 'type': '
 2025-04-15 01:01:52,686 [WARNING] root: RAG context retrieval skipped: Failed connection to index 'magicchat'
 2025-04-15 01:01:52,723 [WARNING] utils.transcript_utils: No transcript files found (Mode: 'regular') in ['organizations/river/agents/river/events/0000/transcripts/']
 2025-04-15 01:01:54,946 [INFO] root: LLM stream completed successfully (308 chars).
+2025-04-15 08:27:30,593 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 08:27:30,601 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 08:27:30,601 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 08:27:30,606 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 08:27:30,607 [INFO] root: Starting API server on port 5001 (Debug: False)

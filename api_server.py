@@ -297,7 +297,7 @@ def handle_chat():
             # NOTE: This will fail if Pinecone index 'magicchat' doesn't exist or keys are wrong.
             # We expect this based on user comment, so we'll log the error and continue.
             retriever = RetrievalHandler(
-                index_name=os.getenv('PINECONE_INDEX_NAME', 'magicchat'),
+                index_name=os.getenv('PINECONE_INDEX_NAME', 'river'),
                 agent_name=agent_name,
                 session_id=session_id, # Pass session/event if needed by retriever logic
                 event_id=event_id,
