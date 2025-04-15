@@ -12206,3 +12206,16 @@ anthropic.APIStatusError: {'type': 'error', 'error': {'details': None, 'type': '
 2025-04-15 10:09:15,604 [INFO] root: Adding recent transcript update (1705 chars).
 2025-04-15 10:09:16,879 [INFO] root: LLM stream completed successfully (0 chars).
 2025-04-15 10:09:16,889 [INFO] root: LLM stream completed successfully (0 chars).
+2025-04-15 16:58:21,131 [INFO] root: Logging setup complete. Level: INFO
+2025-04-15 16:58:21,139 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 16:58:21,139 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-04-15 16:58:21,144 [INFO] root: Anthropic client initialized successfully.
+2025-04-15 16:58:21,145 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-04-15 16:58:34,764 [INFO] root: Request received for stats of index: river
+2025-04-15 16:58:34,768 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 16:58:35,252 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 16:58:35,911 [INFO] root: Successfully retrieved stats for index 'river'.
+2025-04-15 16:59:29,035 [INFO] root: Request received for stats of index: river
+2025-04-15 16:59:29,039 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-04-15 16:59:29,039 [INFO] root: Accessing Pinecone index 'river'
+2025-04-15 16:59:29,661 [INFO] root: Successfully retrieved stats for index 'river'.

@@ -281,6 +281,59 @@ def get_pinecone_index_stats(index_name: str):
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
+# --- Pinecone Vector ID Listing Route ---
+@app.route('/api/index/<string:index_name>/namespace/<string:namespace_name>/list_ids', methods=['GET'])
+def list_vector_ids_in_namespace(index_name: str, namespace_name: str):
+    """Lists vector IDs within a specific namespace of a Pinecone index."""
+    limit = request.args.get('limit', default=1000, type=int)
+    next_token = request.args.get('next_token', default=None, type=str)
+
+    logger.info(f"Request received to list IDs in index '{index_name}', namespace '{namespace_name}' (limit: {limit}, token: {next_token})")
+
+    # Validate limit
+    if not 1 <= limit <= 1000:
+         logger.warning(f"Invalid limit requested: {limit}. Using default 1000.")
+         limit = 1000 # Pinecone limit is 1000 per page
+
+    try:
+        pc = init_pinecone()
+        if not pc:
+            logger.error(f"Failed to initialize Pinecone client for listing IDs.")
+            return jsonify({"error": "Pinecone client initialization failed"}), 500
+
+        try:
+            index = pc.Index(index_name)
+            logger.info(f"Accessing Pinecone index '{index_name}'")
+        except NotFoundException:
+            logger.warning(f"Index '{index_name}' not found.")
+            return jsonify({"error": f"Index '{index_name}' not found"}), 404
+        except Exception as e:
+             logger.error(f"Error accessing index '{index_name}': {e}", exc_info=True)
+             return jsonify({"error": f"Failed to access index '{index_name}'"}), 500
+
+        # List vector IDs from the specified namespace
+        list_response = index.list(
+            namespace=namespace_name,
+            limit=limit,
+            pagination_token=next_token
+        )
+
+        vector_ids = [v.id for v in list_response.vectors] if list_response.vectors else []
+        next_page_token = list_response.pagination.next if list_response.pagination else None
+
+        logger.info(f"Found {len(vector_ids)} vector IDs in namespace '{namespace_name}'. Next token: {next_page_token}")
+
+        return jsonify({
+            "namespace": namespace_name,
+            "vector_ids": vector_ids,
+            "next_token": next_page_token
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error listing vector IDs for index '{index_name}', namespace '{namespace_name}': {e}", exc_info=True)
+        return jsonify({"error": "An unexpected error occurred while listing vector IDs"}), 500
+
+
 # --- Chat API Route ---
 @app.route('/api/chat', methods=['POST'])
 def handle_chat():
