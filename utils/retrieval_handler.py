@@ -16,7 +16,14 @@ from anthropic import Anthropic # Import Anthropic client
 logger = logging.getLogger(__name__)
 
 # Define a default transform prompt
-DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more effective for searching a vector database containing document chunks. Focus on extracting key entities (people, projects, organizations), topics, dates, and the core question intent. Output only the rewritten query, no preamble.
+DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more effective for searching a vector database containing document chunks. Focus on extracting key entities (people, projects, organizations), topics, dates, and the core question intent.
+
+**Crucially:**
+1.  **Do NOT invent or add specific topics or subjects** (like 'machine learning', 'artificial intelligence', 'data science', etc.) if they are not explicitly mentioned or clearly implied in the original User Query.
+2.  For very broad or vague queries like "list terms", "what are the terms", or just "terms", prioritize searching for documents explicitly related to glossaries, definitions, or "Terms and Conditions". If unsure, it's better to use the original query terms directly or slightly rephrase for clarity (e.g., "definitions of terms", "glossary of terms") rather than adding unrelated topics.
+3.  Retain the core keywords and intent of the original query.
+
+Output only the rewritten query, no preamble.
 
 User Query: '{user_query}'
 
