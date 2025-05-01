@@ -586,6 +586,19 @@ def handle_chat():
         # TODO: Add Memory Loading Here
 
         # --- Add RAG Context (Conditional) ---
+        # Add specific instructions on how to USE the context block that follows
+        rag_usage_instructions = """
+
+        ## Using Retrieved Context
+        When responding to the user:
+        1.  **Prioritize Information Within `[Retrieved Context]`:** Base your answer primarily on the information provided in the `[Retrieved Context]` block below, if relevant to the user's query.
+        2.  **Direct Extraction for Lists/Facts:** If the user asks for a list, definition, or specific piece of information that is explicitly present in the `[Retrieved Context]`, present that information directly and accurately. Do *not* state that the information is missing if it is clearly provided in the context.
+        3.  **Cite Sources:** Remember to cite the source file name using Markdown footnotes (e.g., `[^1]`) for information derived from the context, and list sources under `### Sources`.
+        4.  **Synthesize When Necessary:** If the query requires combining information from multiple sources or summarizing, do so, but still ground your answer in the provided context.
+        5.  **Acknowledge Missing Info Appropriately:** Only state that information is missing if it is truly absent from the provided context and relevant to the query.
+        """
+        final_system_prompt += rag_usage_instructions # Add instructions BEFORE the context block itself
+
         rag_context_block = "" # Initialize empty
         last_user_message_content = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
 
@@ -612,24 +625,31 @@ def handle_chat():
                 )
                 retrieved_docs = retriever.get_relevant_context(query=last_user_message_content, top_k=5) # Use original query
                 if retrieved_docs:
-                    items = [f"[Ctx {i+1} from {d.metadata.get('file_name','?')}(Score:{d.metadata.get('score',0):.2f})]:\n{d.page_content}" for i, d in enumerate(retrieved_docs)]
-                    rag_context_block = "\n\n---\nRetrieved Context (for potential relevance):\n" + "\n\n".join(items)
+                    items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown Source')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown Source')} ---" for i, d in enumerate(retrieved_docs)]
+                    # Use clearer markers for the entire block
+                    rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
                     logger.debug(f"Added {len(retrieved_docs)} RAG context docs ({len(rag_context_block)} chars).")
                 else:
                     logger.debug("No RAG context docs found for complex query.")
+                    # Explicitly add a note if no context was found AFTER attempting retrieval
+                    rag_context_block = "\n\n[Note: No relevant documents found in the knowledge base for this query.]"
             except RuntimeError as e:
                  # Catch specific "Failed connection" or other init errors
                  logger.warning(f"RAG context retrieval skipped: {e}")
-                 rag_context_block = f"\n\n[Note: Document retrieval failed for index '{agent_name}']"
+                 # Use consistent marker format
+                 rag_context_block = f"\n\n=== START RETRIEVED CONTEXT ===\n[Note: Document retrieval failed for index '{agent_name}']\n=== END RETRIEVED CONTEXT ==="
             except Exception as e:
                 logger.error(f"Unexpected error during RAG context retrieval: {e}", exc_info=True)
-                rag_context_block = "\n\n[Note: Error retrieving documents]"
+                 # Use consistent marker format
+                rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents]\n=== END RETRIEVED CONTEXT ==="
         elif is_simple_query:
             logger.info(f"Simple query detected ('{normalized_query}'), bypassing RAG.")
-            rag_context_block = "" # Explicitly ensure it's empty
+            # Add a note if RAG was skipped due to simple query
+            rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Document retrieval skipped for this simple query.]\n=== END RETRIEVED CONTEXT ==="
         else:
              logger.debug("No user message found or skipping RAG for other reasons (e.g., first message).")
-             rag_context_block = "" # Ensure it's empty
+             # Add a note if RAG was skipped for other reasons
+             rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Document retrieval not applicable for this message.]\n=== END RETRIEVED CONTEXT ==="
 
         # Append the (potentially empty) RAG block to the system prompt
         final_system_prompt += rag_context_block

@@ -19362,3 +19362,259 @@ openai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded you
 2025-05-01 21:40:09,220 [INFO] root: Pinecone initialized (or skipped if keys missing).
 2025-05-01 21:40:09,225 [INFO] root: Anthropic client initialized successfully.
 2025-05-01 21:40:09,227 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-01 21:40:27,692 [INFO] root: Health check requested
+2025-05-01 21:40:27,804 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-01 21:40:43,099 [INFO] root: Health check requested
+2025-05-01 21:40:45,136 [INFO] root: Health check requested
+2025-05-01 21:40:49,182 [INFO] root: Health check requested
+2025-05-01 21:40:50,459 [INFO] root: Health check requested
+2025-05-01 21:40:52,505 [INFO] root: Health check requested
+2025-05-01 21:40:53,565 [INFO] root: Health check requested
+2025-05-01 21:40:53,576 [INFO] root: Received request for /api/chat with method: POST
+2025-05-01 21:40:53,578 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-01 21:40:53,965 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-01 21:40:53,965 [INFO] utils.s3_utils: Final system prompt length: 18823
+2025-05-01 21:40:54,072 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-01 21:40:54,072 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-01 21:40:54,072 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-01 21:40:54,072 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-01 21:40:54,139 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-01 21:40:54,139 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-01 21:40:54,169 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-01 21:40:54,170 [INFO] root: Simple query detected ('hello'), bypassing RAG.
+2025-05-01 21:40:54,170 [INFO] root: Created new TranscriptState for river/0000
+2025-05-01 21:40:54,223 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250501-T211628_uID-0112_oID-river_aID-river_eID-0000_sID-20250501_211628.txt. Resetting read position to 0.
+2025-05-01 21:40:54,250 [INFO] utils.transcript_utils: S3 get_object successful. Read 261 bytes.
+2025-05-01 21:40:54,250 [INFO] utils.transcript_utils: Decoded 255 characters.
+2025-05-01 21:40:54,251 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250501-T211628_uID-0112_oID-river_aID-river_eID-0000_sID-20250501_211628.txt: Position set to 261 (current S3 size).
+2025-05-01 21:40:54,251 [INFO] root: Adding recent transcript update (361 chars).
+2025-05-01 21:40:54,539 [INFO] root: Health check requested
+2025-05-01 21:40:56,343 [INFO] root: LLM stream completed successfully (184 chars).
+2025-05-01 21:40:56,568 [INFO] root: Health check requested
+2025-05-01 21:40:58,587 [INFO] root: Health check requested
+2025-05-01 21:41:00,612 [INFO] root: Health check requested
+2025-05-01 21:41:02,633 [INFO] root: Health check requested
+2025-05-01 21:41:04,668 [INFO] root: Health check requested
+2025-05-01 21:41:06,710 [INFO] root: Health check requested
+2025-05-01 21:41:08,755 [INFO] root: Health check requested
+2025-05-01 21:41:10,837 [INFO] root: Health check requested
+2025-05-01 21:41:12,895 [INFO] root: Health check requested
+2025-05-01 21:41:14,952 [INFO] root: Health check requested
+2025-05-01 21:41:16,987 [INFO] root: Health check requested
+2025-05-01 21:41:19,006 [INFO] root: Health check requested
+2025-05-01 21:41:20,368 [INFO] root: Health check requested
+2025-05-01 21:41:20,378 [INFO] root: Received request for /api/chat with method: POST
+2025-05-01 21:41:20,379 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-01 21:41:20,575 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-01 21:41:20,576 [INFO] utils.s3_utils: Final system prompt length: 18823
+2025-05-01 21:41:20,671 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-01 21:41:20,671 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-01 21:41:20,671 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-01 21:41:20,671 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-01 21:41:20,729 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-01 21:41:20,729 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-01 21:41:20,752 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-01 21:41:20,753 [INFO] root: Complex query detected ('you can skip that. which are the valley terms...'), proceeding with RAG.
+2025-05-01 21:41:20,792 [INFO] utils.retrieval_handler: Retriever: Initialized Embeddings model 'text-embedding-ada-002'.
+2025-05-01 21:41:20,796 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-01 21:41:21,031 [INFO] root: Health check requested
+2025-05-01 21:41:23,076 [INFO] root: Health check requested
+2025-05-01 21:41:23,123 [INFO] utils.retrieval_handler: Retriever: Connected to index 'river'. Default top_k=10
+2025-05-01 21:41:23,699 [INFO] utils.retrieval_handler: Retriever: Using transformed query: ''terms used in the valley region'...'
+2025-05-01 21:41:24,737 [INFO] utils.retrieval_handler: Found 5 matches in ns 'river'.
+2025-05-01 21:41:24,738 [INFO] utils.retrieval_handler: Retriever: Returning 5 processed contexts.
+2025-05-01 21:41:24,766 [WARNING] utils.transcript_utils: No transcript files found (Mode: 'regular') in ['organizations/river/agents/river/events/0000/transcripts/']
+2025-05-01 21:41:25,124 [INFO] root: Health check requested
+2025-05-01 21:41:27,167 [INFO] root: Health check requested
+2025-05-01 21:41:29,213 [INFO] root: Health check requested
+2025-05-01 21:41:30,666 [INFO] root: Health check requested
+2025-05-01 21:41:31,246 [INFO] root: Health check requested
+2025-05-01 21:41:31,900 [INFO] root: LLM stream completed successfully (1435 chars).
+2025-05-01 21:41:32,702 [INFO] root: Health check requested
+2025-05-01 21:41:33,263 [INFO] root: Health check requested
+2025-05-01 21:41:34,451 [INFO] root: Health check requested
+2025-05-01 21:41:35,291 [INFO] root: Health check requested
+2025-05-01 21:41:36,449 [INFO] root: Health check requested
+2025-05-01 21:41:37,314 [INFO] root: Health check requested
+2025-05-01 21:41:38,447 [INFO] root: Health check requested
+2025-05-01 21:41:39,342 [INFO] root: Health check requested
+2025-05-01 21:41:40,453 [INFO] root: Health check requested
+2025-05-01 21:41:41,366 [INFO] root: Health check requested
+2025-05-01 21:41:42,449 [INFO] root: Health check requested
+2025-05-01 21:41:43,389 [INFO] root: Health check requested
+2025-05-01 21:41:44,458 [INFO] root: Health check requested
+2025-05-01 21:41:45,418 [INFO] root: Health check requested
+2025-05-01 21:41:46,670 [INFO] root: Health check requested
+2025-05-01 21:41:47,444 [INFO] root: Health check requested
+2025-05-01 21:41:48,677 [INFO] root: Health check requested
+2025-05-01 21:41:49,465 [INFO] root: Health check requested
+2025-05-01 21:41:49,472 [INFO] root: Health check requested
+2025-05-01 21:41:51,488 [INFO] root: Health check requested
+2025-05-01 21:41:51,490 [INFO] root: Health check requested
+2025-05-01 21:41:53,711 [INFO] root: Health check requested
+2025-05-01 21:41:53,711 [INFO] root: Health check requested
+2025-05-01 21:41:55,452 [INFO] root: Health check requested
+2025-05-01 21:41:55,739 [INFO] root: Health check requested
+2025-05-01 21:41:57,481 [INFO] root: Health check requested
+2025-05-01 21:41:57,768 [INFO] root: Health check requested
+2025-05-01 21:41:59,514 [INFO] root: Health check requested
+2025-05-01 21:41:59,796 [INFO] root: Health check requested
+2025-05-01 21:42:01,455 [INFO] root: Health check requested
+2025-05-01 21:42:01,824 [INFO] root: Health check requested
+2025-05-01 21:42:03,474 [INFO] root: Health check requested
+2025-05-01 21:42:03,852 [INFO] root: Health check requested
+2025-05-01 21:42:05,446 [INFO] root: Health check requested
+2025-05-01 21:42:05,877 [INFO] root: Health check requested
+2025-05-01 21:42:07,448 [INFO] root: Health check requested
+2025-05-01 21:42:07,905 [INFO] root: Health check requested
+2025-05-01 21:42:09,462 [INFO] root: Health check requested
+2025-05-01 21:42:09,935 [INFO] root: Health check requested
+2025-05-01 21:42:11,457 [INFO] root: Health check requested
+2025-05-01 21:42:11,965 [INFO] root: Health check requested
+2025-05-01 21:42:13,459 [INFO] root: Health check requested
+2025-05-01 21:42:13,998 [INFO] root: Health check requested
+2025-05-01 21:42:15,455 [INFO] root: Health check requested
+2025-05-01 21:42:16,024 [INFO] root: Health check requested
+2025-05-01 21:42:17,455 [INFO] root: Health check requested
+2025-05-01 21:42:18,049 [INFO] root: Health check requested
+2025-05-01 21:42:19,492 [INFO] root: Health check requested
+2025-05-01 21:42:20,074 [INFO] root: Health check requested
+2025-05-01 21:42:21,673 [INFO] root: Health check requested
+2025-05-01 21:42:22,099 [INFO] root: Health check requested
+2025-05-01 21:42:23,665 [INFO] root: Health check requested
+2025-05-01 21:42:24,124 [INFO] root: Health check requested
+2025-05-01 21:42:25,683 [INFO] root: Health check requested
+2025-05-01 21:42:26,148 [INFO] root: Health check requested
+2025-05-01 21:42:27,662 [INFO] root: Health check requested
+2025-05-01 21:42:28,177 [INFO] root: Health check requested
+2025-05-01 21:42:29,658 [INFO] root: Health check requested
+2025-05-01 21:42:30,198 [INFO] root: Health check requested
+2025-05-01 21:42:31,659 [INFO] root: Health check requested
+2025-05-01 21:42:32,230 [INFO] root: Health check requested
+2025-05-01 21:42:33,658 [INFO] root: Health check requested
+2025-05-01 21:42:34,245 [INFO] root: Health check requested
+2025-05-01 21:42:35,689 [INFO] root: Health check requested
+2025-05-01 21:42:36,276 [INFO] root: Health check requested
+2025-05-01 21:42:37,719 [INFO] root: Health check requested
+2025-05-01 21:42:38,297 [INFO] root: Health check requested
+2025-05-01 21:42:39,675 [INFO] root: Health check requested
+2025-05-01 21:42:40,315 [INFO] root: Health check requested
+2025-05-01 21:42:41,662 [INFO] root: Health check requested
+2025-05-01 21:42:42,333 [INFO] root: Health check requested
+2025-05-01 21:42:43,661 [INFO] root: Health check requested
+2025-05-01 21:42:44,362 [INFO] root: Health check requested
+2025-05-01 21:42:45,677 [INFO] root: Health check requested
+2025-05-01 21:42:46,385 [INFO] root: Health check requested
+2025-05-01 21:42:47,659 [INFO] root: Health check requested
+2025-05-01 21:42:48,415 [INFO] root: Health check requested
+2025-05-01 21:42:49,662 [INFO] root: Health check requested
+2025-05-01 21:42:50,438 [INFO] root: Health check requested
+2025-05-01 21:42:51,688 [INFO] root: Health check requested
+2025-05-01 21:42:52,481 [INFO] root: Health check requested
+2025-05-01 21:42:53,657 [INFO] root: Health check requested
+2025-05-01 21:42:54,506 [INFO] root: Health check requested
+2025-05-01 21:42:55,666 [INFO] root: Health check requested
+2025-05-01 21:42:56,531 [INFO] root: Health check requested
+2025-05-01 21:42:57,452 [INFO] root: Health check requested
+2025-05-01 21:42:58,561 [INFO] root: Health check requested
+2025-05-01 21:42:59,697 [INFO] root: Health check requested
+2025-05-01 21:43:00,587 [INFO] root: Health check requested
+2025-05-01 21:43:01,661 [INFO] root: Health check requested
+2025-05-01 21:43:02,621 [INFO] root: Health check requested
+2025-05-01 21:43:03,654 [INFO] root: Health check requested
+2025-05-01 21:43:04,662 [INFO] root: Health check requested
+2025-05-01 21:43:05,667 [INFO] root: Health check requested
+2025-05-01 21:43:06,659 [INFO] root: Health check requested
+2025-05-01 21:43:06,694 [INFO] root: Health check requested
+2025-05-01 21:43:08,656 [INFO] root: Health check requested
+2025-05-01 21:43:08,713 [INFO] root: Health check requested
+2025-05-01 21:43:10,690 [INFO] root: Health check requested
+2025-05-01 21:43:10,745 [INFO] root: Health check requested
+2025-05-01 21:43:12,676 [INFO] root: Health check requested
+2025-05-01 21:43:12,754 [INFO] root: Health check requested
+2025-05-01 21:43:14,663 [INFO] root: Health check requested
+2025-05-01 21:43:14,773 [INFO] root: Health check requested
+2025-05-01 21:43:16,677 [INFO] root: Health check requested
+2025-05-01 21:43:16,802 [INFO] root: Health check requested
+2025-05-01 21:43:18,747 [INFO] root: Health check requested
+2025-05-01 21:43:18,829 [INFO] root: Health check requested
+2025-05-01 21:43:20,755 [INFO] root: Health check requested
+2025-05-01 21:43:20,842 [INFO] root: Health check requested
+2025-05-01 21:43:22,653 [INFO] root: Health check requested
+2025-05-01 21:43:22,871 [INFO] root: Health check requested
+2025-05-01 21:43:24,671 [INFO] root: Health check requested
+2025-05-01 21:43:24,894 [INFO] root: Health check requested
+2025-05-01 21:43:26,717 [INFO] root: Health check requested
+2025-05-01 21:43:26,921 [INFO] root: Health check requested
+2025-05-01 21:43:28,678 [INFO] root: Health check requested
+2025-05-01 21:43:28,950 [INFO] root: Health check requested
+2025-05-01 21:43:30,660 [INFO] root: Health check requested
+2025-05-01 21:43:30,980 [INFO] root: Health check requested
+2025-05-01 21:43:32,572 [INFO] root: Health check requested
+2025-05-01 21:43:33,007 [INFO] root: Health check requested
+2025-05-01 21:43:34,476 [INFO] root: Health check requested
+2025-05-01 21:43:35,027 [INFO] root: Health check requested
+2025-05-01 21:43:36,684 [INFO] root: Health check requested
+2025-05-01 21:43:37,055 [INFO] root: Health check requested
+2025-05-01 21:43:38,667 [INFO] root: Health check requested
+2025-05-01 21:43:39,103 [INFO] root: Health check requested
+2025-05-01 21:43:40,669 [INFO] root: Health check requested
+2025-05-01 21:43:41,131 [INFO] root: Health check requested
+2025-05-01 21:43:42,655 [INFO] root: Health check requested
+2025-05-01 21:43:43,151 [INFO] root: Health check requested
+2025-05-01 21:43:44,664 [INFO] root: Health check requested
+2025-05-01 21:43:45,174 [INFO] root: Health check requested
+2025-05-01 21:43:46,688 [INFO] root: Health check requested
+2025-05-01 21:43:47,197 [INFO] root: Health check requested
+2025-05-01 21:43:48,688 [INFO] root: Health check requested
+2025-05-01 21:43:49,207 [INFO] root: Health check requested
+2025-05-01 21:43:50,740 [INFO] root: Health check requested
+2025-05-01 21:43:51,228 [INFO] root: Health check requested
+2025-05-01 21:43:52,703 [INFO] root: Health check requested
+2025-05-01 21:43:53,250 [INFO] root: Health check requested
+2025-05-01 21:43:54,710 [INFO] root: Health check requested
+2025-05-01 21:43:55,276 [INFO] root: Health check requested
+2025-05-01 21:43:56,666 [INFO] root: Health check requested
+2025-05-01 21:43:57,294 [INFO] root: Health check requested
+2025-05-01 21:43:58,653 [INFO] root: Health check requested
+2025-05-01 21:43:59,312 [INFO] root: Health check requested
+2025-05-01 21:44:00,669 [INFO] root: Health check requested
+2025-05-01 21:44:01,331 [INFO] root: Health check requested
+2025-05-01 21:44:02,658 [INFO] root: Health check requested
+2025-05-01 21:44:03,399 [INFO] root: Health check requested
+2025-05-01 21:44:04,652 [INFO] root: Health check requested
+2025-05-01 21:44:05,413 [INFO] root: Health check requested
+2025-05-01 21:44:06,657 [INFO] root: Health check requested
+2025-05-01 21:44:07,433 [INFO] root: Health check requested
+2025-05-01 21:44:08,659 [INFO] root: Health check requested
+2025-05-01 21:44:09,450 [INFO] root: Health check requested
+2025-05-01 21:44:10,659 [INFO] root: Health check requested
+2025-05-01 21:44:11,465 [INFO] root: Health check requested
+2025-05-01 21:44:12,672 [INFO] root: Health check requested
+2025-05-01 21:44:13,485 [INFO] root: Health check requested
+2025-05-01 21:44:14,673 [INFO] root: Health check requested
+2025-05-01 21:44:15,507 [INFO] root: Health check requested
+2025-05-01 21:44:16,655 [INFO] root: Health check requested
+2025-05-01 21:44:17,543 [INFO] root: Health check requested
+2025-05-01 21:44:18,654 [INFO] root: Health check requested
+2025-05-01 21:44:19,576 [INFO] root: Health check requested
+2025-05-01 21:44:20,675 [INFO] root: Health check requested
+2025-05-01 21:44:21,607 [INFO] root: Health check requested
+2025-05-01 21:44:22,654 [INFO] root: Health check requested
+2025-05-01 21:44:23,636 [INFO] root: Health check requested
+2025-05-01 21:44:24,661 [INFO] root: Health check requested
+2025-05-01 21:44:25,664 [INFO] root: Health check requested
+2025-05-01 21:44:25,664 [INFO] root: Health check requested
+2025-05-01 21:44:27,664 [INFO] root: Health check requested
+2025-05-01 21:44:27,683 [INFO] root: Health check requested
+2025-05-01 21:44:29,659 [INFO] root: Health check requested
+2025-05-01 21:44:29,701 [INFO] root: Health check requested
+2025-05-01 21:44:31,657 [INFO] root: Health check requested
+2025-05-01 21:44:31,715 [INFO] root: Health check requested
+2025-05-01 21:44:33,658 [INFO] root: Health check requested
+2025-05-01 21:44:33,733 [INFO] root: Health check requested
+2025-05-01 21:44:35,755 [INFO] root: Health check requested
+2025-05-01 21:45:27,699 [INFO] root: Health check requested
+2025-05-01 21:46:27,692 [INFO] root: Health check requested
+2025-05-01 21:47:27,713 [INFO] root: Health check requested
+2025-05-01 21:48:27,699 [INFO] root: Health check requested
