@@ -18680,3 +18680,42 @@ openai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded you
 2025-05-01 18:18:02,699 [INFO] root: Health check requested
 2025-05-01 18:19:02,918 [INFO] root: Health check requested
 2025-05-01 18:20:02,712 [INFO] root: Health check requested
+2025-05-01 18:21:02,770 [INFO] root: Health check requested
+2025-05-01 18:21:28,770 [INFO] root: Logging setup complete. Level: INFO
+2025-05-01 18:21:28,772 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-01 18:21:28,772 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-01 18:21:28,777 [INFO] root: Anthropic client initialized successfully.
+2025-05-01 18:21:28,779 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-01 18:21:36,640 [INFO] root: Health check requested
+2025-05-01 18:21:36,925 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-01 18:21:39,367 [INFO] root: Health check requested
+2025-05-01 18:21:41,428 [INFO] root: Health check requested
+2025-05-01 18:21:43,460 [INFO] root: Health check requested
+2025-05-01 18:21:44,979 [INFO] root: Health check requested
+2025-05-01 18:21:44,987 [INFO] root: Received request for /api/chat with method: POST
+2025-05-01 18:21:44,988 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-01 18:21:45,229 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-01 18:21:45,230 [INFO] utils.s3_utils: Final system prompt length: 18823
+2025-05-01 18:21:45,328 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-01 18:21:45,328 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-01 18:21:45,328 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-01 18:21:45,329 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-01 18:21:45,393 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-01 18:21:45,394 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-01 18:21:45,421 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-01 18:21:45,422 [INFO] root: Simple query detected ('hello'), bypassing RAG.
+2025-05-01 18:21:45,422 [INFO] root: Created new TranscriptState for river/0000
+2025-05-01 18:21:45,450 [WARNING] utils.transcript_utils: No transcript files found (Mode: 'regular') in ['organizations/river/agents/river/events/0000/transcripts/']
+2025-05-01 18:21:45,491 [INFO] root: Health check requested
+2025-05-01 18:21:47,080 [INFO] root: LLM stream completed successfully (66 chars).
+2025-05-01 18:21:47,509 [INFO] root: Health check requested
+2025-05-01 18:21:49,555 [INFO] root: Health check requested
+2025-05-01 18:21:51,595 [INFO] root: Health check requested
+2025-05-01 18:21:53,636 [INFO] root: Health check requested
+2025-05-01 18:21:55,660 [INFO] root: Health check requested
+2025-05-01 18:21:57,676 [INFO] root: Health check requested
+2025-05-01 18:21:59,704 [INFO] root: Health check requested
+2025-05-01 18:22:01,742 [INFO] root: Health check requested
+2025-05-01 18:22:03,777 [INFO] root: Health check requested
+2025-05-01 18:22:05,799 [INFO] root: Health check requested
+2025-05-01 18:22:07,831 [INFO] root: Health check requested

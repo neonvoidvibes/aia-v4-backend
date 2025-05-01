@@ -59,6 +59,43 @@ app = Flask(__name__)
 CORS(app) # <-- Enable CORS for all origins
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 
+# --- Define Simple Queries to Bypass RAG ---
+# This set contains normalized (lowercase, trimmed, trailing punctuation removed)
+# queries that should bypass Pinecone retrieval.
+SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
+    # Greetings
+    "hello", "hi", "hey", "yo", "greetings", "good morning", "good afternoon",
+    "good evening", "morning", "afternoon", "evening",
+    # Farewells
+    "bye", "goodbye", "see you", "see ya", "take care", "farewell", "bye bye",
+    "later", "cheers", "good night",
+    # Thanks
+    "thanks", "thank you", "ty", "thx", "appreciate it", "thanks so much",
+    "thank you very much", "much appreciated", "thanks a lot",
+    # Agreement / Acknowledgment
+    "ok", "okay", "k", "kk", "got it", "understood", "sounds good", "perfect",
+    "great", "cool", "alright", "roger", "fine", "sure", "yes", "yep", "yeah",
+    "indeed", "affirmative", "certainly", "absolutely", "definitely", "exactly",
+    "right", "correct", "i see", "makes sense", "fair enough", "will do",
+    "you bet", "of course", "agreed", "true",
+    # Disagreement / Negative (Standalone)
+    "no", "nope", "nah", "negative", "not really", "i disagree", "disagree",
+    "false", "incorrect",
+    # Politeness / Fillers
+    "please", "pardon", "excuse me", "you're welcome", "yw", "no problem", "np",
+    "my pleasure", "don't worry", "it's ok", "it's okay", "no worries",
+    # Exclamations (Standalone)
+    "wow", "oops", "nice", "awesome", "excellent", "fantastic", "amazing",
+    "brilliant", "sweet",
+    # Apologies (Standalone)
+    "sorry", "my apologies", "apologies", "my bad",
+    # Uncertainty (Standalone)
+    "maybe", "perhaps", "i don't know", "idk", "not sure", "hard to say",
+    # Simple Confirmation Requests (Standalone)
+    "really", "are you sure", "is that right", "correct"
+])
+
+
 # --- Global State (Simplified for POC) ---
 # Transcription
 magic_audio_instance: MagicAudio | None = None
@@ -548,52 +585,53 @@ def handle_chat():
         if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
         # TODO: Add Memory Loading Here
 
-        # --- Add RAG Context ---
-        rag_context_block = ""
-        retriever = None
-        try:
-            # Initialize RetrievalHandler with agent_name as index_name
-            # It will now gracefully handle if the index agent_name doesn't exist.
-            retriever = RetrievalHandler(
-                index_name=agent_name, # Use agent name as the target index name
-                agent_name=agent_name, # Also used for namespace filtering potentially
-                session_id=session_id,
-                event_id=event_id,
-                anthropic_client=anthropic_client # Pass the initialized client
-            )
-            # Log whether retrieval is actually possible
-            if retriever.index:
-                logger.info(f"API: RAG enabled for agent index '{agent_name}'.")
-            else:
-                logger.info(f"API: RAG disabled for agent '{agent_name}' (index not found or connection failed).")
+        # --- Add RAG Context (Conditional) ---
+        rag_context_block = "" # Initialize empty
+        last_user_message_content = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
 
-        except ValueError as ve: # Catch client missing error
-             logger.error(f"API: Failed to initialize RetrievalHandler: {ve}")
-             rag_context_block = "\n\n[Note: Document retrieval configuration error]"
-        except Exception as e: # Catch unexpected init errors
-             logger.error(f"API: Unexpected error initializing RetrievalHandler: {e}", exc_info=True)
-             rag_context_block = "\n\n[Note: Error initializing document retrieval]"
+        # Normalize the last user message for the check
+        normalized_query = ""
+        if last_user_message_content:
+            normalized_query = last_user_message_content.strip().lower()
+            # Remove trailing punctuation for a more robust check
+            normalized_query = normalized_query.rstrip('.!?')
 
-        # Proceed with retrieval only if retriever was initialized and has a valid index
-        if retriever and retriever.index:
+        # Check if the normalized query is in our simple set
+        is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
+
+        if not is_simple_query and last_user_message_content:
+            logger.info(f"Complex query detected ('{normalized_query[:50]}...'), proceeding with RAG.")
             try:
-                last_user_message = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
-                if last_user_message:
-                    retrieved_docs = retriever.get_relevant_context(query=last_user_message, top_k=5)
-                    if retrieved_docs:
-                        items = [f"[Ctx {i+1} from {d.metadata.get('file_name','?')}(Score:{d.metadata.get('score',0):.2f})]:\n{d.page_content}" for i, d in enumerate(retrieved_docs)]
-                        rag_context_block = "\n\n---\nRetrieved Context (for potential relevance):\n" + "\n\n".join(items)
-                        logger.debug(f"Added {len(retrieved_docs)} RAG context docs ({len(rag_context_block)} chars).")
-                    else:
-                         logger.debug(f"No relevant documents found via RAG for index '{agent_name}'.")
+                # Initialize RetrievalHandler with agent_name as index_name
+                retriever = RetrievalHandler(
+                    index_name=agent_name, # <-- USE AGENT NAME FOR INDEX NAME
+                    agent_name=agent_name,
+                    session_id=session_id,
+                    event_id=event_id,
+                    anthropic_client=anthropic_client
+                )
+                retrieved_docs = retriever.get_relevant_context(query=last_user_message_content, top_k=5) # Use original query
+                if retrieved_docs:
+                    items = [f"[Ctx {i+1} from {d.metadata.get('file_name','?')}(Score:{d.metadata.get('score',0):.2f})]:\n{d.page_content}" for i, d in enumerate(retrieved_docs)]
+                    rag_context_block = "\n\n---\nRetrieved Context (for potential relevance):\n" + "\n\n".join(items)
+                    logger.debug(f"Added {len(retrieved_docs)} RAG context docs ({len(rag_context_block)} chars).")
                 else:
-                    logger.debug("No user message found to generate RAG context.")
+                    logger.debug("No RAG context docs found for complex query.")
+            except RuntimeError as e:
+                 # Catch specific "Failed connection" or other init errors
+                 logger.warning(f"RAG context retrieval skipped: {e}")
+                 rag_context_block = f"\n\n[Note: Document retrieval failed for index '{agent_name}']"
             except Exception as e:
-                logger.error(f"API: Unexpected error during RAG context retrieval: {e}", exc_info=True)
-                rag_context_block = f"\n\n[Note: Error retrieving documents from index '{agent_name}']"
-        elif rag_context_block == "": # Only add note if no other error message set
-             rag_context_block = f"\n\n[Note: Document retrieval (RAG) is disabled or index '{agent_name}' is unavailable]"
+                logger.error(f"Unexpected error during RAG context retrieval: {e}", exc_info=True)
+                rag_context_block = "\n\n[Note: Error retrieving documents]"
+        elif is_simple_query:
+            logger.info(f"Simple query detected ('{normalized_query}'), bypassing RAG.")
+            rag_context_block = "" # Explicitly ensure it's empty
+        else:
+             logger.debug("No user message found or skipping RAG for other reasons (e.g., first message).")
+             rag_context_block = "" # Ensure it's empty
 
+        # Append the (potentially empty) RAG block to the system prompt
         final_system_prompt += rag_context_block
 
         # --- Add Transcript Context ---
