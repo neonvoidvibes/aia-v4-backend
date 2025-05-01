@@ -550,31 +550,49 @@ def handle_chat():
 
         # --- Add RAG Context ---
         rag_context_block = ""
+        retriever = None
         try:
             # Initialize RetrievalHandler with agent_name as index_name
+            # It will now gracefully handle if the index agent_name doesn't exist.
             retriever = RetrievalHandler(
-                index_name=agent_name, # <-- USE AGENT NAME FOR INDEX NAME
-                agent_name=agent_name,
+                index_name=agent_name, # Use agent name as the target index name
+                agent_name=agent_name, # Also used for namespace filtering potentially
                 session_id=session_id,
                 event_id=event_id,
-                anthropic_client=anthropic_client
+                anthropic_client=anthropic_client # Pass the initialized client
             )
-            last_user_message = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
-            if last_user_message:
-                retrieved_docs = retriever.get_relevant_context(query=last_user_message, top_k=5)
-                if retrieved_docs:
-                    items = [f"[Ctx {i+1} from {d.metadata.get('file_name','?')}(Score:{d.metadata.get('score',0):.2f})]:\n{d.page_content}" for i, d in enumerate(retrieved_docs)]
-                    rag_context_block = "\n\n---\nRetrieved Context (for potential relevance):\n" + "\n\n".join(items)
-                    logger.debug(f"Added {len(retrieved_docs)} RAG context docs ({len(rag_context_block)} chars).")
+            # Log whether retrieval is actually possible
+            if retriever.index:
+                logger.info(f"API: RAG enabled for agent index '{agent_name}'.")
             else:
-                logger.debug("No user message found to generate RAG context.")
-        except RuntimeError as e:
-             # Catch specific "Failed connection" or other init errors
-             logger.warning(f"RAG context retrieval skipped: {e}")
-             rag_context_block = f"\n\n[Note: Document retrieval failed for index '{agent_name}']"
-        except Exception as e:
-            logger.error(f"Unexpected error during RAG context retrieval: {e}", exc_info=True)
-            rag_context_block = "\n\n[Note: Error retrieving documents]"
+                logger.info(f"API: RAG disabled for agent '{agent_name}' (index not found or connection failed).")
+
+        except ValueError as ve: # Catch client missing error
+             logger.error(f"API: Failed to initialize RetrievalHandler: {ve}")
+             rag_context_block = "\n\n[Note: Document retrieval configuration error]"
+        except Exception as e: # Catch unexpected init errors
+             logger.error(f"API: Unexpected error initializing RetrievalHandler: {e}", exc_info=True)
+             rag_context_block = "\n\n[Note: Error initializing document retrieval]"
+
+        # Proceed with retrieval only if retriever was initialized and has a valid index
+        if retriever and retriever.index:
+            try:
+                last_user_message = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
+                if last_user_message:
+                    retrieved_docs = retriever.get_relevant_context(query=last_user_message, top_k=5)
+                    if retrieved_docs:
+                        items = [f"[Ctx {i+1} from {d.metadata.get('file_name','?')}(Score:{d.metadata.get('score',0):.2f})]:\n{d.page_content}" for i, d in enumerate(retrieved_docs)]
+                        rag_context_block = "\n\n---\nRetrieved Context (for potential relevance):\n" + "\n\n".join(items)
+                        logger.debug(f"Added {len(retrieved_docs)} RAG context docs ({len(rag_context_block)} chars).")
+                    else:
+                         logger.debug(f"No relevant documents found via RAG for index '{agent_name}'.")
+                else:
+                    logger.debug("No user message found to generate RAG context.")
+            except Exception as e:
+                logger.error(f"API: Unexpected error during RAG context retrieval: {e}", exc_info=True)
+                rag_context_block = f"\n\n[Note: Error retrieving documents from index '{agent_name}']"
+        elif rag_context_block == "": # Only add note if no other error message set
+             rag_context_block = f"\n\n[Note: Document retrieval (RAG) is disabled or index '{agent_name}' is unavailable]"
 
         final_system_prompt += rag_context_block
 

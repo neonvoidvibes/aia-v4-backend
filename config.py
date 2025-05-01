@@ -33,8 +33,8 @@ class AppConfig:
     event_id: str = '0000'  # Default event ID
     session_id: str = None  # Will be set to timestamp on initialization
 
-    # Pinecone index name
-    index: str = "magicchat"
+    # Pinecone index name (Optional)
+    index: Optional[str] = None
 
     # LLM Model Name (Centralized Definition)
     llm_model_name: str = "claude-3-7-sonnet-20250219" # Default model
@@ -61,7 +61,7 @@ class AppConfig:
         parser.add_argument('--listen-all', action='store_true', help='Enable all listening at startup.')
         parser.add_argument('--all', action='store_true', help='Read all transcripts in the selected folder at launch, ignore further updates.')
         parser.add_argument('--event', type=str, default='0000', help='Event ID (default: 0000)')
-        parser.add_argument('--index', type=str, default='magicchat', help='Pinecone index name to fetch context from')
+        parser.add_argument('--index', type=str, default=None, help='Optional: Pinecone index name to fetch context from. If not provided, RAG is disabled.')
         # Add optional CLI override for max tokens
         parser.add_argument('--max-tokens', type=int, help='Override the default max output tokens for the LLM')
 
@@ -121,8 +121,14 @@ class AppConfig:
         if not self.aws_s3_bucket: missing_vars.append('AWS_S3_BUCKET')
         if not self.anthropic_api_key: missing_vars.append('ANTHROPIC_API_KEY')
         if not self.openai_api_key: missing_vars.append('OPENAI_API_KEY')
+        # Pinecone keys are checked during init if index is provided, not mandatory here.
+        # Pinecone keys are checked during init if index is provided, not mandatory here.
 
         if missing_vars: raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
         if self.interface_mode not in {'cli', 'web', 'web_only'}: raise ValueError(f"Invalid interface mode: {self.interface_mode}")
+        if not isinstance(self.llm_model_name, str) or not self.llm_model_name: raise ValueError("LLM model name must be a non-empty string")
+        if not isinstance(self.llm_max_output_tokens, int) or self.llm_max_output_tokens <= 0: raise ValueError("LLM max output tokens must be a positive integer")
+        # No validation needed for optional index name itself here.
+        # No validation needed for optional index name itself here.
         if not isinstance(self.llm_model_name, str) or not self.llm_model_name: raise ValueError("LLM model name must be a non-empty string")
         if not isinstance(self.llm_max_output_tokens, int) or self.llm_max_output_tokens <= 0: raise ValueError("LLM max output tokens must be a positive integer")

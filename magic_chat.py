@@ -135,17 +135,41 @@ def main():
             if config.interface_mode == 'web': print(f"Web UI: http://127.0.0.1:{config.web_port}")
             print("Enter message or type !help")
 
-            if not client: logger.critical("CLI mode needs Anthropic client."); sys.exit(1)
-
             retriever = None
-            try:
-                 retriever = RetrievalHandler(
-                     index_name=config.index, agent_name=config.agent_name,
-                     session_id=config.session_id, event_id=config.event_id,
-                     anthropic_client=client
-                 )
-                 logger.info(f"CLI: Retriever initialized.")
-            except Exception as e: logger.error(f"CLI: Retriever failed init: {e}", exc_info=True); print("Warning: Doc retrieval unavailable.", file=sys.stderr)
+            if config.index: # Only initialize if an index name is provided
+                try:
+                     retriever = RetrievalHandler(
+                         index_name=config.index, agent_name=config.agent_name,
+                         session_id=config.session_id, event_id=config.event_id,
+                         anthropic_client=client
+                     )
+                     logger.info(f"CLI: Retriever initialized for index '{config.index}'.")
+                except Exception as e:
+                    logger.error(f"CLI: Retriever failed init for index '{config.index}': {e}", exc_info=True)
+                    print(f"Warning: Doc retrieval from index '{config.index}' unavailable.", file=sys.stderr)
+                    retriever = None # Ensure it's None on failure
+            else:
+                logger.info("CLI: No index name provided via --index. RAG/Retrieval disabled.")
+
+            conversation_history = []
+            system_prompt = get_latest_system_prompt(config.agent_name) or "Assistant."
+                    print(f"Warning: Doc retrieval from index '{config.index}' unavailable.", file=sys.stderr)
+                    retriever = None # Ensure it's None on failure
+            else:
+                logger.info("CLI: No index name provided via --index. RAG/Retrieval disabled.")
+
+            conversation_history = []
+            system_prompt = get_latest_system_prompt(config.agent_name) or "Assistant."
+                    else:
+                        logger.warning(f"CLI: Retriever initialized, but index '{config.index}' not found or unavailable. Retrieval disabled.")
+                        print("Warning: Configured Pinecone index not found. Document retrieval disabled.", file=sys.stderr)
+                except Exception as e:
+                    logger.error(f"CLI: Retriever failed init for index '{config.index}': {e}", exc_info=True)
+                    print(f"Warning: Failed to initialize document retrieval for index '{config.index}'.", file=sys.stderr)
+            else:
+                logger.info("CLI: No Pinecone index specified. Document retrieval is disabled.")
+                print("Info: No Pinecone index specified via --index. Document retrieval disabled.", file=sys.stderr)
+
 
             conversation_history = []
             system_prompt = get_latest_system_prompt(config.agent_name) or "Assistant."
@@ -226,7 +250,14 @@ def main():
 
                         # --- Process User Message ---
                         conversation_history.append({"role": "user", "content": user_input})
-                        retrieved_docs = retriever.get_relevant_context(user_input) if retriever else []
+                        # Check if retriever exists *and* is functional (has an index) before calling
+                        retrieved_docs = []
+                        if retriever and retriever.index:
+                             retrieved_docs = retriever.get_relevant_context(user_input)
+                        elif retriever: # Exists but index is None
+                            logger.debug("CLI: Skipping retrieval as index is not available.")
+                        # else: retriever is None, already handled
+
                         context_for_prompt = ""
                         if retrieved_docs:
                              items = [f"[Ctx {i+1} from {d.metadata.get('file_name','?')}({d.metadata.get('score',0):.2f})]:\n{d.page_content}" for i, d in enumerate(retrieved_docs)]
