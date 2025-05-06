@@ -108,7 +108,16 @@ SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
 # Transcription
 magic_audio_instance: MagicAudio | None = None
 magic_audio_lock = threading.Lock()
-recording_status = { "is_recording": False, "is_paused": False, "start_time": None, "pause_start_time": None, "elapsed_time": 0, "agent": None, "event": None }
+recording_status = {
+    "is_recording": False,
+    "is_paused": False,
+    "start_time": None,
+    "pause_start_time": None, # Kept for elapsed time calculation consistency on pause/resume
+    "last_pause_timestamp": None, # Added: Timestamp of the last pause event for auto-stop check
+    "elapsed_time": 0,
+    "agent": None,
+    "event": None
+}
 
 # Chat (Anthropic Client is global)
 anthropic_client: Anthropic | None = None
@@ -211,7 +220,16 @@ def start_recording():
                 except Exception as e: logger.warning(f"Error stopping previous audio instance: {e}")
             magic_audio_instance = MagicAudio(agent=agent, event=event, language=language)
             magic_audio_instance.start()
-            recording_status.update({"is_recording": True, "is_paused": False, "start_time": time.time(), "pause_start_time": None, "elapsed_time": 0, "agent": agent, "event": event})
+            recording_status.update({
+                "is_recording": True,
+                "is_paused": False,
+                "start_time": time.time(),
+                "pause_start_time": None,
+                "last_pause_timestamp": None, # Reset on start
+                "elapsed_time": 0,
+                "agent": agent,
+                "event": event
+            })
             logger.info("Recording started successfully.")
             return jsonify({"status": "success", "message": "Recording started"})
         except Exception as e:
@@ -228,11 +246,17 @@ def stop_recording():
         try:
             magic_audio_instance.stop()
             if recording_status["start_time"]:
-                 now = time.time()
-                 if recording_status["is_paused"] and recording_status["pause_start_time"]: recording_status["elapsed_time"] = recording_status["pause_start_time"] - recording_status["start_time"]
-                 else: recording_status["elapsed_time"] = now - recording_status["start_time"]
+                now = time.time()
+                if recording_status["is_paused"] and recording_status["pause_start_time"]: recording_status["elapsed_time"] = recording_status["pause_start_time"] - recording_status["start_time"]
+                else: recording_status["elapsed_time"] = now - recording_status["start_time"]
             else: recording_status["elapsed_time"] = 0
-            recording_status.update({"is_recording": False, "is_paused": False, "start_time": None, "pause_start_time": None})
+            recording_status.update({
+                "is_recording": False,
+                "is_paused": False,
+                "start_time": None,
+                "pause_start_time": None,
+                "last_pause_timestamp": None # Reset on stop
+            })
             magic_audio_instance = None
             logger.info("Recording stopped and transcript saved.")
             return jsonify({"status": "success", "message": "Recording stopped and transcript saved."})
@@ -251,8 +275,11 @@ def pause_recording():
         logger.info("Pausing recording...")
         try:
             magic_audio_instance.pause()
-            recording_status["is_paused"] = True; recording_status["pause_start_time"] = time.time()
-            if recording_status["start_time"]: recording_status["elapsed_time"] = recording_status["pause_start_time"] - recording_status["start_time"]
+            pause_time = time.time()
+            recording_status["is_paused"] = True
+            recording_status["pause_start_time"] = pause_time # Keep for elapsed calc
+            recording_status["last_pause_timestamp"] = pause_time # Set for auto-stop check
+            if recording_status["start_time"]: recording_status["elapsed_time"] = pause_time - recording_status["start_time"]
             logger.info("Recording paused.")
             return jsonify({"status": "success", "message": "Recording paused"})
         except Exception as e: logger.error(f"Error pausing recording: {e}", exc_info=True); return jsonify({"status": "error", "message": str(e)}), 500
@@ -271,7 +298,9 @@ def resume_recording():
                 logger.debug(f"Resuming after {pause_duration:.2f}s pause. Adjusted start time.")
             else: logger.warning("Could not calculate pause duration accurately on resume.")
             magic_audio_instance.resume()
-            recording_status["is_paused"] = False; recording_status["pause_start_time"] = None
+            recording_status["is_paused"] = False
+            recording_status["pause_start_time"] = None
+            recording_status["last_pause_timestamp"] = None # Reset on resume
             logger.info("Recording resumed.")
             return jsonify({"status": "success", "message": "Recording resumed"})
         except Exception as e: logger.error(f"Error resuming recording: {e}", exc_info=True); return jsonify({"status": "error", "message": str(e)}), 500
@@ -751,8 +780,59 @@ def handle_chat():
         logger.error(f"Error in /api/chat endpoint: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
+# --- Auto-Stop Background Task ---
+def auto_stop_long_paused_recordings():
+    """Periodically checks for recordings paused for too long and stops them."""
+    global magic_audio_instance, recording_status, magic_audio_lock
+    pause_timeout_seconds = 2 * 60 * 60 # 2 hours
+    check_interval_seconds = 5 * 60 # Check every 5 minutes
+
+    logger.info(f"Auto-stop thread started. Checking every {check_interval_seconds}s for pauses > {pause_timeout_seconds}s.")
+
+    while True:
+        time.sleep(check_interval_seconds)
+        with magic_audio_lock:
+            if (recording_status["is_recording"] and
+                recording_status["is_paused"] and
+                recording_status["last_pause_timestamp"] is not None):
+
+                pause_duration = time.time() - recording_status["last_pause_timestamp"]
+                logger.debug(f"Checking paused recording for {recording_status.get('agent')}/{recording_status.get('event')}. Pause duration: {pause_duration:.0f}s")
+
+                if pause_duration > pause_timeout_seconds:
+                    logger.warning(f"Auto-stopping recording for {recording_status.get('agent')}/{recording_status.get('event')} after being paused for {pause_duration:.0f} seconds (limit: {pause_timeout_seconds}s).")
+                    try:
+                        if magic_audio_instance:
+                            magic_audio_instance.stop() # Call stop method on the instance
+                        # Update status similar to /stop endpoint
+                        if recording_status["start_time"]:
+                            # Elapsed time is calculated up to the point of pause
+                             recording_status["elapsed_time"] = recording_status["last_pause_timestamp"] - recording_status["start_time"]
+                        else: recording_status["elapsed_time"] = 0
+                        recording_status.update({
+                            "is_recording": False,
+                            "is_paused": False,
+                            "start_time": None,
+                            "pause_start_time": None,
+                            "last_pause_timestamp": None
+                        })
+                        magic_audio_instance = None # Clear the instance reference
+                        logger.info("Recording auto-stopped successfully.")
+                    except Exception as e:
+                        logger.error(f"Error during auto-stop: {e}", exc_info=True)
+                        # Attempt to reset status even if stop failed
+                        recording_status.update({
+                             "is_recording": False, "is_paused": False, "start_time": None,
+                             "pause_start_time": None, "last_pause_timestamp": None
+                        })
+                        magic_audio_instance = None
+
 # --- Main Execution ---
 if __name__ == '__main__':
+    # Start the auto-stop thread
+    auto_stop_thread = threading.Thread(target=auto_stop_long_paused_recordings, daemon=True)
+    auto_stop_thread.start()
+
     port = int(os.getenv('PORT', 5001))
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
