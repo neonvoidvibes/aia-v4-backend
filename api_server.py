@@ -64,19 +64,19 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 # queries that should bypass Pinecone retrieval.
 SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
     # Greetings
-    "hello", "hi", "hey", "yo", "greetings", "good morning", "good afternoon",
+    "hello", "hello :)" "hi", "hi :)" "hey", "hey :)" "yo", "greetings", "good morning", "good afternoon",
     "good evening", "morning", "afternoon", "evening",
     # Farewells
     "bye", "goodbye", "see you", "see ya", "take care", "farewell", "bye bye",
     "later", "cheers", "good night",
     # Thanks
-    "thanks", "thank you", "ty", "thx", "appreciate it", "thanks so much",
+    "thanks", "thanks :)" "thank you", "thank you :)" "ty", "thx", "appreciate it", "thanks so much",
     "thank you very much", "much appreciated", "thanks a lot",
     # Agreement / Acknowledgment
-    "ok", "okay", "k", "kk", "got it", "understood", "sounds good", "perfect",
-    "great", "cool", "alright", "roger", "fine", "sure", "yes", "yep", "yeah",
-    "indeed", "affirmative", "certainly", "absolutely", "definitely", "exactly",
-    "right", "correct", "i see", "makes sense", "fair enough", "will do",
+    "ok", "ok :)" "okay", "okay :)" "k", "kk", "got it", "understood", "sounds good", "perfect",
+    "great", "cool", "alright", "roger", "fine", "sure", "yes", "yes :)", "yes please", "yes please :)",
+    "yep", "yeah", "yeah :)", "indeed", "affirmative", "certainly", "absolutely", "definitely",
+    "exactly", "right", "correct", "i see", "makes sense", "fair enough", "will do",
     "you bet", "of course", "agreed", "true",
     # Disagreement / Negative (Standalone)
     "no", "nope", "nah", "negative", "not really", "i disagree", "disagree",
@@ -92,7 +92,15 @@ SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
     # Uncertainty (Standalone)
     "maybe", "perhaps", "i don't know", "idk", "not sure", "hard to say",
     # Simple Confirmation Requests (Standalone)
-    "really", "are you sure", "is that right", "correct"
+    "really", "are you sure", "is that right", "correct",
+    # Swedish
+    "hej", "hejsan", "god morgon", "god kväll", "hej då", "vi ses", "ha det bra",
+    "tack", "tack så mycket", "okej", "perfekt", "toppen", "ja", "nej", "jepp",
+    "inga problem", "kanske", "jag vet inte", "är du säker", "precis"
+    # Swedish :)
+    "hej :)", "hejsan :)", "god morgon :)", "god kväll :)", "hej då :)", "vi ses :)",
+    "tack :)", "tack så mycket :)", "okej :)", "perfekt :)", "toppen :)", "ja :)", "ja tack :)",
+    "jepp :)", "inga problem :)", "precis :)"
 ])
 
 
