@@ -20592,3 +20592,1055 @@ openai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded you
 2025-05-06 21:21:51,258 [INFO] root: Health check requested
 2025-05-06 21:21:51,698 [INFO] root: Health check requested
 2025-05-06 21:21:52,703 [INFO] root: Health check requested
+2025-05-06 21:26:54,661 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 21:26:54,664 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 21:26:54,664 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 21:26:54,669 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 21:26:54,671 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 21:26:54,671 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 21:27:07,047 [INFO] root: Health check requested
+2025-05-06 21:27:07,196 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 21:27:07,364 [INFO] root: Health check requested
+2025-05-06 21:27:07,366 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 21:27:07,492 [INFO] root: Recording started successfully.
+2025-05-06 21:27:08,263 [INFO] root: Health check requested
+2025-05-06 21:27:09,217 [INFO] root: Health check requested
+2025-05-06 21:27:09,518 [INFO] root: Health check requested
+2025-05-06 21:27:10,519 [INFO] root: Health check requested
+2025-05-06 21:27:11,230 [INFO] root: Health check requested
+2025-05-06 21:27:12,532 [INFO] root: Health check requested
+2025-05-06 21:27:13,253 [INFO] root: Health check requested
+2025-05-06 21:27:14,542 [INFO] root: Health check requested
+2025-05-06 21:27:16,555 [INFO] root: Health check requested
+2025-05-06 21:27:18,580 [INFO] root: Health check requested
+2025-05-06 21:27:20,616 [INFO] root: Health check requested
+2025-05-06 21:27:22,665 [INFO] root: Health check requested
+2025-05-06 21:27:24,695 [INFO] root: Health check requested
+2025-05-06 21:27:26,762 [INFO] root: Health check requested
+2025-05-06 21:27:28,802 [INFO] root: Health check requested
+2025-05-06 21:27:30,841 [INFO] root: Health check requested
+2025-05-06 21:27:32,888 [INFO] root: Health check requested
+2025-05-06 21:27:34,924 [INFO] root: Health check requested
+2025-05-06 21:27:36,964 [INFO] root: Health check requested
+2025-05-06 21:27:39,000 [INFO] root: Health check requested
+2025-05-06 21:27:41,025 [INFO] root: Health check requested
+2025-05-06 21:27:42,505 [INFO] root: Health check requested
+2025-05-06 21:27:42,510 [INFO] root: Stopping recording...
+2025-05-06 21:27:43,037 [INFO] root: Health check requested
+2025-05-06 21:27:47,429 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 21:27:48,079 [INFO] root: Health check requested
+2025-05-06 21:27:49,249 [INFO] root: Health check requested
+2025-05-06 21:27:50,088 [INFO] root: Health check requested
+2025-05-06 21:27:51,257 [INFO] root: Health check requested
+2025-05-06 21:27:52,099 [INFO] root: Health check requested
+2025-05-06 21:27:53,277 [INFO] root: Health check requested
+2025-05-06 21:27:54,110 [INFO] root: Health check requested
+2025-05-06 21:27:55,282 [INFO] root: Health check requested
+2025-05-06 21:27:56,121 [INFO] root: Health check requested
+2025-05-06 21:27:57,252 [INFO] root: Health check requested
+2025-05-06 21:27:58,135 [INFO] root: Health check requested
+2025-05-06 21:27:59,185 [INFO] root: Health check requested
+2025-05-06 21:27:59,570 [INFO] root: Health check requested
+2025-05-06 21:28:00,144 [INFO] root: Health check requested
+2025-05-06 21:28:01,518 [INFO] root: Health check requested
+2025-05-06 21:28:02,152 [INFO] root: Health check requested
+2025-05-06 21:28:03,523 [INFO] root: Health check requested
+2025-05-06 21:28:04,163 [INFO] root: Health check requested
+2025-05-06 21:28:05,530 [INFO] root: Health check requested
+2025-05-06 21:28:06,184 [INFO] root: Health check requested
+2025-05-06 21:28:07,523 [INFO] root: Health check requested
+2025-05-06 21:34:52,297 [INFO] root: Health check requested
+2025-05-06 21:34:54,319 [INFO] root: Health check requested
+2025-05-06 21:34:56,333 [INFO] root: Health check requested
+2025-05-06 21:34:58,343 [INFO] root: Health check requested
+2025-05-06 21:35:00,353 [INFO] root: Health check requested
+2025-05-06 21:35:02,363 [INFO] root: Health check requested
+2025-05-06 21:35:04,385 [INFO] root: Health check requested
+2025-05-06 21:35:06,398 [INFO] root: Health check requested
+2025-05-06 21:35:08,411 [INFO] root: Health check requested
+2025-05-06 21:35:10,444 [INFO] root: Health check requested
+2025-05-06 21:35:12,712 [INFO] root: Health check requested
+2025-05-06 21:35:14,736 [INFO] root: Health check requested
+2025-05-06 21:35:16,766 [INFO] root: Health check requested
+2025-05-06 21:35:18,830 [INFO] root: Health check requested
+2025-05-06 21:35:20,856 [INFO] root: Health check requested
+2025-05-06 21:35:22,902 [INFO] root: Health check requested
+2025-05-06 21:35:24,924 [INFO] root: Health check requested
+2025-05-06 21:35:26,941 [INFO] root: Health check requested
+2025-05-06 21:35:28,964 [INFO] root: Health check requested
+2025-05-06 21:35:30,997 [INFO] root: Health check requested
+2025-05-06 21:35:32,293 [INFO] root: Health check requested
+2025-05-06 21:35:33,007 [INFO] root: Health check requested
+2025-05-06 21:35:34,298 [INFO] root: Health check requested
+2025-05-06 21:35:35,018 [INFO] root: Health check requested
+2025-05-06 21:35:36,306 [INFO] root: Health check requested
+2025-05-06 21:35:37,036 [INFO] root: Health check requested
+2025-05-06 21:35:38,330 [INFO] root: Health check requested
+2025-05-06 21:35:39,053 [INFO] root: Health check requested
+2025-05-06 21:35:40,299 [INFO] root: Health check requested
+2025-05-06 21:35:41,081 [INFO] root: Health check requested
+2025-05-06 21:35:42,295 [INFO] root: Health check requested
+2025-05-06 21:35:43,092 [INFO] root: Health check requested
+2025-05-06 21:35:44,298 [INFO] root: Health check requested
+2025-05-06 21:35:45,100 [INFO] root: Health check requested
+2025-05-06 21:35:46,296 [INFO] root: Health check requested
+2025-05-06 21:35:47,180 [INFO] root: Health check requested
+2025-05-06 21:35:48,288 [INFO] root: Health check requested
+2025-05-06 21:35:49,203 [INFO] root: Health check requested
+2025-05-06 21:35:50,297 [INFO] root: Health check requested
+2025-05-06 21:35:51,212 [INFO] root: Health check requested
+2025-05-06 21:35:52,299 [INFO] root: Health check requested
+2025-05-06 21:35:53,261 [INFO] root: Health check requested
+2025-05-06 21:35:54,290 [INFO] root: Health check requested
+2025-05-06 21:35:55,615 [INFO] root: Health check requested
+2025-05-06 21:35:56,292 [INFO] root: Health check requested
+2025-05-06 21:35:57,292 [INFO] root: Health check requested
+2025-05-06 21:35:57,630 [INFO] root: Health check requested
+2025-05-06 21:35:59,300 [INFO] root: Health check requested
+2025-05-06 21:35:59,640 [INFO] root: Health check requested
+2025-05-06 21:36:01,307 [INFO] root: Health check requested
+2025-05-06 21:36:01,649 [INFO] root: Health check requested
+2025-05-06 21:36:03,294 [INFO] root: Health check requested
+2025-05-06 21:36:03,656 [INFO] root: Health check requested
+2025-05-06 21:36:05,303 [INFO] root: Health check requested
+2025-05-06 21:36:05,664 [INFO] root: Health check requested
+2025-05-06 21:36:07,329 [INFO] root: Health check requested
+2025-05-06 21:36:07,692 [INFO] root: Health check requested
+2025-05-06 21:36:09,288 [INFO] root: Health check requested
+2025-05-06 21:36:09,722 [INFO] root: Health check requested
+2025-05-06 21:36:11,292 [INFO] root: Health check requested
+2025-05-06 21:36:11,731 [INFO] root: Health check requested
+2025-05-06 21:36:13,744 [INFO] root: Health check requested
+2025-05-06 21:36:15,776 [INFO] root: Health check requested
+2025-05-06 21:36:17,807 [INFO] root: Health check requested
+2025-05-06 21:36:19,846 [INFO] root: Health check requested
+2025-05-06 21:36:21,862 [INFO] root: Health check requested
+2025-05-06 21:36:23,887 [INFO] root: Health check requested
+2025-05-06 21:36:25,936 [INFO] root: Health check requested
+2025-05-06 21:36:27,949 [INFO] root: Health check requested
+2025-05-06 21:36:29,967 [INFO] root: Health check requested
+2025-05-06 21:36:32,009 [INFO] root: Health check requested
+2025-05-06 21:36:34,022 [INFO] root: Health check requested
+2025-05-06 21:36:36,041 [INFO] root: Health check requested
+2025-05-06 21:36:38,070 [INFO] root: Health check requested
+2025-05-06 21:36:40,116 [INFO] root: Health check requested
+2025-05-06 21:36:42,129 [INFO] root: Health check requested
+2025-05-06 21:36:44,152 [INFO] root: Health check requested
+2025-05-06 21:36:45,305 [INFO] root: Health check requested
+2025-05-06 21:36:46,167 [INFO] root: Health check requested
+2025-05-06 21:36:47,319 [INFO] root: Health check requested
+2025-05-06 21:36:48,178 [INFO] root: Health check requested
+2025-05-06 21:36:49,292 [INFO] root: Health check requested
+2025-05-06 21:36:50,210 [INFO] root: Health check requested
+2025-05-06 21:36:51,300 [INFO] root: Health check requested
+2025-05-06 21:36:52,225 [INFO] root: Health check requested
+2025-05-06 21:36:53,293 [INFO] root: Health check requested
+2025-05-06 21:36:54,237 [INFO] root: Health check requested
+2025-05-06 21:36:55,289 [INFO] root: Health check requested
+2025-05-06 21:36:56,251 [INFO] root: Health check requested
+2025-05-06 21:36:57,288 [INFO] root: Health check requested
+2025-05-06 21:36:58,261 [INFO] root: Health check requested
+2025-05-06 21:36:59,289 [INFO] root: Health check requested
+2025-05-06 21:37:00,273 [INFO] root: Health check requested
+2025-05-06 21:37:01,295 [INFO] root: Health check requested
+2025-05-06 21:37:02,282 [INFO] root: Health check requested
+2025-05-06 21:37:03,318 [INFO] root: Health check requested
+2025-05-06 21:37:04,289 [INFO] root: Health check requested
+2025-05-06 21:37:05,329 [INFO] root: Health check requested
+2025-05-06 21:37:06,289 [INFO] root: Health check requested
+2025-05-06 21:37:06,298 [INFO] root: Health check requested
+2025-05-06 21:37:08,302 [INFO] root: Health check requested
+2025-05-06 21:37:08,309 [INFO] root: Health check requested
+2025-05-06 21:37:10,311 [INFO] root: Health check requested
+2025-05-06 21:37:10,326 [INFO] root: Health check requested
+2025-05-06 21:37:12,295 [INFO] root: Health check requested
+2025-05-06 21:37:12,335 [INFO] root: Health check requested
+2025-05-06 21:37:14,290 [INFO] root: Health check requested
+2025-05-06 21:37:14,343 [INFO] root: Health check requested
+2025-05-06 21:37:16,297 [INFO] root: Health check requested
+2025-05-06 21:37:16,351 [INFO] root: Health check requested
+2025-05-06 21:37:18,290 [INFO] root: Health check requested
+2025-05-06 21:37:18,361 [INFO] root: Health check requested
+2025-05-06 21:37:20,294 [INFO] root: Health check requested
+2025-05-06 21:37:20,389 [INFO] root: Health check requested
+2025-05-06 21:37:22,849 [INFO] root: Health check requested
+2025-05-06 21:37:22,850 [INFO] root: Health check requested
+2025-05-06 21:37:24,293 [INFO] root: Health check requested
+2025-05-06 21:37:24,872 [INFO] root: Health check requested
+2025-05-06 21:37:26,293 [INFO] root: Health check requested
+2025-05-06 21:37:26,896 [INFO] root: Health check requested
+2025-05-06 21:37:28,298 [INFO] root: Health check requested
+2025-05-06 21:37:28,908 [INFO] root: Health check requested
+2025-05-06 21:37:30,933 [INFO] root: Health check requested
+2025-05-06 21:37:32,949 [INFO] root: Health check requested
+2025-05-06 21:37:34,969 [INFO] root: Health check requested
+2025-05-06 21:37:36,979 [INFO] root: Health check requested
+2025-05-06 21:37:38,995 [INFO] root: Health check requested
+2025-05-06 21:37:41,018 [INFO] root: Health check requested
+2025-05-06 21:37:43,027 [INFO] root: Health check requested
+2025-05-06 21:37:45,034 [INFO] root: Health check requested
+2025-05-06 21:37:47,044 [INFO] root: Health check requested
+2025-05-06 21:38:16,847 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 21:38:16,851 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 21:38:16,851 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 21:38:16,858 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 21:38:16,860 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 21:38:16,860 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 21:38:18,526 [INFO] root: Health check requested
+2025-05-06 21:38:18,624 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 21:38:29,215 [INFO] root: Health check requested
+2025-05-06 21:38:30,995 [INFO] root: Health check requested
+2025-05-06 21:38:33,032 [INFO] root: Health check requested
+2025-05-06 21:38:33,292 [INFO] root: Health check requested
+2025-05-06 21:38:33,297 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 21:38:33,477 [INFO] root: Recording started successfully.
+2025-05-06 21:38:35,079 [INFO] root: Health check requested
+2025-05-06 21:38:36,358 [INFO] root: Health check requested
+2025-05-06 21:38:37,104 [INFO] root: Health check requested
+2025-05-06 21:38:38,387 [INFO] root: Health check requested
+2025-05-06 21:38:39,124 [INFO] root: Health check requested
+2025-05-06 21:38:40,406 [INFO] root: Health check requested
+2025-05-06 21:38:41,162 [INFO] root: Health check requested
+2025-05-06 21:38:42,448 [INFO] root: Health check requested
+2025-05-06 21:38:44,507 [INFO] root: Health check requested
+2025-05-06 21:38:46,553 [INFO] root: Health check requested
+2025-05-06 21:38:48,620 [INFO] root: Health check requested
+2025-05-06 21:38:50,670 [INFO] root: Health check requested
+2025-05-06 21:38:52,719 [INFO] root: Health check requested
+2025-05-06 21:38:54,763 [INFO] root: Health check requested
+2025-05-06 21:38:56,797 [INFO] root: Health check requested
+2025-05-06 21:38:58,861 [INFO] root: Health check requested
+2025-05-06 21:39:00,910 [INFO] root: Health check requested
+2025-05-06 21:39:02,951 [INFO] root: Health check requested
+2025-05-06 21:39:05,026 [INFO] root: Health check requested
+2025-05-06 21:39:07,110 [INFO] root: Health check requested
+2025-05-06 21:39:09,184 [INFO] root: Health check requested
+2025-05-06 21:39:11,235 [INFO] root: Health check requested
+2025-05-06 21:39:13,287 [INFO] root: Health check requested
+2025-05-06 21:39:15,312 [INFO] root: Health check requested
+2025-05-06 21:39:17,357 [INFO] root: Health check requested
+2025-05-06 21:39:17,451 [INFO] root: Health check requested
+2025-05-06 21:39:17,456 [INFO] root: Stopping recording...
+2025-05-06 21:39:19,433 [INFO] root: Health check requested
+2025-05-06 21:39:20,854 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 21:39:22,897 [INFO] root: Health check requested
+2025-05-06 21:39:24,301 [INFO] root: Health check requested
+2025-05-06 21:39:24,925 [INFO] root: Health check requested
+2025-05-06 21:39:26,325 [INFO] root: Health check requested
+2025-05-06 21:39:26,949 [INFO] root: Health check requested
+2025-05-06 21:39:28,349 [INFO] root: Health check requested
+2025-05-06 21:39:28,970 [INFO] root: Health check requested
+2025-05-06 21:39:30,368 [INFO] root: Health check requested
+2025-05-06 21:39:31,006 [INFO] root: Health check requested
+2025-05-06 21:39:32,408 [INFO] root: Health check requested
+2025-05-06 21:39:33,034 [INFO] root: Health check requested
+2025-05-06 21:39:34,457 [INFO] root: Health check requested
+2025-05-06 21:39:35,064 [INFO] root: Health check requested
+2025-05-06 21:39:36,485 [INFO] root: Health check requested
+2025-05-06 21:39:37,109 [INFO] root: Health check requested
+2025-05-06 21:39:38,511 [INFO] root: Health check requested
+2025-05-06 21:39:39,129 [INFO] root: Health check requested
+2025-05-06 21:39:40,631 [INFO] root: Health check requested
+2025-05-06 21:39:42,651 [INFO] root: Health check requested
+2025-05-06 21:39:44,677 [INFO] root: Health check requested
+2025-05-06 21:39:46,722 [INFO] root: Health check requested
+2025-05-06 21:39:48,752 [INFO] root: Health check requested
+2025-05-06 21:39:50,779 [INFO] root: Health check requested
+2025-05-06 21:39:52,829 [INFO] root: Health check requested
+2025-05-06 21:39:54,889 [INFO] root: Health check requested
+2025-05-06 21:39:56,951 [INFO] root: Health check requested
+2025-05-06 21:39:59,006 [INFO] root: Health check requested
+2025-05-06 21:40:01,055 [INFO] root: Health check requested
+2025-05-06 21:40:03,098 [INFO] root: Health check requested
+2025-05-06 21:40:05,131 [INFO] root: Health check requested
+2025-05-06 21:40:07,178 [INFO] root: Health check requested
+2025-05-06 21:40:09,240 [INFO] root: Health check requested
+2025-05-06 21:40:11,309 [INFO] root: Health check requested
+2025-05-06 21:40:13,346 [INFO] root: Health check requested
+2025-05-06 21:40:15,397 [INFO] root: Health check requested
+2025-05-06 21:40:17,448 [INFO] root: Health check requested
+2025-05-06 21:40:19,498 [INFO] root: Health check requested
+2025-05-06 21:40:21,518 [INFO] root: Health check requested
+2025-05-06 21:40:23,552 [INFO] root: Health check requested
+2025-05-06 21:40:25,587 [INFO] root: Health check requested
+2025-05-06 21:40:27,618 [INFO] root: Health check requested
+2025-05-06 21:40:29,701 [INFO] root: Health check requested
+2025-05-06 21:40:31,753 [INFO] root: Health check requested
+2025-05-06 21:40:33,791 [INFO] root: Health check requested
+2025-05-06 21:40:35,864 [INFO] root: Health check requested
+2025-05-06 21:40:37,900 [INFO] root: Health check requested
+2025-05-06 21:40:39,936 [INFO] root: Health check requested
+2025-05-06 21:40:41,979 [INFO] root: Health check requested
+2025-05-06 21:40:44,027 [INFO] root: Health check requested
+2025-05-06 21:40:46,071 [INFO] root: Health check requested
+2025-05-06 21:40:48,135 [INFO] root: Health check requested
+2025-05-06 21:40:50,208 [INFO] root: Health check requested
+2025-05-06 21:40:52,282 [INFO] root: Health check requested
+2025-05-06 21:40:54,325 [INFO] root: Health check requested
+2025-05-06 21:40:56,383 [INFO] root: Health check requested
+2025-05-06 21:40:58,434 [INFO] root: Health check requested
+2025-05-06 21:41:00,524 [INFO] root: Health check requested
+2025-05-06 21:41:02,579 [INFO] root: Health check requested
+2025-05-06 21:41:04,629 [INFO] root: Health check requested
+2025-05-06 21:41:06,677 [INFO] root: Health check requested
+2025-05-06 21:41:08,747 [INFO] root: Health check requested
+2025-05-06 21:41:10,793 [INFO] root: Health check requested
+2025-05-06 21:41:12,846 [INFO] root: Health check requested
+2025-05-06 21:41:14,907 [INFO] root: Health check requested
+2025-05-06 21:41:16,942 [INFO] root: Health check requested
+2025-05-06 21:41:18,969 [INFO] root: Health check requested
+2025-05-06 21:41:21,000 [INFO] root: Health check requested
+2025-05-06 21:41:23,045 [INFO] root: Health check requested
+2025-05-06 21:41:25,077 [INFO] root: Health check requested
+2025-05-06 21:42:19,413 [INFO] root: Health check requested
+2025-05-06 21:43:19,383 [INFO] root: Health check requested
+2025-05-06 21:44:19,416 [INFO] root: Health check requested
+2025-05-06 21:45:19,350 [INFO] root: Health check requested
+2025-05-06 21:46:19,394 [INFO] root: Health check requested
+2025-05-06 21:47:19,380 [INFO] root: Health check requested
+2025-05-06 21:48:19,370 [INFO] root: Health check requested
+2025-05-06 21:49:04,397 [INFO] root: Health check requested
+2025-05-06 21:49:06,413 [INFO] root: Health check requested
+2025-05-06 21:49:08,425 [INFO] root: Health check requested
+2025-05-06 21:49:10,442 [INFO] root: Health check requested
+2025-05-06 21:49:18,180 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 21:49:18,182 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 21:49:18,182 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 21:49:18,187 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 21:49:18,189 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 21:49:18,189 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 21:49:33,472 [INFO] root: Health check requested
+2025-05-06 21:49:33,678 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 21:49:35,844 [INFO] root: Health check requested
+2025-05-06 21:49:35,846 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 21:49:35,991 [INFO] root: Recording started successfully.
+2025-05-06 21:49:54,429 [INFO] root: Health check requested
+2025-05-06 21:49:56,956 [INFO] root: Health check requested
+2025-05-06 21:49:58,983 [INFO] root: Health check requested
+2025-05-06 21:50:01,010 [INFO] root: Health check requested
+2025-05-06 21:50:03,052 [INFO] root: Health check requested
+2025-05-06 21:50:05,082 [INFO] root: Health check requested
+2025-05-06 21:50:07,100 [INFO] root: Health check requested
+2025-05-06 21:50:09,116 [INFO] root: Health check requested
+2025-05-06 21:50:11,172 [INFO] root: Health check requested
+2025-05-06 21:50:13,223 [INFO] root: Health check requested
+2025-05-06 21:50:15,243 [INFO] root: Health check requested
+2025-05-06 21:50:35,908 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 21:50:35,912 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 21:50:35,912 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 21:50:35,933 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 21:50:35,937 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 21:50:35,937 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 21:50:47,421 [INFO] root: Health check requested
+2025-05-06 21:50:47,709 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 21:50:47,912 [INFO] root: Health check requested
+2025-05-06 21:50:49,830 [INFO] root: Health check requested
+2025-05-06 21:50:51,380 [INFO] root: Health check requested
+2025-05-06 21:50:51,396 [INFO] root: Received request for /api/chat with method: POST
+2025-05-06 21:50:51,398 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-06 21:50:51,667 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-06 21:50:51,667 [INFO] utils.s3_utils: Final system prompt length: 18866
+2025-05-06 21:50:51,755 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-06 21:50:51,756 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-06 21:50:51,756 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-06 21:50:51,756 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-06 21:50:51,820 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-06 21:50:51,820 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-06 21:50:51,845 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-06 21:50:51,846 [INFO] root: Simple query detected ('hej'), bypassing RAG.
+2025-05-06 21:50:51,846 [INFO] root: Created new TranscriptState for river/0000
+2025-05-06 21:50:51,907 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250506-T214935_uID-0112_oID-river_aID-river_eID-0000_sID-20250506_214935.txt. Resetting read position to 0.
+2025-05-06 21:50:51,928 [INFO] utils.transcript_utils: S3 get_object successful. Read 133 bytes.
+2025-05-06 21:50:51,929 [INFO] utils.transcript_utils: Decoded 131 characters.
+2025-05-06 21:50:51,929 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250506-T214935_uID-0112_oID-river_aID-river_eID-0000_sID-20250506_214935.txt: Position set to 133 (current S3 size).
+2025-05-06 21:50:51,929 [INFO] root: Adding recent transcript update (237 chars).
+2025-05-06 21:50:54,496 [INFO] root: LLM stream completed successfully (190 chars).
+2025-05-06 21:51:01,279 [INFO] root: Health check requested
+2025-05-06 21:51:01,288 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 21:51:01,427 [INFO] root: Recording started successfully.
+2025-05-06 21:52:04,989 [INFO] root: Health check requested
+2025-05-06 21:52:07,031 [INFO] root: Health check requested
+2025-05-06 21:52:07,035 [INFO] root: Received request for /api/chat with method: POST
+2025-05-06 21:52:07,036 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-06 21:52:07,248 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-06 21:52:07,248 [INFO] utils.s3_utils: Final system prompt length: 18866
+2025-05-06 21:52:07,342 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-06 21:52:07,343 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-06 21:52:07,343 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-06 21:52:07,343 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-06 21:52:07,430 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-06 21:52:07,433 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-06 21:52:07,468 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-06 21:52:07,469 [INFO] root: Simple query detected ('hej'), bypassing RAG.
+2025-05-06 21:52:07,525 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250506-T215101_uID-0112_oID-river_aID-river_eID-0000_sID-20250506_215101.txt. Resetting read position to 0.
+2025-05-06 21:52:07,555 [INFO] utils.transcript_utils: S3 get_object successful. Read 521 bytes.
+2025-05-06 21:52:07,555 [INFO] utils.transcript_utils: Decoded 521 characters.
+2025-05-06 21:52:07,555 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250506-T215101_uID-0112_oID-river_aID-river_eID-0000_sID-20250506_215101.txt: Position set to 521 (current S3 size).
+2025-05-06 21:52:07,555 [INFO] root: Adding recent transcript update (627 chars).
+2025-05-06 21:52:08,963 [INFO] root: LLM stream completed successfully (0 chars).
+2025-05-06 21:56:23,418 [INFO] root: Health check requested
+2025-05-06 21:56:25,459 [INFO] root: Health check requested
+2025-05-06 21:56:25,464 [INFO] root: Received request for /api/chat with method: POST
+2025-05-06 21:56:25,465 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-06 21:56:25,655 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-06 21:56:25,655 [INFO] utils.s3_utils: Final system prompt length: 18866
+2025-05-06 21:56:25,743 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-06 21:56:25,744 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-06 21:56:25,744 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-06 21:56:25,744 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-06 21:56:25,812 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-06 21:56:25,812 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-06 21:56:25,840 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-06 21:56:25,841 [INFO] root: Simple query detected ('hej'), bypassing RAG.
+2025-05-06 21:56:25,901 [INFO] utils.transcript_utils: Tx organizations/river/agents/river/events/0000/transcripts/transcript_D20250506-T215101_uID-0112_oID-river_aID-river_eID-0000_sID-20250506_215101.txt updated. Planning to read from position 521 (S3 size: 1182).
+2025-05-06 21:56:25,941 [INFO] utils.transcript_utils: S3 get_object successful. Read 661 bytes.
+2025-05-06 21:56:25,941 [INFO] utils.transcript_utils: Decoded 549 characters.
+2025-05-06 21:56:25,942 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250506-T215101_uID-0112_oID-river_aID-river_eID-0000_sID-20250506_215101.txt: Position set to 1182 (current S3 size).
+2025-05-06 21:56:25,942 [INFO] root: Adding recent transcript update (655 chars).
+2025-05-06 21:56:27,854 [INFO] root: LLM stream completed successfully (0 chars).
+2025-05-06 22:00:36,738 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 22:00:36,739 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 22:00:36,739 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 22:00:36,744 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 22:00:36,746 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 22:00:36,746 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 22:04:58,839 [INFO] root: Health check requested
+2025-05-06 22:04:59,081 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 22:05:03,742 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 22:05:03,744 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 22:05:03,744 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 22:05:03,749 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 22:05:03,751 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 22:05:03,751 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 22:05:19,604 [INFO] root: Health check requested
+2025-05-06 22:05:19,758 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 22:05:21,789 [INFO] root: Health check requested
+2025-05-06 22:05:23,768 [INFO] root: Health check requested
+2025-05-06 22:05:23,775 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 22:05:23,909 [INFO] root: Recording started successfully.
+2025-05-06 22:05:25,939 [INFO] root: Health check requested
+2025-05-06 22:05:28,002 [INFO] root: Health check requested
+2025-05-06 22:05:30,030 [INFO] root: Health check requested
+2025-05-06 22:05:32,044 [INFO] root: Health check requested
+2025-05-06 22:05:34,058 [INFO] root: Health check requested
+2025-05-06 22:05:36,082 [INFO] root: Health check requested
+2025-05-06 22:05:38,119 [INFO] root: Health check requested
+2025-05-06 22:05:40,169 [INFO] root: Health check requested
+2025-05-06 22:05:42,221 [INFO] root: Health check requested
+2025-05-06 22:05:44,279 [INFO] root: Health check requested
+2025-05-06 22:05:46,407 [INFO] root: Health check requested
+2025-05-06 22:05:48,461 [INFO] root: Health check requested
+2025-05-06 22:05:50,505 [INFO] root: Health check requested
+2025-05-06 22:05:52,522 [INFO] root: Health check requested
+2025-05-06 22:05:54,558 [INFO] root: Health check requested
+2025-05-06 22:05:56,608 [INFO] root: Health check requested
+2025-05-06 22:05:58,680 [INFO] root: Health check requested
+2025-05-06 22:06:00,735 [INFO] root: Health check requested
+2025-05-06 22:06:02,776 [INFO] root: Health check requested
+2025-05-06 22:06:04,811 [INFO] root: Health check requested
+2025-05-06 22:06:06,400 [INFO] root: Health check requested
+2025-05-06 22:06:06,823 [INFO] root: Health check requested
+2025-05-06 22:06:08,405 [INFO] root: Health check requested
+2025-05-06 22:06:08,859 [INFO] root: Health check requested
+2025-05-06 22:06:09,630 [INFO] root: Health check requested
+2025-05-06 22:06:09,632 [INFO] root: Stopping recording...
+2025-05-06 22:06:10,333 [INFO] root: Health check requested
+2025-05-06 22:06:10,870 [INFO] root: Health check requested
+2025-05-06 22:06:12,331 [INFO] root: Health check requested
+2025-05-06 22:06:12,858 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 22:06:13,324 [INFO] root: Health check requested
+2025-05-06 22:06:14,322 [INFO] root: Health check requested
+2025-05-06 22:06:14,872 [INFO] root: Health check requested
+2025-05-06 22:06:14,874 [INFO] root: Health check requested
+2025-05-06 22:06:16,342 [INFO] root: Health check requested
+2025-05-06 22:06:16,879 [INFO] root: Health check requested
+2025-05-06 22:06:16,885 [INFO] root: Health check requested
+2025-05-06 22:06:18,338 [INFO] root: Health check requested
+2025-05-06 22:06:18,898 [INFO] root: Health check requested
+2025-05-06 22:06:20,325 [INFO] root: Health check requested
+2025-05-06 22:06:20,915 [INFO] root: Health check requested
+2025-05-06 22:06:22,320 [INFO] root: Health check requested
+2025-05-06 22:06:22,930 [INFO] root: Health check requested
+2025-05-06 22:06:24,325 [INFO] root: Health check requested
+2025-05-06 22:06:24,945 [INFO] root: Health check requested
+2025-05-06 22:06:26,328 [INFO] root: Health check requested
+2025-05-06 22:06:26,956 [INFO] root: Health check requested
+2025-05-06 22:06:28,329 [INFO] root: Health check requested
+2025-05-06 22:06:28,968 [INFO] root: Health check requested
+2025-05-06 22:06:29,984 [INFO] root: Health check requested
+2025-05-06 22:06:30,990 [INFO] root: Health check requested
+2025-05-06 22:06:30,993 [INFO] root: Health check requested
+2025-05-06 22:06:32,990 [INFO] root: Health check requested
+2025-05-06 22:06:33,002 [INFO] root: Health check requested
+2025-05-06 22:22:42,977 [INFO] root: Health check requested
+2025-05-06 22:22:53,273 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 22:22:53,275 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 22:22:53,275 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 22:22:53,280 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 22:22:53,282 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 22:22:53,282 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 22:23:08,642 [INFO] root: Health check requested
+2025-05-06 22:23:08,791 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 22:23:09,403 [INFO] root: Health check requested
+2025-05-06 22:23:09,406 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 22:23:09,543 [INFO] root: Recording started successfully.
+2025-05-06 22:23:10,817 [INFO] root: Health check requested
+2025-05-06 22:23:11,559 [INFO] root: Health check requested
+2025-05-06 22:23:13,855 [INFO] root: Health check requested
+2025-05-06 22:23:15,889 [INFO] root: Health check requested
+2025-05-06 22:23:17,901 [INFO] root: Health check requested
+2025-05-06 22:23:19,916 [INFO] root: Health check requested
+2025-05-06 22:23:21,942 [INFO] root: Health check requested
+2025-05-06 22:23:23,971 [INFO] root: Health check requested
+2025-05-06 22:23:25,986 [INFO] root: Health check requested
+2025-05-06 22:23:28,009 [INFO] root: Health check requested
+2025-05-06 22:23:30,069 [INFO] root: Health check requested
+2025-05-06 22:23:32,097 [INFO] root: Health check requested
+2025-05-06 22:23:34,116 [INFO] root: Health check requested
+2025-05-06 22:23:36,184 [INFO] root: Health check requested
+2025-05-06 22:23:38,227 [INFO] root: Health check requested
+2025-05-06 22:23:40,341 [INFO] root: Health check requested
+2025-05-06 22:23:42,411 [INFO] root: Health check requested
+2025-05-06 22:23:44,422 [INFO] root: Health check requested
+2025-05-06 22:23:46,450 [INFO] root: Health check requested
+2025-05-06 22:23:48,481 [INFO] root: Health check requested
+2025-05-06 22:23:50,497 [INFO] root: Health check requested
+2025-05-06 22:23:52,506 [INFO] root: Health check requested
+2025-05-06 22:23:54,336 [INFO] root: Health check requested
+2025-05-06 22:23:54,519 [INFO] root: Health check requested
+2025-05-06 22:23:56,334 [INFO] root: Health check requested
+2025-05-06 22:23:56,528 [INFO] root: Health check requested
+2025-05-06 22:23:58,337 [INFO] root: Health check requested
+2025-05-06 22:23:58,542 [INFO] root: Health check requested
+2025-05-06 22:24:00,331 [INFO] root: Health check requested
+2025-05-06 22:24:00,552 [INFO] root: Health check requested
+2025-05-06 22:24:02,363 [INFO] root: Health check requested
+2025-05-06 22:24:02,562 [INFO] root: Health check requested
+2025-05-06 22:24:04,339 [INFO] root: Health check requested
+2025-05-06 22:24:04,572 [INFO] root: Health check requested
+2025-05-06 22:24:06,360 [INFO] root: Health check requested
+2025-05-06 22:24:06,584 [INFO] root: Health check requested
+2025-05-06 22:24:08,373 [INFO] root: Health check requested
+2025-05-06 22:24:08,595 [INFO] root: Health check requested
+2025-05-06 22:24:10,334 [INFO] root: Health check requested
+2025-05-06 22:24:10,604 [INFO] root: Health check requested
+2025-05-06 22:24:12,331 [INFO] root: Health check requested
+2025-05-06 22:24:12,613 [INFO] root: Health check requested
+2025-05-06 22:24:14,347 [INFO] root: Health check requested
+2025-05-06 22:24:14,623 [INFO] root: Health check requested
+2025-05-06 22:24:16,344 [INFO] root: Health check requested
+2025-05-06 22:24:16,634 [INFO] root: Health check requested
+2025-05-06 22:24:18,336 [INFO] root: Health check requested
+2025-05-06 22:24:18,641 [INFO] root: Health check requested
+2025-05-06 22:24:20,332 [INFO] root: Health check requested
+2025-05-06 22:24:20,666 [INFO] root: Health check requested
+2025-05-06 22:24:20,817 [INFO] root: Health check requested
+2025-05-06 22:24:20,818 [INFO] root: Stopping recording...
+2025-05-06 22:24:22,336 [INFO] root: Health check requested
+2025-05-06 22:24:22,674 [INFO] root: Health check requested
+2025-05-06 22:24:24,079 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 22:24:24,336 [INFO] root: Health check requested
+2025-05-06 22:24:25,334 [INFO] root: Health check requested
+2025-05-06 22:24:26,096 [INFO] root: Health check requested
+2025-05-06 22:24:26,098 [INFO] root: Health check requested
+2025-05-06 22:24:27,330 [INFO] root: Health check requested
+2025-05-06 22:24:28,107 [INFO] root: Health check requested
+2025-05-06 22:24:29,337 [INFO] root: Health check requested
+2025-05-06 22:24:30,119 [INFO] root: Health check requested
+2025-05-06 22:24:31,330 [INFO] root: Health check requested
+2025-05-06 22:24:32,128 [INFO] root: Health check requested
+2025-05-06 22:24:33,332 [INFO] root: Health check requested
+2025-05-06 22:24:34,138 [INFO] root: Health check requested
+2025-05-06 22:24:35,330 [INFO] root: Health check requested
+2025-05-06 22:24:36,149 [INFO] root: Health check requested
+2025-05-06 22:24:36,862 [INFO] root: Health check requested
+2025-05-06 22:24:37,850 [INFO] root: Health check requested
+2025-05-06 22:24:38,156 [INFO] root: Health check requested
+2025-05-06 22:24:39,849 [INFO] root: Health check requested
+2025-05-06 22:24:40,163 [INFO] root: Health check requested
+2025-05-06 22:24:41,852 [INFO] root: Health check requested
+2025-05-06 22:24:42,172 [INFO] root: Health check requested
+2025-05-06 22:24:43,852 [INFO] root: Health check requested
+2025-05-06 22:24:44,179 [INFO] root: Health check requested
+2025-05-06 22:24:45,853 [INFO] root: Health check requested
+2025-05-06 22:38:23,691 [INFO] root: Health check requested
+2025-05-06 22:38:29,250 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 22:38:29,256 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 22:38:29,256 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 22:38:29,261 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 22:38:29,263 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 22:38:29,263 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 22:38:51,973 [INFO] root: Health check requested
+2025-05-06 22:38:52,141 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 22:38:54,165 [INFO] root: Health check requested
+2025-05-06 22:38:54,303 [INFO] root: Health check requested
+2025-05-06 22:38:54,306 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 22:38:54,437 [INFO] root: Recording started successfully.
+2025-05-06 22:38:56,187 [INFO] root: Health check requested
+2025-05-06 22:38:56,451 [INFO] root: Health check requested
+2025-05-06 22:38:59,227 [INFO] root: Health check requested
+2025-05-06 22:39:01,243 [INFO] root: Health check requested
+2025-05-06 22:39:03,253 [INFO] root: Health check requested
+2025-05-06 22:39:05,267 [INFO] root: Health check requested
+2025-05-06 22:39:07,282 [INFO] root: Health check requested
+2025-05-06 22:39:09,307 [INFO] root: Health check requested
+2025-05-06 22:39:11,359 [INFO] root: Health check requested
+2025-05-06 22:39:13,401 [INFO] root: Health check requested
+2025-05-06 22:39:15,423 [INFO] root: Health check requested
+2025-05-06 22:39:17,445 [INFO] root: Health check requested
+2025-05-06 22:39:19,513 [INFO] root: Health check requested
+2025-05-06 22:39:21,548 [INFO] root: Health check requested
+2025-05-06 22:39:23,594 [INFO] root: Health check requested
+2025-05-06 22:39:25,646 [INFO] root: Health check requested
+2025-05-06 22:39:27,665 [INFO] root: Health check requested
+2025-05-06 22:39:29,676 [INFO] root: Health check requested
+2025-05-06 22:39:31,685 [INFO] root: Health check requested
+2025-05-06 22:39:33,702 [INFO] root: Health check requested
+2025-05-06 22:39:35,750 [INFO] root: Health check requested
+2025-05-06 22:39:36,749 [INFO] root: Health check requested
+2025-05-06 22:39:36,753 [INFO] root: Stopping recording...
+2025-05-06 22:39:37,765 [INFO] root: Health check requested
+2025-05-06 22:39:39,359 [INFO] root: Health check requested
+2025-05-06 22:39:40,223 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 22:39:40,350 [INFO] root: Health check requested
+2025-05-06 22:39:41,353 [INFO] root: Health check requested
+2025-05-06 22:39:42,234 [INFO] root: Health check requested
+2025-05-06 22:39:42,237 [INFO] root: Health check requested
+2025-05-06 22:39:43,350 [INFO] root: Health check requested
+2025-05-06 22:39:44,245 [INFO] root: Health check requested
+2025-05-06 22:39:45,348 [INFO] root: Health check requested
+2025-05-06 22:39:45,360 [INFO] root: Health check requested
+2025-05-06 22:39:46,260 [INFO] root: Health check requested
+2025-05-06 22:39:46,292 [INFO] root: Health check requested
+2025-05-06 22:39:46,294 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 22:39:46,397 [INFO] root: Recording started successfully.
+2025-05-06 22:39:47,357 [INFO] root: Health check requested
+2025-05-06 22:39:47,360 [INFO] root: Health check requested
+2025-05-06 22:39:48,270 [INFO] root: Health check requested
+2025-05-06 22:39:48,406 [INFO] root: Health check requested
+2025-05-06 22:39:49,349 [INFO] root: Health check requested
+2025-05-06 22:39:50,284 [INFO] root: Health check requested
+2025-05-06 22:39:50,415 [INFO] root: Health check requested
+2025-05-06 22:39:50,803 [INFO] root: Health check requested
+2025-05-06 22:39:50,804 [INFO] root: Pausing recording...
+2025-05-06 22:39:50,847 [INFO] root: Recording paused.
+2025-05-06 22:39:51,345 [INFO] root: Health check requested
+2025-05-06 22:39:52,301 [INFO] root: Health check requested
+2025-05-06 22:39:52,421 [INFO] root: Health check requested
+2025-05-06 22:39:52,864 [INFO] root: Health check requested
+2025-05-06 22:39:53,349 [INFO] root: Health check requested
+2025-05-06 22:39:54,312 [INFO] root: Health check requested
+2025-05-06 22:39:54,432 [INFO] root: Health check requested
+2025-05-06 22:39:54,874 [INFO] root: Health check requested
+2025-05-06 22:39:55,225 [INFO] root: Health check requested
+2025-05-06 22:39:56,229 [INFO] root: Health check requested
+2025-05-06 22:39:56,323 [INFO] root: Health check requested
+2025-05-06 22:39:56,894 [INFO] root: Health check requested
+2025-05-06 22:39:58,361 [INFO] root: Health check requested
+2025-05-06 22:39:58,901 [INFO] root: Health check requested
+2025-05-06 22:40:00,393 [INFO] root: Health check requested
+2025-05-06 22:40:00,908 [INFO] root: Health check requested
+2025-05-06 22:40:01,854 [INFO] root: Health check requested
+2025-05-06 22:40:02,925 [INFO] root: Health check requested
+2025-05-06 22:40:04,944 [INFO] root: Health check requested
+2025-05-06 22:40:06,970 [INFO] root: Health check requested
+2025-05-06 22:40:08,979 [INFO] root: Health check requested
+2025-05-06 22:40:10,994 [INFO] root: Health check requested
+2025-05-06 22:40:13,012 [INFO] root: Health check requested
+2025-05-06 22:40:15,021 [INFO] root: Health check requested
+2025-05-06 22:40:17,030 [INFO] root: Health check requested
+2025-05-06 22:40:19,047 [INFO] root: Health check requested
+2025-05-06 22:40:21,145 [INFO] root: Health check requested
+2025-05-06 22:40:23,184 [INFO] root: Health check requested
+2025-05-06 22:40:25,231 [INFO] root: Health check requested
+2025-05-06 22:40:27,248 [INFO] root: Health check requested
+2025-05-06 22:40:29,280 [INFO] root: Health check requested
+2025-05-06 22:40:31,300 [INFO] root: Health check requested
+2025-05-06 22:40:33,317 [INFO] root: Health check requested
+2025-05-06 22:40:35,346 [INFO] root: Health check requested
+2025-05-06 22:40:37,390 [INFO] root: Health check requested
+2025-05-06 22:40:39,424 [INFO] root: Health check requested
+2025-05-06 22:40:41,449 [INFO] root: Health check requested
+2025-05-06 22:40:43,458 [INFO] root: Health check requested
+2025-05-06 22:40:45,474 [INFO] root: Health check requested
+2025-05-06 22:40:47,490 [INFO] root: Health check requested
+2025-05-06 22:40:49,502 [INFO] root: Health check requested
+2025-05-06 22:40:51,516 [INFO] root: Health check requested
+2025-05-06 22:40:53,526 [INFO] root: Health check requested
+2025-05-06 22:40:55,548 [INFO] root: Health check requested
+2025-05-06 22:40:57,583 [INFO] root: Health check requested
+2025-05-06 22:40:59,597 [INFO] root: Health check requested
+2025-05-06 22:41:01,608 [INFO] root: Health check requested
+2025-05-06 22:41:03,618 [INFO] root: Health check requested
+2025-05-06 22:41:05,630 [INFO] root: Health check requested
+2025-05-06 22:41:19,412 [INFO] root: Health check requested
+2025-05-06 22:42:19,425 [INFO] root: Health check requested
+2025-05-06 22:43:19,446 [INFO] root: Health check requested
+2025-05-06 22:44:19,495 [INFO] root: Health check requested
+2025-05-06 22:45:19,435 [INFO] root: Health check requested
+2025-05-06 22:46:19,425 [INFO] root: Health check requested
+2025-05-06 22:47:19,425 [INFO] root: Health check requested
+2025-05-06 22:48:19,437 [INFO] root: Health check requested
+2025-05-06 22:49:19,445 [INFO] root: Health check requested
+2025-05-06 22:50:19,429 [INFO] root: Health check requested
+2025-05-06 22:51:19,405 [INFO] root: Health check requested
+2025-05-06 22:52:19,490 [INFO] root: Health check requested
+2025-05-06 22:53:19,485 [INFO] root: Health check requested
+2025-05-06 22:54:19,458 [INFO] root: Health check requested
+2025-05-06 22:54:26,694 [INFO] root: Health check requested
+2025-05-06 22:54:28,711 [INFO] root: Health check requested
+2025-05-06 22:54:30,727 [INFO] root: Health check requested
+2025-05-06 22:54:32,825 [INFO] root: Health check requested
+2025-05-06 22:54:34,840 [INFO] root: Health check requested
+2025-05-06 22:54:36,852 [INFO] root: Health check requested
+2025-05-06 22:54:38,867 [INFO] root: Health check requested
+2025-05-06 22:54:40,885 [INFO] root: Health check requested
+2025-05-06 22:54:42,926 [INFO] root: Health check requested
+2025-05-06 22:54:44,935 [INFO] root: Health check requested
+2025-05-06 22:54:46,954 [INFO] root: Health check requested
+2025-05-06 22:54:48,965 [INFO] root: Health check requested
+2025-05-06 22:54:50,976 [INFO] root: Health check requested
+2025-05-06 22:54:52,992 [INFO] root: Health check requested
+2025-05-06 22:54:55,006 [INFO] root: Health check requested
+2025-05-06 22:54:57,040 [INFO] root: Health check requested
+2025-05-06 22:54:59,162 [INFO] root: Health check requested
+2025-05-06 22:55:01,182 [INFO] root: Health check requested
+2025-05-06 22:55:03,211 [INFO] root: Health check requested
+2025-05-06 22:55:05,240 [INFO] root: Health check requested
+2025-05-06 22:55:07,289 [INFO] root: Health check requested
+2025-05-06 22:55:08,371 [INFO] root: Health check requested
+2025-05-06 22:55:09,301 [INFO] root: Health check requested
+2025-05-06 22:55:10,357 [INFO] root: Health check requested
+2025-05-06 22:55:11,315 [INFO] root: Health check requested
+2025-05-06 22:55:12,382 [INFO] root: Health check requested
+2025-05-06 22:55:13,325 [INFO] root: Health check requested
+2025-05-06 22:55:14,388 [INFO] root: Health check requested
+2025-05-06 22:55:15,342 [INFO] root: Health check requested
+2025-05-06 22:55:16,356 [INFO] root: Health check requested
+2025-05-06 22:55:17,363 [INFO] root: Health check requested
+2025-05-06 22:55:18,357 [INFO] root: Health check requested
+2025-05-06 22:55:19,372 [INFO] root: Health check requested
+2025-05-06 22:55:19,384 [INFO] root: Health check requested
+2025-05-06 22:55:21,361 [INFO] root: Health check requested
+2025-05-06 22:55:21,393 [INFO] root: Health check requested
+2025-05-06 22:55:23,367 [INFO] root: Health check requested
+2025-05-06 22:55:23,400 [INFO] root: Health check requested
+2025-05-06 22:55:25,360 [INFO] root: Health check requested
+2025-05-06 22:55:25,410 [INFO] root: Health check requested
+2025-05-06 22:55:27,363 [INFO] root: Health check requested
+2025-05-06 22:55:27,417 [INFO] root: Health check requested
+2025-05-06 22:55:29,360 [INFO] root: Health check requested
+2025-05-06 22:55:29,424 [INFO] root: Health check requested
+2025-05-06 22:55:31,363 [INFO] root: Health check requested
+2025-05-06 22:55:31,430 [INFO] root: Health check requested
+2025-05-06 22:55:33,357 [INFO] root: Health check requested
+2025-05-06 22:55:33,446 [INFO] root: Health check requested
+2025-05-06 22:55:35,364 [INFO] root: Health check requested
+2025-05-06 22:55:35,459 [INFO] root: Health check requested
+2025-05-06 22:55:37,359 [INFO] root: Health check requested
+2025-05-06 22:55:37,467 [INFO] root: Health check requested
+2025-05-06 22:55:39,364 [INFO] root: Health check requested
+2025-05-06 22:55:39,474 [INFO] root: Health check requested
+2025-05-06 22:55:41,366 [INFO] root: Health check requested
+2025-05-06 22:55:41,481 [INFO] root: Health check requested
+2025-05-06 22:55:43,371 [INFO] root: Health check requested
+2025-05-06 22:55:43,490 [INFO] root: Health check requested
+2025-05-06 22:55:45,378 [INFO] root: Health check requested
+2025-05-06 22:55:45,498 [INFO] root: Health check requested
+2025-05-06 22:55:47,368 [INFO] root: Health check requested
+2025-05-06 22:55:47,507 [INFO] root: Health check requested
+2025-05-06 22:55:49,527 [INFO] root: Health check requested
+2025-05-06 22:55:51,548 [INFO] root: Health check requested
+2025-05-06 22:55:53,567 [INFO] root: Health check requested
+2025-05-06 22:55:55,582 [INFO] root: Health check requested
+2025-05-06 22:56:29,419 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 22:56:29,422 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 22:56:29,422 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 22:56:29,431 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 22:56:29,433 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 22:56:29,433 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 22:56:29,495 [INFO] root: Health check requested
+2025-05-06 22:56:29,592 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 22:56:29,802 [INFO] root: Health check requested
+2025-05-06 22:56:40,567 [INFO] root: Health check requested
+2025-05-06 22:56:42,982 [INFO] root: Health check requested
+2025-05-06 22:56:45,048 [INFO] root: Health check requested
+2025-05-06 22:56:45,854 [INFO] root: Health check requested
+2025-05-06 22:56:45,859 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 22:56:46,012 [INFO] root: Recording started successfully.
+2025-05-06 22:56:47,078 [INFO] root: Health check requested
+2025-05-06 22:56:50,109 [INFO] root: Health check requested
+2025-05-06 22:56:52,122 [INFO] root: Health check requested
+2025-05-06 22:56:54,132 [INFO] root: Health check requested
+2025-05-06 22:56:56,087 [INFO] root: Health check requested
+2025-05-06 22:56:56,089 [INFO] root: Stopping recording...
+2025-05-06 22:56:56,146 [INFO] root: Health check requested
+2025-05-06 22:56:59,588 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 22:57:01,185 [INFO] root: Health check requested
+2025-05-06 22:57:02,157 [INFO] root: Health check requested
+2025-05-06 22:57:03,197 [INFO] root: Health check requested
+2025-05-06 22:57:04,182 [INFO] root: Health check requested
+2025-05-06 22:57:05,205 [INFO] root: Health check requested
+2025-05-06 22:57:07,214 [INFO] root: Health check requested
+2025-05-06 22:57:09,233 [INFO] root: Health check requested
+2025-05-06 22:57:11,276 [INFO] root: Health check requested
+2025-05-06 22:57:13,296 [INFO] root: Health check requested
+2025-05-06 23:01:09,864 [INFO] root: Health check requested
+2025-05-06 23:02:35,700 [INFO] root: Health check requested
+2025-05-06 23:02:51,629 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 23:02:51,631 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 23:02:51,631 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 23:02:51,636 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 23:02:51,638 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 23:02:51,638 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 23:03:34,588 [INFO] root: Health check requested
+2025-05-06 23:03:34,779 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 23:03:36,550 [INFO] root: Health check requested
+2025-05-06 23:03:36,553 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 23:03:36,677 [INFO] root: Recording started successfully.
+2025-05-06 23:03:36,802 [INFO] root: Health check requested
+2025-05-06 23:03:39,843 [INFO] root: Health check requested
+2025-05-06 23:03:41,858 [INFO] root: Health check requested
+2025-05-06 23:03:43,871 [INFO] root: Health check requested
+2025-05-06 23:03:45,886 [INFO] root: Health check requested
+2025-05-06 23:03:47,901 [INFO] root: Health check requested
+2025-05-06 23:03:49,914 [INFO] root: Health check requested
+2025-05-06 23:03:51,959 [INFO] root: Health check requested
+2025-05-06 23:03:53,334 [INFO] root: Health check requested
+2025-05-06 23:03:53,336 [INFO] root: Stopping recording...
+2025-05-06 23:03:53,976 [INFO] root: Health check requested
+2025-05-06 23:03:56,841 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 23:03:58,883 [INFO] root: Health check requested
+2025-05-06 23:04:00,895 [INFO] root: Health check requested
+2025-05-06 23:04:02,926 [INFO] root: Health check requested
+2025-05-06 23:04:04,973 [INFO] root: Health check requested
+2025-05-06 23:04:06,989 [INFO] root: Health check requested
+2025-05-06 23:04:09,006 [INFO] root: Health check requested
+2025-05-06 23:04:11,047 [INFO] root: Health check requested
+2025-05-06 23:04:13,078 [INFO] root: Health check requested
+2025-05-06 23:04:15,092 [INFO] root: Health check requested
+2025-05-06 23:04:17,111 [INFO] root: Health check requested
+2025-05-06 23:07:21,206 [INFO] root: Health check requested
+2025-05-06 23:07:39,398 [INFO] root: Health check requested
+2025-05-06 23:08:03,198 [INFO] root: Health check requested
+2025-05-06 23:08:15,961 [INFO] root: Health check requested
+2025-05-06 23:08:40,000 [INFO] root: Health check requested
+2025-05-06 23:09:14,007 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 23:09:14,009 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 23:09:14,009 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 23:09:14,016 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 23:09:14,018 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 23:09:14,018 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 23:09:25,822 [INFO] root: Health check requested
+2025-05-06 23:09:26,035 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 23:09:28,073 [INFO] root: Health check requested
+2025-05-06 23:09:29,241 [INFO] root: Health check requested
+2025-05-06 23:09:29,244 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 23:09:29,379 [INFO] root: Recording started successfully.
+2025-05-06 23:18:01,860 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 23:18:01,863 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 23:18:01,863 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 23:18:01,869 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 23:18:01,870 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 23:18:01,870 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 23:18:16,294 [INFO] root: Health check requested
+2025-05-06 23:18:16,433 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 23:18:17,944 [INFO] root: Health check requested
+2025-05-06 23:18:17,951 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 23:18:18,157 [INFO] root: Recording started successfully.
+2025-05-06 23:18:18,455 [INFO] root: Health check requested
+2025-05-06 23:18:20,191 [INFO] root: Health check requested
+2025-05-06 23:18:22,215 [INFO] root: Health check requested
+2025-05-06 23:18:24,266 [INFO] root: Health check requested
+2025-05-06 23:18:26,281 [INFO] root: Health check requested
+2025-05-06 23:18:28,299 [INFO] root: Health check requested
+2025-05-06 23:18:30,309 [INFO] root: Health check requested
+2025-05-06 23:18:32,322 [INFO] root: Health check requested
+2025-05-06 23:18:34,360 [INFO] root: Health check requested
+2025-05-06 23:18:36,395 [INFO] root: Health check requested
+2025-05-06 23:18:38,408 [INFO] root: Health check requested
+2025-05-06 23:18:40,434 [INFO] root: Health check requested
+2025-05-06 23:18:42,448 [INFO] root: Health check requested
+2025-05-06 23:18:44,462 [INFO] root: Health check requested
+2025-05-06 23:18:46,472 [INFO] root: Health check requested
+2025-05-06 23:18:48,481 [INFO] root: Health check requested
+2025-05-06 23:18:50,494 [INFO] root: Health check requested
+2025-05-06 23:18:52,502 [INFO] root: Health check requested
+2025-05-06 23:18:54,511 [INFO] root: Health check requested
+2025-05-06 23:18:56,526 [INFO] root: Health check requested
+2025-05-06 23:18:56,934 [INFO] root: Health check requested
+2025-05-06 23:18:56,936 [INFO] root: Stopping recording...
+2025-05-06 23:18:58,535 [INFO] root: Health check requested
+2025-05-06 23:19:00,531 [INFO] root: Health check requested
+2025-05-06 23:19:01,534 [INFO] root: Health check requested
+2025-05-06 23:19:02,024 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 23:19:02,537 [INFO] root: Health check requested
+2025-05-06 23:19:03,542 [INFO] root: Health check requested
+2025-05-06 23:19:04,034 [INFO] root: Health check requested
+2025-05-06 23:19:04,522 [INFO] root: Health check requested
+2025-05-06 23:19:05,524 [INFO] root: Health check requested
+2025-05-06 23:19:05,548 [INFO] root: Health check requested
+2025-05-06 23:19:07,529 [INFO] root: Health check requested
+2025-05-06 23:19:07,557 [INFO] root: Health check requested
+2025-05-06 23:19:09,522 [INFO] root: Health check requested
+2025-05-06 23:19:09,567 [INFO] root: Health check requested
+2025-05-06 23:19:11,531 [INFO] root: Health check requested
+2025-05-06 23:19:11,574 [INFO] root: Health check requested
+2025-05-06 23:19:13,379 [INFO] root: Health check requested
+2025-05-06 23:19:13,521 [INFO] root: Health check requested
+2025-05-06 23:19:13,580 [INFO] root: Health check requested
+2025-05-06 23:19:15,523 [INFO] root: Health check requested
+2025-05-06 23:19:15,586 [INFO] root: Health check requested
+2025-05-06 23:19:17,527 [INFO] root: Health check requested
+2025-05-06 23:19:17,597 [INFO] root: Health check requested
+2025-05-06 23:19:19,528 [INFO] root: Health check requested
+2025-05-06 23:19:19,611 [INFO] root: Health check requested
+2025-05-06 23:19:21,525 [INFO] root: Health check requested
+2025-05-06 23:19:21,619 [INFO] root: Health check requested
+2025-05-06 23:19:23,522 [INFO] root: Health check requested
+2025-05-06 23:33:38,093 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 23:33:38,096 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 23:33:38,096 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 23:33:38,102 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 23:33:38,103 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 23:33:38,103 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 23:39:14,315 [INFO] root: Health check requested
+2025-05-06 23:39:14,602 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 23:39:16,626 [INFO] root: Health check requested
+2025-05-06 23:39:17,525 [INFO] root: Health check requested
+2025-05-06 23:39:17,527 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 23:39:17,683 [INFO] root: Recording started successfully.
+2025-05-06 23:39:19,723 [INFO] root: Health check requested
+2025-05-06 23:39:22,757 [INFO] root: Health check requested
+2025-05-06 23:39:24,771 [INFO] root: Health check requested
+2025-05-06 23:39:26,836 [INFO] root: Health check requested
+2025-05-06 23:39:28,920 [INFO] root: Health check requested
+2025-05-06 23:39:30,937 [INFO] root: Health check requested
+2025-05-06 23:39:32,957 [INFO] root: Health check requested
+2025-05-06 23:39:34,974 [INFO] root: Health check requested
+2025-05-06 23:39:36,987 [INFO] root: Health check requested
+2025-05-06 23:39:39,013 [INFO] root: Health check requested
+2025-05-06 23:39:41,043 [INFO] root: Health check requested
+2025-05-06 23:39:43,056 [INFO] root: Health check requested
+2025-05-06 23:39:45,096 [INFO] root: Health check requested
+2025-05-06 23:39:47,109 [INFO] root: Health check requested
+2025-05-06 23:39:49,156 [INFO] root: Health check requested
+2025-05-06 23:39:51,184 [INFO] root: Health check requested
+2025-05-06 23:39:53,209 [INFO] root: Health check requested
+2025-05-06 23:39:55,243 [INFO] root: Health check requested
+2025-05-06 23:39:57,262 [INFO] root: Health check requested
+2025-05-06 23:39:59,302 [INFO] root: Health check requested
+2025-05-06 23:40:01,347 [INFO] root: Health check requested
+2025-05-06 23:40:03,306 [INFO] root: Health check requested
+2025-05-06 23:40:03,361 [INFO] root: Health check requested
+2025-05-06 23:40:05,338 [INFO] root: Health check requested
+2025-05-06 23:40:05,371 [INFO] root: Health check requested
+2025-05-06 23:40:06,908 [INFO] root: Health check requested
+2025-05-06 23:40:06,911 [INFO] root: Stopping recording...
+2025-05-06 23:40:07,324 [INFO] root: Health check requested
+2025-05-06 23:40:07,560 [INFO] root: Health check requested
+2025-05-06 23:40:09,321 [INFO] root: Health check requested
+2025-05-06 23:40:10,314 [INFO] root: Health check requested
+2025-05-06 23:40:11,314 [INFO] root: Health check requested
+2025-05-06 23:40:11,686 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 23:40:12,389 [INFO] root: Health check requested
+2025-05-06 23:40:12,775 [INFO] root: Health check requested
+2025-05-06 23:40:13,723 [INFO] root: Health check requested
+2025-05-06 23:40:14,314 [INFO] root: Health check requested
+2025-05-06 23:40:14,784 [INFO] root: Health check requested
+2025-05-06 23:40:16,312 [INFO] root: Health check requested
+2025-05-06 23:40:16,793 [INFO] root: Health check requested
+2025-05-06 23:40:17,761 [INFO] root: Health check requested
+2025-05-06 23:40:18,758 [INFO] root: Health check requested
+2025-05-06 23:40:18,801 [INFO] root: Health check requested
+2025-05-06 23:40:20,761 [INFO] root: Health check requested
+2025-05-06 23:40:20,808 [INFO] root: Health check requested
+2025-05-06 23:40:22,772 [INFO] root: Health check requested
+2025-05-06 23:40:22,827 [INFO] root: Health check requested
+2025-05-06 23:40:24,776 [INFO] root: Health check requested
+2025-05-06 23:54:34,802 [INFO] root: Logging setup complete. Level: INFO
+2025-05-06 23:54:34,808 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-06 23:54:34,808 [INFO] root: Pinecone initialized (or skipped if keys missing).
+2025-05-06 23:54:34,813 [INFO] root: Anthropic client initialized successfully.
+2025-05-06 23:54:34,815 [INFO] root: Auto-stop thread started. Checking every 300s for pauses > 7200s.
+2025-05-06 23:54:34,815 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-06 23:54:57,195 [INFO] root: Health check requested
+2025-05-06 23:54:57,573 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-06 23:54:59,604 [INFO] root: Health check requested
+2025-05-06 23:55:00,360 [INFO] root: Health check requested
+2025-05-06 23:55:00,363 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-06 23:55:00,498 [INFO] root: Recording started successfully.
+2025-05-06 23:55:01,615 [INFO] root: Health check requested
+2025-05-06 23:55:02,522 [INFO] root: Health check requested
+2025-05-06 23:55:04,655 [INFO] root: Health check requested
+2025-05-06 23:55:06,666 [INFO] root: Health check requested
+2025-05-06 23:55:08,686 [INFO] root: Health check requested
+2025-05-06 23:55:10,733 [INFO] root: Health check requested
+2025-05-06 23:55:12,745 [INFO] root: Health check requested
+2025-05-06 23:55:14,755 [INFO] root: Health check requested
+2025-05-06 23:55:16,765 [INFO] root: Health check requested
+2025-05-06 23:55:17,833 [INFO] root: Health check requested
+2025-05-06 23:55:17,835 [INFO] root: Stopping recording...
+2025-05-06 23:55:18,775 [INFO] root: Health check requested
+2025-05-06 23:55:21,228 [INFO] root: Recording stopped and transcript saved.
+2025-05-06 23:55:23,279 [INFO] root: Health check requested
+2025-05-06 23:55:23,279 [INFO] root: Health check requested
+2025-05-06 23:55:25,303 [INFO] root: Health check requested
+2025-05-06 23:55:27,340 [INFO] root: Health check requested
+2025-05-06 23:55:29,366 [INFO] root: Health check requested
+2025-05-06 23:55:31,424 [INFO] root: Health check requested
+2025-05-06 23:55:33,496 [INFO] root: Health check requested
+2025-05-06 23:55:35,539 [INFO] root: Health check requested
+2025-05-06 23:55:37,576 [INFO] root: Health check requested
+2025-05-06 23:55:39,592 [INFO] root: Health check requested
+2025-05-06 23:55:41,605 [INFO] root: Health check requested
+2025-05-07 00:02:50,855 [INFO] root: Health check requested
+2025-05-07 00:04:51,385 [INFO] root: Health check requested
+2025-05-07 00:04:57,854 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 00:04:57,856 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 00:04:57,857 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 00:04:57,862 [INFO] root: Anthropic client initialized.
+2025-05-07 00:04:57,863 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 00:04:57,863 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 00:05:13,075 [INFO] root: Health check requested
+2025-05-07 00:05:13,245 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-07 00:05:14,925 [INFO] root: Health check requested
+2025-05-07 00:05:14,929 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 00:05:15,066 [INFO] root: Recording started successfully.
+2025-05-07 00:05:15,288 [INFO] root: Health check requested
+2025-05-07 00:05:18,115 [INFO] root: Health check requested
+2025-05-07 00:05:20,151 [INFO] root: Health check requested
+2025-05-07 00:05:22,171 [INFO] root: Health check requested
+2025-05-07 00:05:24,197 [INFO] root: Health check requested
+2025-05-07 00:05:25,997 [INFO] root: Health check requested
+2025-05-07 00:05:25,999 [INFO] root: Stopping recording...
+2025-05-07 00:05:26,219 [INFO] root: Health check requested
+2025-05-07 00:05:29,995 [INFO] root: Recording stopped and transcript saved.
+2025-05-07 00:05:31,297 [INFO] root: Health check requested
+2025-05-07 00:05:33,310 [INFO] root: Health check requested
+2025-05-07 00:05:35,336 [INFO] root: Health check requested
+2025-05-07 00:05:37,354 [INFO] root: Health check requested
+2025-05-07 00:05:38,617 [INFO] root: Health check requested
+2025-05-07 00:05:38,622 [INFO] root: Received request /api/chat method: POST
+2025-05-07 00:05:38,623 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-07 00:05:38,847 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-07 00:05:38,847 [INFO] utils.s3_utils: Final system prompt length: 18866
+2025-05-07 00:05:38,925 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-07 00:05:38,925 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-07 00:05:38,925 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-07 00:05:38,925 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-07 00:05:38,990 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-07 00:05:38,990 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-07 00:05:39,016 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-07 00:05:39,016 [INFO] root: Simple query ('hej'), bypass RAG.
+2025-05-07 00:05:39,016 [INFO] root: New TranscriptState for river/0000
+2025-05-07 00:05:39,137 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250507-T000514_uID-0112_oID-river_aID-river_eID-0000_sID-20250507_000514.txt. Resetting read position to 0.
+2025-05-07 00:05:39,161 [INFO] utils.transcript_utils: S3 get_object successful. Read 180 bytes.
+2025-05-07 00:05:39,161 [INFO] utils.transcript_utils: Decoded 124 characters.
+2025-05-07 00:05:39,161 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250507-T000514_uID-0112_oID-river_aID-river_eID-0000_sID-20250507_000514.txt: Position set to 180 (current S3 size).
+2025-05-07 00:05:39,161 [INFO] root: Adding recent tx update (230 chars).
+2025-05-07 00:05:39,368 [INFO] root: Health check requested
+2025-05-07 00:05:41,386 [INFO] root: Health check requested
+2025-05-07 00:05:43,399 [INFO] root: Health check requested
+2025-05-07 00:05:45,424 [INFO] root: Health check requested
+2025-05-07 00:05:47,528 [INFO] root: LLM stream completed (363 chars).
