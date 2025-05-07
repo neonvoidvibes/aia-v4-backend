@@ -22502,3 +22502,6 @@ openai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded you
 2025-05-07 22:17:27,248 [INFO] root: Anthropic client initialized.
 2025-05-07 22:17:27,249 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
 2025-05-07 22:17:27,249 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 22:29:51,435 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 22:29:51,437 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 22:29:51,437 [INFO] root: Pinecone initialized (or skipped).

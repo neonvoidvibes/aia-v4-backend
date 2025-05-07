@@ -356,7 +356,7 @@ def stop_recording_route(user): # User object passed by decorator
         # Return the status reflecting the *optimistic* stopped state
         final_status = _get_current_recording_status_snapshot()
         final_status["elapsed_time"] = 0 # Explicitly set 0 for UI stop
-            return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
+        return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
 
 @app.route('/api/recording/pause', methods=['POST'])
 @supabase_auth_required(agent_required=False) # Just need authentication
