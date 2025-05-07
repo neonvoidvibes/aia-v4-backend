@@ -594,6 +594,7 @@ Remember: The goal is exact transcription of real speech only, not generating pl
             r"^\s*Trio(,\s*Trio)*\.?\s*$",                  # Repetitive "Trio"
             r"^\s*(Ja|Nej)(,\s*(Ja|Nej))*\.?\s*$",         # Repetitive "Ja" or "Nej"
             r"Thank you for watching*",
+            r"Thank you so much for watching*",
             # Add more specific patterns here if needed
         ]
 
