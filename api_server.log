@@ -21644,3 +21644,32 @@ openai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded you
 2025-05-07 00:05:43,399 [INFO] root: Health check requested
 2025-05-07 00:05:45,424 [INFO] root: Health check requested
 2025-05-07 00:05:47,528 [INFO] root: LLM stream completed (363 chars).
+2025-05-07 16:28:54,757 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 16:28:54,761 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 16:28:54,761 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 16:28:54,768 [INFO] root: Anthropic client initialized.
+2025-05-07 16:28:54,769 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 16:28:54,769 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 16:29:09,853 [INFO] root: Health check requested
+2025-05-07 16:29:10,043 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-07 16:29:12,068 [INFO] root: Health check requested
+2025-05-07 16:29:12,579 [INFO] root: Health check requested
+2025-05-07 16:29:12,582 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 16:29:12,722 [INFO] root: Recording started successfully.
+2025-05-07 16:29:14,081 [INFO] root: Health check requested
+2025-05-07 16:29:15,766 [INFO] root: Health check requested
+2025-05-07 16:29:17,807 [INFO] root: Health check requested
+2025-05-07 16:29:19,821 [INFO] root: Health check requested
+2025-05-07 16:29:21,844 [INFO] root: Health check requested
+2025-05-07 16:29:23,854 [INFO] root: Health check requested
+2025-05-07 16:29:24,655 [INFO] root: Health check requested
+2025-05-07 16:29:24,656 [INFO] root: Stopping recording...
+2025-05-07 16:29:25,870 [INFO] root: Health check requested
+2025-05-07 16:29:28,126 [INFO] root: Recording stopped and transcript saved.
+2025-05-07 16:29:30,157 [INFO] root: Health check requested
+2025-05-07 16:29:32,173 [INFO] root: Health check requested
+2025-05-07 16:29:34,216 [INFO] root: Health check requested
+2025-05-07 16:29:36,245 [INFO] root: Health check requested
+2025-05-07 16:29:38,299 [INFO] root: Health check requested
+2025-05-07 16:29:40,332 [INFO] root: Health check requested
+2025-05-07 16:29:42,345 [INFO] root: Health check requested

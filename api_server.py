@@ -1,3 +1,4 @@
+# api_server.py
 import os
 import sys
 import logging
@@ -247,12 +248,6 @@ def get_recording_status_route(): # Renamed
     with magic_audio_lock:
         status_data = _get_current_recording_status_snapshot()
     return jsonify(status_data), 200
-
-# ... (rest of the file: /api/index routes, /api/chat, auto_stop_long_paused_recordings, main) ...
-# The /api/chat, /api/index/*, and other utility functions remain unchanged from the provided codebase.
-# I will only paste the changed sections for brevity unless you need the full file.
-# For now, I'll assume the rest of api_server.py is the same and focus on the frontend.
-# If you need the full api_server.py, let me know.
 
 # --- Pinecone Index Info Route ---
 @app.route('/api/index/<string:index_name>/stats', methods=['GET'])
