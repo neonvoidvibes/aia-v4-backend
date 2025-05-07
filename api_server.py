@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import threading
 import time
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta # Added timedelta
 import urllib.parse # For decoding filenames in IDs
 
 # Import necessary modules from our project
@@ -72,8 +72,10 @@ magic_audio_instance: MagicAudio | None = None
 magic_audio_lock = threading.Lock()
 recording_status = {
     "is_recording": False, "is_paused": False, "start_time": None,
-    "pause_start_time": None, "last_pause_timestamp": None,
-    "elapsed_time": 0, "agent": None, "event": None
+    "pause_start_time": None, # Tracks start of current pause period
+    "last_pause_timestamp": None, # Tracks the absolute time the last pause began, used for auto-stop
+    "elapsed_time": 0, # Stores cumulative elapsed time *excluding* pauses
+    "agent": None, "event": None
 }
 
 anthropic_client: Anthropic | None = None
@@ -116,16 +118,23 @@ def get_app_status():
     return jsonify(status_data), 200
 
 def _get_current_recording_status_snapshot():
-    """Helper to get a snapshot of the current recording status for responses."""
-    current_elapsed = recording_status["elapsed_time"]
-    if recording_status["is_recording"] and not recording_status["is_paused"] and recording_status["start_time"]:
-        current_elapsed = time.time() - recording_status["start_time"]
+    """Helper to get a snapshot of the current recording status for responses.
+       Calculates current elapsed time dynamically if recording and not paused.
+    """
+    status_copy = recording_status.copy() # Work with a copy
+    calculated_elapsed = status_copy["elapsed_time"] # Start with stored cumulative time
+
+    if status_copy["is_recording"] and not status_copy["is_paused"] and status_copy["start_time"]:
+        # If actively recording, add time since last resume/start
+        calculated_elapsed = time.time() - status_copy["start_time"]
+
     return {
-        "is_recording": recording_status["is_recording"],
-        "is_paused": recording_status["is_paused"],
-        "elapsed_time": int(current_elapsed),
-        "agent": recording_status.get("agent"),
-        "event": recording_status.get("event")
+        "is_recording": status_copy["is_recording"],
+        "is_paused": status_copy["is_paused"],
+        "elapsed_time": int(calculated_elapsed),
+        "agent": status_copy.get("agent"),
+        "event": status_copy.get("event"),
+        "last_pause_timestamp": status_copy.get("last_pause_timestamp") # Include this field
     }
 
 @app.route('/api/recording/start', methods=['POST'])
@@ -146,7 +155,9 @@ def start_recording_route():
             magic_audio_instance.start()
             recording_status.update({
                 "is_recording": True, "is_paused": False, "start_time": time.time(),
-                "pause_start_time": None, "last_pause_timestamp": None, "elapsed_time": 0,
+                "pause_start_time": None, # Reset pause specific fields
+                "last_pause_timestamp": None, # Reset this field too
+                "elapsed_time": 0, # Reset elapsed time
                 "agent": agent, "event": event
             })
             logger.info("Recording started successfully.")
@@ -183,34 +194,32 @@ def stop_recording_route():
             recording_status.update({"is_recording": False, "is_paused": False, "start_time": None, "pause_start_time": None, "last_pause_timestamp": None, "elapsed_time": 0})
             logger.info("Stop called but not recording or instance missing. Status reset.")
             return jsonify({"status": "success", "message": "Not recording or instance missing", "recording_status": _get_current_recording_status_snapshot()}), 200
-        
+
         logger.info("Stop recording requested. Initiating background stop...")
-        
+
         # --- Optimistic Update & Async Stop ---
         # 1. Capture the instance to stop
         instance_to_stop = magic_audio_instance
         magic_audio_instance = None # Immediately nullify global ref to prevent reuse
-        
+
         # 2. Calculate final elapsed time *before* resetting status
-        final_elapsed_time = 0
-        if recording_status["start_time"]:
-            now = time.time()
-            if recording_status["is_paused"] and recording_status["pause_start_time"]:
-                 final_elapsed_time = recording_status["pause_start_time"] - recording_status["start_time"]
-            else: final_elapsed_time = now - recording_status["start_time"]
-        
+        final_elapsed_time = recording_status["elapsed_time"] # Start with stored cumulative
+        if recording_status["is_recording"] and not recording_status["is_paused"] and recording_status["start_time"]:
+             # If it was running when stop was called, add the last running duration
+             final_elapsed_time = time.time() - recording_status["start_time"]
+
         # 3. Update global status optimistically (reflecting stopped state)
         recording_status.update({
             "is_recording": False, "is_paused": False, "start_time": None,
             "pause_start_time": None, "last_pause_timestamp": None,
             "elapsed_time": int(final_elapsed_time) # Store calculated time
         })
-        
+
         # 4. Start background thread to call the blocking stop method
         stop_thread = threading.Thread(target=_stop_magic_audio_async, args=(instance_to_stop,))
         stop_thread.daemon = True # Allow app to exit even if this thread hangs (though stop should eventually finish)
         stop_thread.start()
-        
+
         # 5. Return success response immediately
         logger.info("Stop recording request acknowledged. Background cleanup initiated.")
         # Return the status reflecting the *optimistic* stopped state
@@ -232,8 +241,10 @@ def pause_recording_route():
             pause_time = time.time()
             recording_status["is_paused"] = True
             recording_status["pause_start_time"] = pause_time
-            recording_status["last_pause_timestamp"] = pause_time
-            if recording_status["start_time"]: recording_status["elapsed_time"] = pause_time - recording_status["start_time"]
+            recording_status["last_pause_timestamp"] = pause_time # Record the absolute time pause began
+            if recording_status["start_time"]:
+                # Update the stored elapsed time up to the pause point
+                recording_status["elapsed_time"] = pause_time - recording_status["start_time"]
             logger.info("Recording paused.")
             return jsonify({"status": "success", "message": "Recording paused", "recording_status": _get_current_recording_status_snapshot()})
         except Exception as e:
@@ -250,16 +261,19 @@ def resume_recording_route():
             return jsonify({"status": "success", "message": "Not paused", "recording_status": _get_current_recording_status_snapshot()}), 200
         logger.info("Resuming recording...")
         try:
+            # Adjust start_time based on how long it was paused
             if recording_status["pause_start_time"] and recording_status["start_time"]:
                 pause_duration = time.time() - recording_status["pause_start_time"]
+                # Effectively shift the start time forward by the pause duration
+                # This means elapsed time = current_time - adjusted_start_time
                 recording_status["start_time"] += pause_duration
                 logger.debug(f"Resuming after {pause_duration:.2f}s pause. Adjusted start time.")
             else: logger.warning("Could not calculate pause duration accurately on resume.")
-            
+
             magic_audio_instance.resume()
             recording_status["is_paused"] = False
-            recording_status["pause_start_time"] = None
-            recording_status["last_pause_timestamp"] = None
+            recording_status["pause_start_time"] = None # Clear current pause start
+            recording_status["last_pause_timestamp"] = None # Clear absolute pause timestamp
             logger.info("Recording resumed.")
             return jsonify({"status": "success", "message": "Recording resumed", "recording_status": _get_current_recording_status_snapshot()})
         except Exception as e:
@@ -428,7 +442,7 @@ def handle_chat():
         return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
     except Exception as e: logger.error(f"Error in /api/chat: {e}", exc_info=True); return jsonify({"error": "Internal server error"}), 500
 
-# --- Auto-Stop Background Task (Unchanged) ---
+# --- Auto-Stop Background Task (Updated) ---
 def auto_stop_long_paused_recordings():
     global magic_audio_instance, recording_status, magic_audio_lock
     pause_timeout_seconds = 2 * 60 * 60; check_interval_seconds = 5 * 60
@@ -443,12 +457,19 @@ def auto_stop_long_paused_recordings():
                     try:
                         if magic_audio_instance: _stop_magic_audio_async(magic_audio_instance) # Use async helper
                         # Update status optimistically here as well
-                        if recording_status["start_time"]: elapsed = recording_status["last_pause_timestamp"] - recording_status["start_time"]
-                        else: elapsed = 0
-                        recording_status.update({"is_recording": False, "is_paused": False, "start_time": None, "pause_start_time": None, "last_pause_timestamp": None, "elapsed_time": int(elapsed)})
+                        # Use the stored elapsed_time which reflects the time *before* the pause started
+                        elapsed = recording_status["elapsed_time"]
+                        recording_status.update({
+                            "is_recording": False, "is_paused": False, "start_time": None,
+                            "pause_start_time": None, "last_pause_timestamp": None,
+                            "elapsed_time": int(elapsed) # Keep the elapsed time up to the pause point
+                        })
                         magic_audio_instance = None # Clear ref
                         logger.info("Recording auto-stopped.")
                     except Exception as e: logger.error(f"Error during auto-stop: {e}", exc_info=True)
+                else:
+                    # logger.debug(f"Auto-stop check: Recording not paused or pause duration ({pause_duration:.0f}s) < timeout ({pause_timeout_seconds}s).")
+                    pass # Reduce log noise
 
 # --- Main Execution (Unchanged) ---
 if __name__ == '__main__':

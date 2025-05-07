@@ -21747,3 +21747,585 @@ openai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded you
 2025-05-07 16:49:25,299 [INFO] root: Health check requested
 2025-05-07 16:49:26,844 [INFO] root: Health check requested
 2025-05-07 16:57:29,986 [INFO] root: Health check requested
+2025-05-07 17:00:27,334 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 17:00:27,338 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 17:00:27,338 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 17:00:27,343 [INFO] root: Anthropic client initialized.
+2025-05-07 17:00:27,345 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 17:00:27,345 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 17:00:44,009 [INFO] root: Health check requested
+2025-05-07 17:00:44,315 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-07 17:00:46,112 [INFO] root: Health check requested
+2025-05-07 17:00:46,125 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 17:00:46,306 [INFO] root: Recording started successfully.
+2025-05-07 17:00:46,363 [INFO] root: Health check requested
+2025-05-07 17:00:49,098 [INFO] root: Health check requested
+2025-05-07 17:00:51,150 [INFO] root: Health check requested
+2025-05-07 17:00:53,199 [INFO] root: Health check requested
+2025-05-07 17:00:55,242 [INFO] root: Health check requested
+2025-05-07 17:00:57,281 [INFO] root: Health check requested
+2025-05-07 17:00:59,312 [INFO] root: Health check requested
+2025-05-07 17:01:01,345 [INFO] root: Health check requested
+2025-05-07 17:01:02,429 [INFO] root: Health check requested
+2025-05-07 17:01:02,438 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 17:01:02,439 [INFO] root: Background stop thread started.
+2025-05-07 17:01:02,439 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 17:01:03,381 [INFO] root: Health check requested
+2025-05-07 17:01:05,419 [INFO] root: Health check requested
+2025-05-07 17:01:06,039 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 17:01:06,039 [INFO] root: Background stop thread finished.
+2025-05-07 17:01:07,453 [INFO] root: Health check requested
+2025-05-07 17:01:08,434 [INFO] root: Health check requested
+2025-05-07 17:01:09,480 [INFO] root: Health check requested
+2025-05-07 17:01:11,528 [INFO] root: Health check requested
+2025-05-07 17:01:13,586 [INFO] root: Health check requested
+2025-05-07 17:01:15,664 [INFO] root: Health check requested
+2025-05-07 17:06:03,102 [INFO] root: Health check requested
+2025-05-07 17:06:17,782 [INFO] root: Health check requested
+2025-05-07 17:06:19,862 [INFO] root: Health check requested
+2025-05-07 17:06:19,880 [INFO] root: Health check requested
+2025-05-07 17:06:19,913 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 17:06:20,551 [INFO] root: Recording started successfully.
+2025-05-07 17:06:23,595 [INFO] root: Health check requested
+2025-05-07 17:06:25,611 [INFO] root: Health check requested
+2025-05-07 17:06:27,626 [INFO] root: Health check requested
+2025-05-07 17:06:29,643 [INFO] root: Health check requested
+2025-05-07 17:06:31,665 [INFO] root: Health check requested
+2025-05-07 17:06:33,695 [INFO] root: Health check requested
+2025-05-07 17:06:35,708 [INFO] root: Health check requested
+2025-05-07 17:06:37,728 [INFO] root: Health check requested
+2025-05-07 17:06:39,768 [INFO] root: Health check requested
+2025-05-07 17:06:41,718 [INFO] root: Health check requested
+2025-05-07 17:06:41,720 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 17:06:41,720 [INFO] root: Background stop thread started.
+2025-05-07 17:06:41,720 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 17:06:41,779 [INFO] root: Health check requested
+2025-05-07 17:06:43,822 [INFO] root: Health check requested
+2025-05-07 17:06:44,939 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 17:06:44,940 [INFO] root: Background stop thread finished.
+2025-05-07 17:06:45,836 [INFO] root: Health check requested
+2025-05-07 17:06:47,851 [INFO] root: Health check requested
+2025-05-07 17:06:49,863 [INFO] root: Health check requested
+2025-05-07 17:06:51,879 [INFO] root: Health check requested
+2025-05-07 17:06:53,909 [INFO] root: Health check requested
+2025-05-07 17:06:55,929 [INFO] root: Health check requested
+2025-05-07 17:06:57,956 [INFO] root: Health check requested
+2025-05-07 17:06:59,966 [INFO] root: Health check requested
+2025-05-07 17:14:49,532 [INFO] root: Health check requested
+2025-05-07 17:15:23,955 [INFO] root: Health check requested
+2025-05-07 17:15:25,033 [INFO] root: Health check requested
+2025-05-07 17:15:25,039 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 17:15:25,306 [INFO] root: Recording started successfully.
+2025-05-07 17:15:25,987 [INFO] root: Health check requested
+2025-05-07 17:15:28,339 [INFO] root: Health check requested
+2025-05-07 17:15:30,381 [INFO] root: Health check requested
+2025-05-07 17:15:32,394 [INFO] root: Health check requested
+2025-05-07 17:15:34,407 [INFO] root: Health check requested
+2025-05-07 17:15:36,420 [INFO] root: Health check requested
+2025-05-07 17:15:38,433 [INFO] root: Health check requested
+2025-05-07 17:15:40,445 [INFO] root: Health check requested
+2025-05-07 17:15:42,454 [INFO] root: Health check requested
+2025-05-07 17:15:42,487 [INFO] root: Health check requested
+2025-05-07 17:15:42,488 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 17:15:42,489 [INFO] root: Background stop thread started.
+2025-05-07 17:15:42,489 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 17:15:44,472 [INFO] root: Health check requested
+2025-05-07 17:15:46,329 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 17:15:46,329 [INFO] root: Background stop thread finished.
+2025-05-07 17:15:46,497 [INFO] root: Health check requested
+2025-05-07 17:15:48,522 [INFO] root: Health check requested
+2025-05-07 17:15:50,542 [INFO] root: Health check requested
+2025-05-07 17:15:52,566 [INFO] root: Health check requested
+2025-05-07 17:15:54,609 [INFO] root: Health check requested
+2025-05-07 17:15:56,627 [INFO] root: Health check requested
+2025-05-07 19:04:45,053 [INFO] root: Health check requested
+2025-05-07 19:04:47,083 [INFO] root: Health check requested
+2025-05-07 19:04:47,299 [INFO] root: Health check requested
+2025-05-07 19:04:47,305 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:04:47,523 [INFO] root: Recording started successfully.
+2025-05-07 19:04:50,564 [INFO] root: Health check requested
+2025-05-07 19:04:52,581 [INFO] root: Health check requested
+2025-05-07 19:04:54,592 [INFO] root: Health check requested
+2025-05-07 19:04:56,604 [INFO] root: Health check requested
+2025-05-07 19:04:58,635 [INFO] root: Health check requested
+2025-05-07 19:05:00,656 [INFO] root: Health check requested
+2025-05-07 19:05:02,667 [INFO] root: Health check requested
+2025-05-07 19:05:03,315 [INFO] root: Health check requested
+2025-05-07 19:05:03,316 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:05:03,316 [INFO] root: Background stop thread started.
+2025-05-07 19:05:03,316 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:05:04,679 [INFO] root: Health check requested
+2025-05-07 19:05:06,690 [INFO] root: Health check requested
+2025-05-07 19:05:07,660 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:05:07,660 [INFO] root: Background stop thread finished.
+2025-05-07 19:05:08,699 [INFO] root: Health check requested
+2025-05-07 19:05:10,707 [INFO] root: Health check requested
+2025-05-07 19:05:12,715 [INFO] root: Health check requested
+2025-05-07 19:05:14,727 [INFO] root: Health check requested
+2025-05-07 19:06:03,732 [INFO] root: Health check requested
+2025-05-07 19:11:56,467 [INFO] root: Health check requested
+2025-05-07 19:12:13,489 [INFO] root: Health check requested
+2025-05-07 19:12:15,519 [INFO] root: Health check requested
+2025-05-07 19:12:15,938 [INFO] root: Health check requested
+2025-05-07 19:12:15,944 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:12:16,123 [INFO] root: Recording started successfully.
+2025-05-07 19:12:19,150 [INFO] root: Health check requested
+2025-05-07 19:12:21,167 [INFO] root: Health check requested
+2025-05-07 19:12:23,178 [INFO] root: Health check requested
+2025-05-07 19:12:25,193 [INFO] root: Health check requested
+2025-05-07 19:12:27,207 [INFO] root: Health check requested
+2025-05-07 19:12:29,219 [INFO] root: Health check requested
+2025-05-07 19:12:31,232 [INFO] root: Health check requested
+2025-05-07 19:12:33,247 [INFO] root: Health check requested
+2025-05-07 19:12:35,257 [INFO] root: Health check requested
+2025-05-07 19:12:36,075 [INFO] root: Health check requested
+2025-05-07 19:12:36,076 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:12:36,076 [INFO] root: Background stop thread started.
+2025-05-07 19:12:36,076 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:12:37,272 [INFO] root: Health check requested
+2025-05-07 19:12:39,294 [INFO] root: Health check requested
+2025-05-07 19:12:39,850 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:12:39,850 [INFO] root: Background stop thread finished.
+2025-05-07 19:12:41,321 [INFO] root: Health check requested
+2025-05-07 19:12:43,402 [INFO] root: Health check requested
+2025-05-07 19:12:45,455 [INFO] root: Health check requested
+2025-05-07 19:12:47,590 [INFO] root: Health check requested
+2025-05-07 19:12:49,651 [INFO] root: Health check requested
+2025-05-07 19:12:51,695 [INFO] root: Health check requested
+2025-05-07 19:15:53,647 [INFO] root: Health check requested
+2025-05-07 19:15:55,690 [INFO] root: Health check requested
+2025-05-07 19:16:17,602 [INFO] root: Health check requested
+2025-05-07 19:16:18,149 [INFO] root: Health check requested
+2025-05-07 19:16:18,157 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:16:18,337 [INFO] root: Recording started successfully.
+2025-05-07 19:16:19,636 [INFO] root: Health check requested
+2025-05-07 19:16:20,384 [INFO] root: Health check requested
+2025-05-07 19:16:21,707 [INFO] root: Health check requested
+2025-05-07 19:16:22,395 [INFO] root: Health check requested
+2025-05-07 19:16:23,730 [INFO] root: Health check requested
+2025-05-07 19:16:24,406 [INFO] root: Health check requested
+2025-05-07 19:16:26,422 [INFO] root: Health check requested
+2025-05-07 19:16:28,480 [INFO] root: Health check requested
+2025-05-07 19:16:30,514 [INFO] root: Health check requested
+2025-05-07 19:16:32,544 [INFO] root: Health check requested
+2025-05-07 19:16:34,565 [INFO] root: Health check requested
+2025-05-07 19:16:36,614 [INFO] root: Health check requested
+2025-05-07 19:16:38,664 [INFO] root: Health check requested
+2025-05-07 19:16:40,680 [INFO] root: Health check requested
+2025-05-07 19:16:42,723 [INFO] root: Health check requested
+2025-05-07 19:16:44,793 [INFO] root: Health check requested
+2025-05-07 19:16:46,834 [INFO] root: Health check requested
+2025-05-07 19:16:48,854 [INFO] root: Health check requested
+2025-05-07 19:16:50,880 [INFO] root: Health check requested
+2025-05-07 19:16:52,897 [INFO] root: Health check requested
+2025-05-07 19:16:54,917 [INFO] root: Health check requested
+2025-05-07 19:16:56,957 [INFO] root: Health check requested
+2025-05-07 19:16:58,977 [INFO] root: Health check requested
+2025-05-07 19:17:00,989 [INFO] root: Health check requested
+2025-05-07 19:17:01,003 [INFO] root: Health check requested
+2025-05-07 19:17:02,996 [INFO] root: Health check requested
+2025-05-07 19:17:03,025 [INFO] root: Health check requested
+2025-05-07 19:17:05,031 [INFO] root: Health check requested
+2025-05-07 19:17:05,070 [INFO] root: Health check requested
+2025-05-07 19:17:06,975 [INFO] root: Health check requested
+2025-05-07 19:17:07,076 [INFO] root: Health check requested
+2025-05-07 19:17:08,975 [INFO] root: Health check requested
+2025-05-07 19:17:09,087 [INFO] root: Health check requested
+2025-05-07 19:17:10,967 [INFO] root: Health check requested
+2025-05-07 19:17:11,095 [INFO] root: Health check requested
+2025-05-07 19:17:13,009 [INFO] root: Health check requested
+2025-05-07 19:17:13,105 [INFO] root: Health check requested
+2025-05-07 19:17:14,969 [INFO] root: Health check requested
+2025-05-07 19:17:15,463 [INFO] root: Health check requested
+2025-05-07 19:17:16,972 [INFO] root: Health check requested
+2025-05-07 19:17:17,629 [INFO] root: Health check requested
+2025-05-07 19:17:18,982 [INFO] root: Health check requested
+2025-05-07 19:17:19,638 [INFO] root: Health check requested
+2025-05-07 19:17:20,967 [INFO] root: Health check requested
+2025-05-07 19:17:21,647 [INFO] root: Health check requested
+2025-05-07 19:17:22,970 [INFO] root: Health check requested
+2025-05-07 19:17:23,678 [INFO] root: Health check requested
+2025-05-07 19:17:24,980 [INFO] root: Health check requested
+2025-05-07 19:17:25,688 [INFO] root: Health check requested
+2025-05-07 19:17:26,965 [INFO] root: Health check requested
+2025-05-07 19:17:27,697 [INFO] root: Health check requested
+2025-05-07 19:17:28,970 [INFO] root: Health check requested
+2025-05-07 19:17:29,705 [INFO] root: Health check requested
+2025-05-07 19:17:30,959 [INFO] root: Health check requested
+2025-05-07 19:17:31,716 [INFO] root: Health check requested
+2025-05-07 19:17:32,965 [INFO] root: Health check requested
+2025-05-07 19:17:33,736 [INFO] root: Health check requested
+2025-05-07 19:17:34,982 [INFO] root: Health check requested
+2025-05-07 19:17:35,775 [INFO] root: Health check requested
+2025-05-07 19:17:37,818 [INFO] root: Health check requested
+2025-05-07 19:17:37,964 [INFO] root: Health check requested
+2025-05-07 19:17:37,966 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:17:37,966 [INFO] root: Background stop thread started.
+2025-05-07 19:17:37,966 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:17:39,852 [INFO] root: Health check requested
+2025-05-07 19:17:40,039 [INFO] root: Health check requested
+2025-05-07 19:17:41,512 [INFO] root: Health check requested
+2025-05-07 19:17:41,529 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:17:41,636 [INFO] root: Recording started successfully.
+2025-05-07 19:17:41,946 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:17:41,946 [INFO] root: Background stop thread finished.
+2025-05-07 19:17:43,702 [INFO] root: Health check requested
+2025-05-07 19:17:45,754 [INFO] root: Health check requested
+2025-05-07 19:17:47,853 [INFO] root: Health check requested
+2025-05-07 19:17:49,882 [INFO] root: Health check requested
+2025-05-07 19:17:51,937 [INFO] root: Health check requested
+2025-05-07 19:17:53,964 [INFO] root: Health check requested
+2025-05-07 19:17:55,986 [INFO] root: Health check requested
+2025-05-07 19:17:58,007 [INFO] root: Health check requested
+2025-05-07 19:18:00,030 [INFO] root: Health check requested
+2025-05-07 19:18:02,056 [INFO] root: Health check requested
+2025-05-07 19:18:04,072 [INFO] root: Health check requested
+2025-05-07 19:18:06,082 [INFO] root: Health check requested
+2025-05-07 19:18:08,151 [INFO] root: Health check requested
+2025-05-07 19:18:10,168 [INFO] root: Health check requested
+2025-05-07 19:18:12,185 [INFO] root: Health check requested
+2025-05-07 19:18:14,208 [INFO] root: Health check requested
+2025-05-07 19:18:16,240 [INFO] root: Health check requested
+2025-05-07 19:18:18,355 [INFO] root: Health check requested
+2025-05-07 19:18:20,439 [INFO] root: Health check requested
+2025-05-07 19:18:22,501 [INFO] root: Health check requested
+2025-05-07 19:18:23,985 [INFO] root: Health check requested
+2025-05-07 19:18:24,517 [INFO] root: Health check requested
+2025-05-07 19:18:25,967 [INFO] root: Health check requested
+2025-05-07 19:18:26,530 [INFO] root: Health check requested
+2025-05-07 19:18:27,971 [INFO] root: Health check requested
+2025-05-07 19:18:28,539 [INFO] root: Health check requested
+2025-05-07 19:18:29,981 [INFO] root: Health check requested
+2025-05-07 19:18:30,549 [INFO] root: Health check requested
+2025-05-07 19:18:31,978 [INFO] root: Health check requested
+2025-05-07 19:18:32,559 [INFO] root: Health check requested
+2025-05-07 19:18:33,962 [INFO] root: Health check requested
+2025-05-07 19:18:34,568 [INFO] root: Health check requested
+2025-05-07 19:18:35,961 [INFO] root: Health check requested
+2025-05-07 19:18:36,575 [INFO] root: Health check requested
+2025-05-07 19:18:37,966 [INFO] root: Health check requested
+2025-05-07 19:18:38,596 [INFO] root: Health check requested
+2025-05-07 19:18:39,978 [INFO] root: Health check requested
+2025-05-07 19:18:40,602 [INFO] root: Health check requested
+2025-05-07 19:18:41,976 [INFO] root: Health check requested
+2025-05-07 19:18:42,612 [INFO] root: Health check requested
+2025-05-07 19:18:43,998 [INFO] root: Health check requested
+2025-05-07 19:18:44,619 [INFO] root: Health check requested
+2025-05-07 19:18:45,956 [INFO] root: Health check requested
+2025-05-07 19:18:46,628 [INFO] root: Health check requested
+2025-05-07 19:18:47,961 [INFO] root: Health check requested
+2025-05-07 19:18:48,635 [INFO] root: Health check requested
+2025-05-07 19:18:49,957 [INFO] root: Health check requested
+2025-05-07 19:18:50,644 [INFO] root: Health check requested
+2025-05-07 19:18:51,964 [INFO] root: Health check requested
+2025-05-07 19:18:52,651 [INFO] root: Health check requested
+2025-05-07 19:18:53,968 [INFO] root: Health check requested
+2025-05-07 19:18:54,660 [INFO] root: Health check requested
+2025-05-07 19:18:55,959 [INFO] root: Health check requested
+2025-05-07 19:18:56,673 [INFO] root: Health check requested
+2025-05-07 19:18:57,960 [INFO] root: Health check requested
+2025-05-07 19:18:58,681 [INFO] root: Health check requested
+2025-05-07 19:18:59,968 [INFO] root: Health check requested
+2025-05-07 19:19:00,693 [INFO] root: Health check requested
+2025-05-07 19:19:01,959 [INFO] root: Health check requested
+2025-05-07 19:19:02,711 [INFO] root: Health check requested
+2025-05-07 19:19:03,967 [INFO] root: Health check requested
+2025-05-07 19:19:04,717 [INFO] root: Health check requested
+2025-05-07 19:19:05,958 [INFO] root: Health check requested
+2025-05-07 19:19:06,724 [INFO] root: Health check requested
+2025-05-07 19:19:08,732 [INFO] root: Health check requested
+2025-05-07 19:20:05,017 [INFO] root: Health check requested
+2025-05-07 19:21:05,019 [INFO] root: Health check requested
+2025-05-07 19:22:05,440 [INFO] root: Health check requested
+2025-05-07 19:22:07,472 [INFO] root: Health check requested
+2025-05-07 19:22:14,347 [INFO] root: Health check requested
+2025-05-07 19:22:16,411 [INFO] root: Health check requested
+2025-05-07 19:22:19,556 [INFO] root: Health check requested
+2025-05-07 19:22:21,441 [INFO] root: Health check requested
+2025-05-07 19:22:23,503 [INFO] root: Health check requested
+2025-05-07 19:22:23,794 [INFO] root: Health check requested
+2025-05-07 19:22:23,797 [INFO] root: Pausing recording...
+2025-05-07 19:22:23,839 [INFO] root: Recording paused.
+2025-05-07 19:22:26,496 [INFO] root: Health check requested
+2025-05-07 19:22:28,509 [INFO] root: Health check requested
+2025-05-07 19:22:30,529 [INFO] root: Health check requested
+2025-05-07 19:22:31,996 [INFO] root: Health check requested
+2025-05-07 19:22:31,998 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:22:31,998 [INFO] root: Background stop thread started.
+2025-05-07 19:22:31,998 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:22:32,550 [INFO] root: Health check requested
+2025-05-07 19:22:34,195 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:22:34,195 [INFO] root: Background stop thread finished.
+2025-05-07 19:22:34,560 [INFO] root: Health check requested
+2025-05-07 19:22:36,573 [INFO] root: Health check requested
+2025-05-07 19:22:36,580 [INFO] root: Health check requested
+2025-05-07 19:22:37,969 [INFO] root: Health check requested
+2025-05-07 19:22:37,973 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:22:38,071 [INFO] root: Recording started successfully.
+2025-05-07 19:22:41,106 [INFO] root: Health check requested
+2025-05-07 19:22:43,121 [INFO] root: Health check requested
+2025-05-07 19:22:45,133 [INFO] root: Health check requested
+2025-05-07 19:22:47,146 [INFO] root: Health check requested
+2025-05-07 19:22:49,163 [INFO] root: Health check requested
+2025-05-07 19:22:51,176 [INFO] root: Health check requested
+2025-05-07 19:22:53,198 [INFO] root: Health check requested
+2025-05-07 19:22:55,211 [INFO] root: Health check requested
+2025-05-07 19:22:57,222 [INFO] root: Health check requested
+2025-05-07 19:22:58,433 [INFO] root: Health check requested
+2025-05-07 19:22:58,435 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:22:58,436 [INFO] root: Background stop thread started.
+2025-05-07 19:22:58,436 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:22:59,233 [INFO] root: Health check requested
+2025-05-07 19:23:01,241 [INFO] root: Health check requested
+2025-05-07 19:23:03,254 [INFO] root: Health check requested
+2025-05-07 19:23:03,507 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:23:03,508 [INFO] root: Background stop thread finished.
+2025-05-07 19:23:05,279 [INFO] root: Health check requested
+2025-05-07 19:23:05,285 [INFO] root: Health check requested
+2025-05-07 19:23:06,032 [INFO] root: Health check requested
+2025-05-07 19:23:06,034 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:23:06,123 [INFO] root: Recording started successfully.
+2025-05-07 19:23:07,289 [INFO] root: Health check requested
+2025-05-07 19:23:09,147 [INFO] root: Health check requested
+2025-05-07 19:23:09,299 [INFO] root: Health check requested
+2025-05-07 19:23:11,165 [INFO] root: Health check requested
+2025-05-07 19:23:11,308 [INFO] root: Health check requested
+2025-05-07 19:23:13,707 [INFO] root: Health check requested
+2025-05-07 19:23:16,739 [INFO] root: Health check requested
+2025-05-07 19:23:18,757 [INFO] root: Health check requested
+2025-05-07 19:23:20,768 [INFO] root: Health check requested
+2025-05-07 19:23:22,801 [INFO] root: Health check requested
+2025-05-07 19:23:24,819 [INFO] root: Health check requested
+2025-05-07 19:23:26,861 [INFO] root: Health check requested
+2025-05-07 19:23:28,894 [INFO] root: Health check requested
+2025-05-07 19:23:30,941 [INFO] root: Health check requested
+2025-05-07 19:23:33,005 [INFO] root: Health check requested
+2025-05-07 19:23:35,045 [INFO] root: Health check requested
+2025-05-07 19:23:37,073 [INFO] root: Health check requested
+2025-05-07 19:23:39,120 [INFO] root: Health check requested
+2025-05-07 19:23:41,168 [INFO] root: Health check requested
+2025-05-07 19:23:43,203 [INFO] root: Health check requested
+2025-05-07 19:23:45,235 [INFO] root: Health check requested
+2025-05-07 19:23:47,251 [INFO] root: Health check requested
+2025-05-07 19:23:49,262 [INFO] root: Health check requested
+2025-05-07 19:23:51,285 [INFO] root: Health check requested
+2025-05-07 19:23:53,317 [INFO] root: Health check requested
+2025-05-07 19:23:54,989 [INFO] root: Health check requested
+2025-05-07 19:23:55,326 [INFO] root: Health check requested
+2025-05-07 19:23:56,984 [INFO] root: Health check requested
+2025-05-07 19:23:57,333 [INFO] root: Health check requested
+2025-05-07 19:23:58,995 [INFO] root: Health check requested
+2025-05-07 19:23:59,341 [INFO] root: Health check requested
+2025-05-07 19:23:59,859 [INFO] root: Health check requested
+2025-05-07 19:23:59,860 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:23:59,860 [INFO] root: Background stop thread started.
+2025-05-07 19:23:59,860 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:24:00,963 [INFO] root: Health check requested
+2025-05-07 19:24:01,351 [INFO] root: Health check requested
+2025-05-07 19:24:02,998 [INFO] root: Health check requested
+2025-05-07 19:24:03,360 [INFO] root: Health check requested
+2025-05-07 19:24:05,030 [INFO] root: Health check requested
+2025-05-07 19:24:05,376 [INFO] root: Health check requested
+2025-05-07 19:24:06,971 [INFO] root: Health check requested
+2025-05-07 19:24:07,387 [INFO] root: Health check requested
+2025-05-07 19:24:08,978 [INFO] root: Health check requested
+2025-05-07 19:24:09,404 [INFO] root: Health check requested
+2025-05-07 19:24:10,990 [INFO] root: Health check requested
+2025-05-07 19:24:11,413 [INFO] root: Health check requested
+2025-05-07 19:24:12,055 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:24:12,055 [INFO] root: Background stop thread finished.
+2025-05-07 19:24:12,991 [INFO] root: Health check requested
+2025-05-07 19:24:13,431 [INFO] root: Health check requested
+2025-05-07 19:24:14,975 [INFO] root: Health check requested
+2025-05-07 19:24:15,441 [INFO] root: Health check requested
+2025-05-07 19:24:16,971 [INFO] root: Health check requested
+2025-05-07 19:24:17,462 [INFO] root: Health check requested
+2025-05-07 19:24:18,861 [INFO] root: Health check requested
+2025-05-07 19:24:19,480 [INFO] root: Health check requested
+2025-05-07 19:26:58,879 [INFO] root: Health check requested
+2025-05-07 19:27:00,928 [INFO] root: Health check requested
+2025-05-07 19:27:07,061 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 19:27:07,067 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 19:27:07,067 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 19:27:07,072 [INFO] root: Anthropic client initialized.
+2025-05-07 19:27:07,074 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 19:27:07,074 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 19:27:21,740 [INFO] root: Health check requested
+2025-05-07 19:27:21,988 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-07 19:27:24,013 [INFO] root: Health check requested
+2025-05-07 19:27:24,066 [INFO] root: Health check requested
+2025-05-07 19:27:24,068 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:27:24,217 [INFO] root: Recording started successfully.
+2025-05-07 19:27:27,032 [INFO] root: Health check requested
+2025-05-07 19:27:29,054 [INFO] root: Health check requested
+2025-05-07 19:27:31,081 [INFO] root: Health check requested
+2025-05-07 19:27:33,098 [INFO] root: Health check requested
+2025-05-07 19:27:35,113 [INFO] root: Health check requested
+2025-05-07 19:27:37,125 [INFO] root: Health check requested
+2025-05-07 19:27:39,137 [INFO] root: Health check requested
+2025-05-07 19:27:40,977 [INFO] root: Health check requested
+2025-05-07 19:27:40,979 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:27:40,979 [INFO] root: Background stop thread started.
+2025-05-07 19:27:40,979 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:27:41,147 [INFO] root: Health check requested
+2025-05-07 19:27:43,159 [INFO] root: Health check requested
+2025-05-07 19:27:44,512 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:27:44,513 [INFO] root: Background stop thread finished.
+2025-05-07 19:27:45,172 [INFO] root: Health check requested
+2025-05-07 19:27:47,187 [INFO] root: Health check requested
+2025-05-07 19:27:49,229 [INFO] root: Health check requested
+2025-05-07 19:27:51,245 [INFO] root: Health check requested
+2025-05-07 19:27:53,260 [INFO] root: Health check requested
+2025-05-07 19:31:15,712 [INFO] root: Health check requested
+2025-05-07 19:31:27,701 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 19:31:27,708 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 19:31:27,708 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 19:31:27,714 [INFO] root: Anthropic client initialized.
+2025-05-07 19:31:27,716 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 19:31:27,716 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 19:31:43,506 [INFO] root: Health check requested
+2025-05-07 19:31:43,699 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-07 19:31:45,251 [INFO] root: Health check requested
+2025-05-07 19:31:45,257 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:31:45,381 [INFO] root: Recording started successfully.
+2025-05-07 19:31:45,716 [INFO] root: Health check requested
+2025-05-07 19:31:48,212 [INFO] root: Health check requested
+2025-05-07 19:31:50,247 [INFO] root: Health check requested
+2025-05-07 19:31:52,269 [INFO] root: Health check requested
+2025-05-07 19:31:54,288 [INFO] root: Health check requested
+2025-05-07 19:31:56,318 [INFO] root: Health check requested
+2025-05-07 19:31:58,331 [INFO] root: Health check requested
+2025-05-07 19:32:00,346 [INFO] root: Health check requested
+2025-05-07 19:32:02,362 [INFO] root: Health check requested
+2025-05-07 19:32:04,401 [INFO] root: Health check requested
+2025-05-07 19:32:06,000 [INFO] root: Health check requested
+2025-05-07 19:32:06,003 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:32:06,003 [INFO] root: Background stop thread started.
+2025-05-07 19:32:06,003 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:32:06,411 [INFO] root: Health check requested
+2025-05-07 19:32:08,424 [INFO] root: Health check requested
+2025-05-07 19:32:10,146 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:32:10,146 [INFO] root: Background stop thread finished.
+2025-05-07 19:32:10,449 [INFO] root: Health check requested
+2025-05-07 19:32:12,463 [INFO] root: Health check requested
+2025-05-07 19:32:14,489 [INFO] root: Health check requested
+2025-05-07 19:32:15,940 [INFO] root: Health check requested
+2025-05-07 19:32:16,508 [INFO] root: Health check requested
+2025-05-07 19:32:17,608 [INFO] root: Health check requested
+2025-05-07 19:32:17,610 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 19:32:17,780 [INFO] root: Recording started successfully.
+2025-05-07 19:32:18,523 [INFO] root: Health check requested
+2025-05-07 19:32:19,807 [INFO] root: Health check requested
+2025-05-07 19:32:20,564 [INFO] root: Health check requested
+2025-05-07 19:32:21,824 [INFO] root: Health check requested
+2025-05-07 19:32:22,579 [INFO] root: Health check requested
+2025-05-07 19:32:23,835 [INFO] root: Health check requested
+2025-05-07 19:32:24,590 [INFO] root: Health check requested
+2025-05-07 19:32:25,844 [INFO] root: Health check requested
+2025-05-07 19:32:27,861 [INFO] root: Health check requested
+2025-05-07 19:32:29,872 [INFO] root: Health check requested
+2025-05-07 19:32:31,884 [INFO] root: Health check requested
+2025-05-07 19:32:31,976 [INFO] root: Health check requested
+2025-05-07 19:32:31,978 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 19:32:31,978 [INFO] root: Background stop thread started.
+2025-05-07 19:32:31,978 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 19:32:33,895 [INFO] root: Health check requested
+2025-05-07 19:32:35,907 [INFO] root: Health check requested
+2025-05-07 19:32:36,149 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 19:32:36,149 [INFO] root: Background stop thread finished.
+2025-05-07 19:32:37,915 [INFO] root: Health check requested
+2025-05-07 19:32:39,925 [INFO] root: Health check requested
+2025-05-07 19:32:41,947 [INFO] root: Health check requested
+2025-05-07 19:32:43,967 [INFO] root: Health check requested
+2025-05-07 20:08:13,890 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 20:08:13,896 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 20:08:13,896 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 20:08:13,901 [INFO] root: Anthropic client initialized.
+2025-05-07 20:08:13,903 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 20:08:13,903 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 20:08:32,890 [INFO] root: Health check requested
+2025-05-07 20:08:33,327 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-07 20:08:33,342 [INFO] root: Received request /api/chat method: POST
+2025-05-07 20:08:33,342 [INFO] root: Chat request for Agent: river, Event: 0000
+2025-05-07 20:08:33,563 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-07 20:08:33,563 [INFO] utils.s3_utils: Final system prompt length: 18866
+2025-05-07 20:08:33,672 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-07 20:08:33,672 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-07 20:08:33,672 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-07 20:08:33,672 [WARNING] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'. Confirm logic.
+2025-05-07 20:08:33,756 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-07 20:08:33,756 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-07 20:08:33,780 [WARNING] utils.s3_utils: No documentation files found in 'organizations/river/agents/river/docs/'
+2025-05-07 20:08:33,781 [INFO] root: New TranscriptState for river/0000
+2025-05-07 20:08:33,838 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250507-T193217_uID-0112_oID-river_aID-river_eID-0000_sID-20250507_193217.txt. Resetting read position to 0.
+2025-05-07 20:08:33,862 [INFO] utils.transcript_utils: S3 get_object successful. Read 164 bytes.
+2025-05-07 20:08:33,863 [INFO] utils.transcript_utils: Decoded 164 characters.
+2025-05-07 20:08:33,863 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250507-T193217_uID-0112_oID-river_aID-river_eID-0000_sID-20250507_193217.txt: Position set to 164 (current S3 size).
+2025-05-07 20:08:45,340 [INFO] root: Health check requested
+2025-05-07 20:08:47,002 [INFO] root: Health check requested
+2025-05-07 20:08:47,025 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-07 20:08:47,174 [INFO] root: Recording started successfully.
+2025-05-07 20:08:50,011 [INFO] root: Health check requested
+2025-05-07 20:08:52,035 [INFO] root: Health check requested
+2025-05-07 20:08:54,074 [INFO] root: Health check requested
+2025-05-07 20:08:56,127 [INFO] root: Health check requested
+2025-05-07 20:08:58,153 [INFO] root: Health check requested
+2025-05-07 20:09:00,212 [INFO] root: Health check requested
+2025-05-07 20:09:01,661 [INFO] root: Health check requested
+2025-05-07 20:09:01,677 [INFO] root: Pausing recording...
+2025-05-07 20:09:01,736 [INFO] root: Recording paused.
+2025-05-07 20:09:02,774 [INFO] root: Health check requested
+2025-05-07 20:09:05,834 [INFO] root: Health check requested
+2025-05-07 20:09:07,858 [INFO] root: Health check requested
+2025-05-07 20:09:09,065 [INFO] root: Health check requested
+2025-05-07 20:09:09,070 [INFO] root: Resuming recording...
+2025-05-07 20:09:09,170 [INFO] root: Recording resumed.
+2025-05-07 20:09:09,883 [INFO] root: Health check requested
+2025-05-07 20:09:11,919 [INFO] root: Health check requested
+2025-05-07 20:09:12,021 [INFO] root: Health check requested
+2025-05-07 20:09:14,102 [INFO] root: Health check requested
+2025-05-07 20:09:16,170 [INFO] root: Health check requested
+2025-05-07 20:09:18,226 [INFO] root: Health check requested
+2025-05-07 20:09:20,269 [INFO] root: Health check requested
+2025-05-07 20:09:22,324 [INFO] root: Health check requested
+2025-05-07 20:09:24,361 [INFO] root: Health check requested
+2025-05-07 20:09:26,406 [INFO] root: Health check requested
+2025-05-07 20:09:28,466 [INFO] root: Health check requested
+2025-05-07 20:09:30,517 [INFO] root: Health check requested
+2025-05-07 20:09:32,549 [INFO] root: Health check requested
+2025-05-07 20:09:34,598 [INFO] root: Health check requested
+2025-05-07 20:09:36,644 [INFO] root: Health check requested
+2025-05-07 20:09:38,694 [INFO] root: Health check requested
+2025-05-07 20:09:40,774 [INFO] root: Health check requested
+2025-05-07 20:09:42,838 [INFO] root: Health check requested
+2025-05-07 20:09:44,897 [INFO] root: Health check requested
+2025-05-07 20:09:46,954 [INFO] root: Health check requested
+2025-05-07 20:09:48,995 [INFO] root: Health check requested
+2025-05-07 20:09:51,028 [INFO] root: Health check requested
+2025-05-07 20:09:53,065 [INFO] root: Health check requested
+2025-05-07 20:09:54,979 [INFO] root: Health check requested
+2025-05-07 20:09:55,100 [INFO] root: Health check requested
+2025-05-07 20:09:56,976 [INFO] root: Health check requested
+2025-05-07 20:09:57,126 [INFO] root: Health check requested
+2025-05-07 20:09:59,000 [INFO] root: Health check requested
+2025-05-07 20:09:59,156 [INFO] root: Health check requested
+2025-05-07 20:10:00,992 [INFO] root: Health check requested
+2025-05-07 20:10:01,173 [INFO] root: Health check requested
+2025-05-07 20:10:03,005 [INFO] root: Health check requested
+2025-05-07 20:10:03,200 [INFO] root: Health check requested
+2025-05-07 20:10:04,589 [INFO] root: Health check requested
+2025-05-07 20:10:04,600 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-07 20:10:04,601 [INFO] root: Background stop thread started.
+2025-05-07 20:10:04,601 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-07 20:10:04,992 [INFO] root: Health check requested
+2025-05-07 20:10:05,230 [INFO] root: Health check requested
+2025-05-07 20:10:07,002 [INFO] root: Health check requested
+2025-05-07 20:10:07,252 [INFO] root: Health check requested
+2025-05-07 20:10:08,986 [INFO] root: Health check requested
+2025-05-07 20:10:09,265 [INFO] root: Health check requested
+2025-05-07 20:10:10,984 [INFO] root: Health check requested
+2025-05-07 20:10:11,303 [INFO] root: Health check requested
+2025-05-07 20:10:12,933 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-07 20:10:12,934 [INFO] root: Background stop thread finished.
+2025-05-07 20:10:12,975 [INFO] root: Health check requested
+2025-05-07 20:10:13,329 [INFO] root: Health check requested
