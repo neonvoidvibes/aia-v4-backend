@@ -9,6 +9,7 @@ import json
 from datetime import datetime, timezone, timedelta # Added timedelta
 import urllib.parse # For decoding filenames in IDs
 from functools import wraps # For decorator
+from typing import Optional, List, Dict, Any, Tuple # Added Tuple
 
 # Supabase Imports
 from supabase import create_client, Client
@@ -20,7 +21,8 @@ from utils.retrieval_handler import RetrievalHandler
 from utils.transcript_utils import TranscriptState, read_new_transcript_content, read_all_transcripts_in_folder, get_latest_transcript_file
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
-    get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client
+    get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
+    list_agent_names_from_s3 # Import the new function
 )
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
@@ -142,8 +144,8 @@ def verify_user(token: Optional[str]) -> Optional[Dict[str, Any]]:
         logger.error(f"Unexpected error during token verification: {e}", exc_info=True)
         return None
 
-def verify_user_agent_access(token: Optional[str], agent_id: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[Response]]:
-    """Verifies JWT, checks user access to the agent, returns (user, error_response)."""
+def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[Response]]:
+    """Verifies JWT, checks user access to the agent by name, returns (user, error_response)."""
     if not supabase:
         logger.error("Auth check failed: Supabase client not initialized.")
         return None, jsonify({"error": "Auth service unavailable"}), 503
@@ -152,37 +154,46 @@ def verify_user_agent_access(token: Optional[str], agent_id: Optional[str]) -> T
     if not user:
         return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
 
-    if not agent_id:
-        logger.warning(f"Authorization check skipped for user {user.id}: No agent_id provided.")
-        # If agent_id is optional for some routes, return user directly
-        # If agent_id is mandatory, return an error
-        return user, None # Or return error if agent_id is always required
-        # return None, jsonify({"error": "Forbidden: Agent ID required"}), 403
+    if not agent_name:
+        logger.warning(f"Authorization check skipped for user {user.id}: No agent_name provided.")
+        return user, None # Assume agent check is optional if not provided
 
     try:
-        # Check user access in the database
-        res = supabase.table("user_agent_access") \
+        # 1. Find the agent_id from the agent_name
+        agent_res = supabase.table("agents").select("id").eq("name", agent_name).limit(1).execute()
+        if hasattr(agent_res, 'error') and agent_res.error:
+            logger.error(f"Database error finding agent_id for name '{agent_name}': {agent_res.error}")
+            return None, jsonify({"error": "Database error checking agent"}), 500
+        if not agent_res.data:
+            logger.warning(f"Authorization check failed: Agent with name '{agent_name}' not found in DB.")
+            # Treat as forbidden - agent doesn't exist for permission check
+            return None, jsonify({"error": "Forbidden: Agent not found"}), 403
+        agent_id = agent_res.data[0]['id']
+        logger.debug(f"Found agent_id '{agent_id}' for name '{agent_name}'.")
+
+        # 2. Check user access using user_id and agent_id
+        access_res = supabase.table("user_agent_access") \
             .select("agent_id") \
             .eq("user_id", user.id) \
             .eq("agent_id", agent_id) \
+            .limit(1) \
             .execute()
 
-        # Log the database query result for debugging
-        logger.debug(f"DB Check for user {user.id} accessing agent {agent_id}: {res.data}")
+        logger.debug(f"DB Check for user {user.id} accessing agent {agent_name} (ID: {agent_id}): {access_res.data}")
 
-        if hasattr(res, 'error') and res.error:
-            logger.error(f"Database error checking access for user {user.id} / agent {agent_id}: {res.error}")
+        if hasattr(access_res, 'error') and access_res.error:
+            logger.error(f"Database error checking access for user {user.id} / agent {agent_name}: {access_res.error}")
             return None, jsonify({"error": "Database error checking permissions"}), 500
 
-        if not res.data:
-            logger.warning(f"Access Denied: User {user.id} does not have access to agent {agent_id}.")
+        if not access_res.data:
+            logger.warning(f"Access Denied: User {user.id} does not have access to agent {agent_name} (ID: {agent_id}).")
             return None, jsonify({"error": "Forbidden: Access denied to this agent"}), 403
 
-        logger.info(f"Access Granted: User {user.id} authorized for agent {agent_id}.")
+        logger.info(f"Access Granted: User {user.id} authorized for agent {agent_name} (ID: {agent_id}).")
         return user, None # User is authenticated and authorized
 
     except Exception as e:
-        logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
         return None, jsonify({"error": "Internal server error during authorization"}), 500
 
 # Decorator for simplified route protection
@@ -195,16 +206,17 @@ def supabase_auth_required(agent_required: bool = True):
             if auth_header and auth_header.startswith("Bearer "):
                 token = auth_header.split(" ", 1)[1]
 
-            agent_id = None
+            agent_name = None # Use agent name now
             if agent_required:
-                # Attempt to get agent_id from request JSON body first
+                # Attempt to get agent name from request JSON body first
                 if request.is_json and request.json and 'agent' in request.json:
-                    agent_id = request.json.get('agent')
+                    agent_name = request.json.get('agent')
                 # Or from Flask route parameters if not in body (adapt as needed)
-                # Example: if agent_id is part of the URL like /api/agent/<agent_id>
-                # agent_id = kwargs.get('agent_id') # This depends on your route definition
+                # Example: if agent_name is part of the URL like /api/agent/<agent_name>
+                # agent_name = kwargs.get('agent_name') # This depends on your route definition
 
-            user, error_response = verify_user_agent_access(token, agent_id if agent_required else None)
+            # Pass agent_name to the verification function
+            user, error_response = verify_user_agent_access(token, agent_name if agent_required else None)
 
             if error_response:
                 # Return the error response directly from the helper
@@ -273,8 +285,9 @@ def start_recording_route(user): # User object passed by decorator
         if recording_status["is_recording"]:
             return jsonify({"status": "error", "message": "Already recording", "recording_status": _get_current_recording_status_snapshot()}), 400
         data = request.json; agent = data.get('agent'); event = data.get('event'); language = data.get('language')
-        if not agent or not event:
-            return jsonify({"status": "error", "message": "Missing agent or event", "recording_status": _get_current_recording_status_snapshot()}), 400
+        # Agent already verified by decorator, no need to check existence here
+        if not event: # Check event explicitly
+            return jsonify({"status": "error", "message": "Missing event", "recording_status": _get_current_recording_status_snapshot()}), 400
         logger.info(f"Starting recording for Agent: {agent}, Event: {event}, Lang: {language}")
         try:
             if magic_audio_instance:
@@ -356,7 +369,7 @@ def stop_recording_route(user): # User object passed by decorator
         # Return the status reflecting the *optimistic* stopped state
         final_status = _get_current_recording_status_snapshot()
         final_status["elapsed_time"] = 0 # Explicitly set 0 for UI stop
-        return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
+        return jsonify({"status": "success", "message": "Stop initiated", "recording_status": final_status})
 
 @app.route('/api/recording/pause', methods=['POST'])
 @supabase_auth_required(agent_required=False) # Just need authentication
@@ -609,10 +622,75 @@ def auto_stop_long_paused_recordings():
                     # logger.debug(f"Auto-stop check: Recording not paused or pause duration ({pause_duration:.0f}s) < timeout ({pause_timeout_seconds}s).")
                     pass # Reduce log noise
 
-# --- Main Execution (Unchanged) ---
+# --- Agent Sync Function ---
+def sync_agents_from_s3_to_supabase():
+    """Fetches agent names from S3 and inserts missing ones into Supabase 'agents' table."""
+    if not supabase:
+        logger.warning("Agent Sync: Supabase client not initialized. Skipping.")
+        return
+
+    logger.info("Agent Sync: Starting synchronization from S3 to Supabase...")
+
+    # 1. Get agents from S3
+    s3_agent_names = list_agent_names_from_s3()
+    if s3_agent_names is None:
+        logger.error("Agent Sync: Failed to list agent names from S3. Aborting.")
+        return
+    if not s3_agent_names:
+        logger.info("Agent Sync: No agent directories found in S3.")
+        # Decide if we should proceed or stop if S3 is empty. Let's proceed for now.
+        # return
+
+    # 2. Get existing agents from Supabase
+    try:
+        response = supabase.table("agents").select("name").execute()
+        if hasattr(response, 'error') and response.error:
+            logger.error(f"Agent Sync: Error querying agents from Supabase: {response.error}")
+            return
+        db_agent_names = {agent['name'] for agent in response.data}
+        logger.info(f"Agent Sync: Found {len(db_agent_names)} agents in Supabase.")
+    except Exception as e:
+        logger.error(f"Agent Sync: Unexpected error querying Supabase agents: {e}", exc_info=True)
+        return
+
+    # 3. Find missing agents
+    missing_agents = [name for name in s3_agent_names if name not in db_agent_names]
+
+    if not missing_agents:
+        logger.info("Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.")
+        return
+
+    logger.info(f"Agent Sync: Found {len(missing_agents)} agents in S3 to add to Supabase: {missing_agents}")
+
+    # 4. Prepare data for insertion
+    agents_to_insert = [{'name': name, 'description': f'Agent discovered from S3 path: {name}'} for name in missing_agents]
+
+    # 5. Insert missing agents
+    try:
+        insert_response = supabase.table("agents").insert(agents_to_insert).execute()
+        if hasattr(insert_response, 'error') and insert_response.error:
+            logger.error(f"Agent Sync: Error inserting agents into Supabase: {insert_response.error}")
+        elif insert_response.data:
+            logger.info(f"Agent Sync: Successfully inserted {len(insert_response.data)} new agents into Supabase.")
+        else:
+             logger.warning(f"Agent Sync: Insert call succeeded but reported 0 rows inserted. Check response: {insert_response}")
+
+    except Exception as e:
+        logger.error(f"Agent Sync: Unexpected error inserting agents: {e}", exc_info=True)
+
+    logger.info("Agent Sync: Synchronization finished.")
+
+
+# --- Main Execution ---
 if __name__ == '__main__':
+    # Perform Agent Sync *after* Supabase client init
+    if supabase:
+        sync_agents_from_s3_to_supabase()
+    else:
+        logger.warning("Skipping agent sync because Supabase client failed to initialize.")
+
     auto_stop_thread = threading.Thread(target=auto_stop_long_paused_recordings, daemon=True); auto_stop_thread.start()
     port = int(os.getenv('PORT', 5001)); debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
-    use_reloader = False if debug_mode else False
+    use_reloader = False # Disable reloader if debug is on, as sync should run once
     app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=use_reloader)

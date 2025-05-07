@@ -86,10 +86,10 @@ def find_file_any_extension(base_pattern: str, description: str) -> Optional[Tup
             if 'Contents' in page:
                 for obj in page['Contents']:
                     key = obj['Key']
-                    relative_key = key[len(prefix):]
-                    if '/' in relative_key: continue # Skip subdirs
+                    # Ensure we only match files starting exactly with the base_name at the current level
+                    filename_part = key[len(prefix):] # Get path relative to prefix
+                    if '/' in filename_part: continue # Skip files in subdirectories relative to prefix
 
-                    filename_part = os.path.basename(key)
                     name_only, ext = os.path.splitext(filename_part)
 
                     if name_only == base_name:
@@ -170,8 +170,9 @@ def get_latest_context(agent_name: str, event_id: Optional[str] = None) -> Optio
     """Get and combine organization and event contexts from S3"""
     logger.debug(f"Getting context (agent: {agent_name}, event: {event_id})")
     org_context = ""
-    org_pattern = f'organizations/river/_config/context_oID-{agent_name}'
-    logger.warning(f"Attempting org context load using pattern: '{org_pattern}'. Confirm logic.")
+    # Corrected pattern assumption: organization context is likely common, not agent-specific
+    org_pattern = f'organizations/river/_config/context_oID-river' # Assume a common org ID or pattern
+    logger.info(f"Attempting org context load using pattern: '{org_pattern}'.")
     org_result = find_file_any_extension(org_pattern, "organization context")
     if org_result: org_context = org_result[1]; logger.info("Loaded organization context.")
     else: logger.warning(f"No organization context found using pattern '{org_pattern}'.")
@@ -204,12 +205,16 @@ def get_agent_docs(agent_name: str) -> Optional[str]:
              if 'Contents' in page:
                   for obj in page['Contents']:
                       key = obj['Key']
-                      if key == prefix or key.endswith('/'): continue
+                      if key == prefix or key.endswith('/'): continue # Skip folder itself
+                      # Check if it's directly under the docs folder
+                      relative_path = key[len(prefix):]
+                      if '/' in relative_path: continue # Skip files in subdirectories
+
                       filename = os.path.basename(key)
                       content = read_file_content(key, f'agent doc ({filename})')
                       if content: docs.append(f"--- START Doc: {filename} ---\n{content}\n--- END Doc: {filename} ---")
 
-        if not docs: logger.warning(f"No documentation files found in '{prefix}'"); return None
+        if not docs: logger.warning(f"No documentation files found directly in '{prefix}'"); return None
         logger.info(f"Loaded {len(docs)} documentation files for agent '{agent_name}'.")
         return "\n\n".join(docs)
     except Exception as e: logger.error(f"Error getting agent docs for '{agent_name}': {e}", exc_info=True); return None
@@ -269,11 +274,12 @@ def parse_text_chat(chat_content_str: str) -> List[Dict[str, str]]:
     for line in chat_content_str.splitlines():
         line_strip = line.strip(); role_found = None; content_start = 0
         if line_strip.startswith('**User:**'): role_found = 'user'; content_start = len('**User:**')
-        elif line_strip.startswith('**Agent:**'): role_found = 'assistant'; content_start = len('**Agent:**')
+        elif line_strip.startswith('**Agent:**') or line_strip.startswith('**Assistant:**'): # Allow Assistant too
+            role_found = 'assistant'; content_start = len('**Agent:**') if line_strip.startswith('**Agent:**') else len('**Assistant:**')
         if role_found:
             if current_role: messages.append({'role': current_role, 'content': '\n'.join(current_content).strip()})
             current_role = role_found; current_content = [line_strip[content_start:].strip()]
-        elif current_role: current_content.append(line)
+        elif current_role: current_content.append(line) # Append full line to preserve formatting
     if current_role: messages.append({'role': current_role, 'content': '\n'.join(current_content).strip()})
     return [msg for msg in messages if msg.get('content')]
 
@@ -285,7 +291,7 @@ def load_existing_chats_from_s3(agent_name: str, memory_agents: Optional[List[st
     chat_histories = []; agents_to_load = memory_agents or [agent_name]
     logger.info(f"Loading saved chat history for agents: {agents_to_load}")
     for agent in agents_to_load:
-        prefix = f'organizations/river/agents/{agent}/events/0000/chats/saved/'
+        prefix = f'organizations/river/agents/{agent}/events/0000/chats/saved/' # Assuming memory uses default event '0000'
         logger.debug(f"Checking for saved chats in: {prefix}")
         try:
             paginator = s3.get_paginator('list_objects_v2'); chat_files = []
@@ -294,13 +300,13 @@ def load_existing_chats_from_s3(agent_name: str, memory_agents: Optional[List[st
             if not chat_files: logger.debug(f"No saved chats for {agent}."); continue
             chat_files.sort(key=lambda obj: obj['LastModified'], reverse=True)
             logger.info(f"Found {len(chat_files)} saved chats for {agent}.")
+            # Limit how many files we load for memory? For now, load all.
             for chat_obj in chat_files:
                 file_key = chat_obj['Key']; logger.debug(f"Reading saved chat: {file_key}")
                 try:
                     content_str = read_file_content(file_key, f"saved chat {file_key}")
                     if not content_str: logger.warning(f"Empty chat file: {file_key}"); continue
                     messages = parse_text_chat(content_str) # Assume text for now
-                    # Add JSON parsing logic if needed based on file extension
                     if messages: chat_histories.append({'agent': agent, 'file': file_key, 'messages': messages})
                     else: logger.warning(f"No messages extracted from {file_key}")
                 except Exception as read_err: logger.error(f"Error reading/parsing chat {file_key}: {read_err}", exc_info=True)
@@ -315,3 +321,40 @@ def format_chat_history(messages: List[Dict[str, Any]]) -> str:
         role = msg.get("role", "unknown").capitalize(); content = msg.get("content", "")
         if content: chat_content += f"**{role}:**\n{content}\n\n"
     return chat_content.strip()
+
+# --- New Function for Agent Sync ---
+def list_agent_names_from_s3() -> Optional[List[str]]:
+    """Lists potential agent names by looking at directories under organizations/river/agents/."""
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("S3 client or bucket not available for listing agents.")
+        return None
+
+    base_prefix = 'organizations/river/agents/'
+    agent_names = set()
+
+    try:
+        paginator = s3.get_paginator('list_objects_v2')
+        # Use Delimiter='/' to find common prefixes (directories) directly under base_prefix
+        result = paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_prefix, Delimiter='/')
+
+        for page in result:
+            # CommonPrefixes contains the directory names
+            if 'CommonPrefixes' in page:
+                for prefix_data in page['CommonPrefixes']:
+                    # Extract the directory name (agent name) from the prefix
+                    # e.g., 'organizations/river/agents/agent-alpha/' -> 'agent-alpha'
+                    full_prefix = prefix_data.get('Prefix', '')
+                    if full_prefix.startswith(base_prefix) and full_prefix.endswith('/'):
+                        agent_name = full_prefix[len(base_prefix):].strip('/')
+                        if agent_name: # Ensure it's not empty
+                            agent_names.add(agent_name)
+
+        found_agents = list(agent_names)
+        logger.info(f"Found {len(found_agents)} potential agent directories in S3: {found_agents}")
+        return found_agents
+
+    except Exception as e:
+        logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True)
+        return None
