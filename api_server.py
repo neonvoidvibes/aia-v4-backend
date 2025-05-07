@@ -8,6 +8,11 @@ import time
 import json
 from datetime import datetime, timezone, timedelta # Added timedelta
 import urllib.parse # For decoding filenames in IDs
+from functools import wraps # For decorator
+
+# Supabase Imports
+from supabase import create_client, Client
+from gotrue.errors import AuthApiError
 
 # Import necessary modules from our project
 from magic_audio import MagicAudio
@@ -82,6 +87,19 @@ anthropic_client: Anthropic | None = None
 try: init_pinecone(); logger.info("Pinecone initialized (or skipped).")
 except Exception as e: logger.warning(f"Pinecone initialization failed: {e}")
 
+# Initialize Supabase Client
+supabase: Optional[Client] = None
+try:
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        logger.warning("Supabase environment variables (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) not found. Supabase features disabled.")
+    else:
+        supabase = create_client(supabase_url, supabase_key)
+        logger.info("Supabase client initialized successfully.")
+except Exception as e:
+    logger.error(f"Failed to initialize Supabase client: {e}", exc_info=True)
+
 transcript_state_cache = {}
 transcript_state_lock = threading.Lock()
 
@@ -94,6 +112,115 @@ except Exception as e: logger.critical(f"Failed Anthropic client init: {e}", exc
 
 def log_retry_error(retry_state): logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
 retry_strategy = retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry_error_callback=log_retry_error, retry=(retry_if_exception_type(APIStatusError)))
+
+# --- Supabase Auth Helper Functions ---
+
+def verify_user(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Verifies the JWT and returns the user object or None."""
+    if not supabase:
+        logger.error("Auth check failed: Supabase client not initialized.")
+        return None # Or raise an internal server error
+
+    if not token:
+        logger.warning("Auth check failed: No token provided.")
+        return None
+
+    try:
+        # Verify the token and get user data
+        user_resp = supabase.auth.get_user(token)
+        # Check if user data exists and is valid
+        if user_resp and hasattr(user_resp, 'user') and user_resp.user:
+            logger.debug(f"Token verified for user ID: {user_resp.user.id}")
+            return user_resp.user
+        else:
+            logger.warning("Auth check failed: Invalid token or user not found.")
+            return None
+    except AuthApiError as e:
+        logger.warning(f"Auth API Error during token verification: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error during token verification: {e}", exc_info=True)
+        return None
+
+def verify_user_agent_access(token: Optional[str], agent_id: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[Response]]:
+    """Verifies JWT, checks user access to the agent, returns (user, error_response)."""
+    if not supabase:
+        logger.error("Auth check failed: Supabase client not initialized.")
+        return None, jsonify({"error": "Auth service unavailable"}), 503
+
+    user = verify_user(token)
+    if not user:
+        return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
+
+    if not agent_id:
+        logger.warning(f"Authorization check skipped for user {user.id}: No agent_id provided.")
+        # If agent_id is optional for some routes, return user directly
+        # If agent_id is mandatory, return an error
+        return user, None # Or return error if agent_id is always required
+        # return None, jsonify({"error": "Forbidden: Agent ID required"}), 403
+
+    try:
+        # Check user access in the database
+        res = supabase.table("user_agent_access") \
+            .select("agent_id") \
+            .eq("user_id", user.id) \
+            .eq("agent_id", agent_id) \
+            .execute()
+
+        # Log the database query result for debugging
+        logger.debug(f"DB Check for user {user.id} accessing agent {agent_id}: {res.data}")
+
+        if hasattr(res, 'error') and res.error:
+            logger.error(f"Database error checking access for user {user.id} / agent {agent_id}: {res.error}")
+            return None, jsonify({"error": "Database error checking permissions"}), 500
+
+        if not res.data:
+            logger.warning(f"Access Denied: User {user.id} does not have access to agent {agent_id}.")
+            return None, jsonify({"error": "Forbidden: Access denied to this agent"}), 403
+
+        logger.info(f"Access Granted: User {user.id} authorized for agent {agent_id}.")
+        return user, None # User is authenticated and authorized
+
+    except Exception as e:
+        logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_id}: {e}", exc_info=True)
+        return None, jsonify({"error": "Internal server error during authorization"}), 500
+
+# Decorator for simplified route protection
+def supabase_auth_required(agent_required: bool = True):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            auth_header = request.headers.get("Authorization")
+            token = None
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split(" ", 1)[1]
+
+            agent_id = None
+            if agent_required:
+                # Attempt to get agent_id from request JSON body first
+                if request.is_json and request.json and 'agent' in request.json:
+                    agent_id = request.json.get('agent')
+                # Or from Flask route parameters if not in body (adapt as needed)
+                # Example: if agent_id is part of the URL like /api/agent/<agent_id>
+                # agent_id = kwargs.get('agent_id') # This depends on your route definition
+
+            user, error_response = verify_user_agent_access(token, agent_id if agent_required else None)
+
+            if error_response:
+                # Return the error response directly from the helper
+                status_code = error_response.status_code
+                error_json = error_response.get_json()
+                return jsonify(error_json), status_code
+
+            # Inject user object into the request context or pass as argument if needed
+            # For simplicity, we'll just proceed if auth is successful.
+            # You could use Flask's 'g' object: g.user = user
+            return f(user=user, *args, **kwargs) # Pass user object to the route function
+        return decorated_function
+    return decorator
+
+# --- End Supabase Auth Helper Functions ---
+
 
 @retry_strategy
 def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
@@ -138,8 +265,10 @@ def _get_current_recording_status_snapshot():
     }
 
 @app.route('/api/recording/start', methods=['POST'])
-def start_recording_route():
+@supabase_auth_required(agent_required=True) # Requires agent in payload
+def start_recording_route(user): # User object passed by decorator
     global magic_audio_instance, recording_status
+    logger.info(f"Start recording request from user: {user.id}")
     with magic_audio_lock:
         if recording_status["is_recording"]:
             return jsonify({"status": "error", "message": "Already recording", "recording_status": _get_current_recording_status_snapshot()}), 400
@@ -187,8 +316,10 @@ def _stop_magic_audio_async(instance_to_stop):
         logger.warning("Background stop thread: No instance provided to stop.")
 
 @app.route('/api/recording/stop', methods=['POST'])
-def stop_recording_route():
+@supabase_auth_required(agent_required=False) # Just need authentication
+def stop_recording_route(user): # User object passed by decorator
     global magic_audio_instance, recording_status
+    logger.info(f"Stop recording request from user: {user.id}")
     with magic_audio_lock:
         if not recording_status["is_recording"] or not magic_audio_instance:
             recording_status.update({"is_recording": False, "is_paused": False, "start_time": None, "pause_start_time": None, "last_pause_timestamp": None, "elapsed_time": 0})
@@ -225,11 +356,13 @@ def stop_recording_route():
         # Return the status reflecting the *optimistic* stopped state
         final_status = _get_current_recording_status_snapshot()
         final_status["elapsed_time"] = 0 # Explicitly set 0 for UI stop
-        return jsonify({"status": "success", "message": "Stop initiated", "recording_status": final_status})
+            return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
 
 @app.route('/api/recording/pause', methods=['POST'])
-def pause_recording_route():
+@supabase_auth_required(agent_required=False) # Just need authentication
+def pause_recording_route(user): # User object passed by decorator
     global magic_audio_instance, recording_status
+    logger.info(f"Pause recording request from user: {user.id}")
     with magic_audio_lock:
         if not recording_status["is_recording"] or not magic_audio_instance:
             return jsonify({"status": "error", "message": "Not recording", "recording_status": _get_current_recording_status_snapshot()}), 400
@@ -252,8 +385,10 @@ def pause_recording_route():
             return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
 
 @app.route('/api/recording/resume', methods=['POST'])
-def resume_recording_route():
+@supabase_auth_required(agent_required=False) # Just need authentication
+def resume_recording_route(user): # User object passed by decorator
     global magic_audio_instance, recording_status
+    logger.info(f"Resume recording request from user: {user.id}")
     with magic_audio_lock:
         if not recording_status["is_recording"] or not magic_audio_instance:
             return jsonify({"status": "error", "message": "Not recording", "recording_status": _get_current_recording_status_snapshot()}), 400
@@ -371,18 +506,21 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
         return jsonify({"index": index_name, "namespace": namespace_name, "unique_document_names": sorted_doc_names, "vector_ids_checked": len(vector_ids_to_parse)}), 200
     except Exception as e: logger.error(f"Error listing unique docs index '{index_name}', ns '{namespace_name}': {e}", exc_info=True); return jsonify({"error": "Unexpected error listing documents"}), 500
 
-# --- Chat API Route (Unchanged) ---
+# --- Chat API Route ---
 @app.route('/api/chat', methods=['POST'])
-def handle_chat():
-    logger.info(f"Received request /api/chat method: {request.method}")
+@supabase_auth_required(agent_required=True)
+def handle_chat(user): # User object is now passed by the decorator
+    logger.info(f"Received request /api/chat method: {request.method} from user: {user.id}")
     global transcript_state_cache
+    # Anthropic client check can remain, but auth is handled by decorator
     if not anthropic_client: logger.error("Chat fail: Anthropic client not init."); return jsonify({"error": "AI service unavailable"}), 503
     try:
         data = request.json
         if not data or 'messages' not in data: return jsonify({"error": "Missing 'messages'"}), 400
-        agent_name = data.get('agent'); event_id = data.get('event', '0000'); session_id = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S'))
-        if not agent_name: return jsonify({"error": "Missing 'agent'"}), 400
-        logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id}")
+        agent_name = data.get('agent') # Agent existence already verified by decorator if agent_required=True
+        event_id = data.get('event', '0000')
+        session_id = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S'))
+        logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id} by User: {user.id}")
         incoming_messages = data['messages']
         llm_messages = [{"role": msg["role"], "content": msg["content"]} for msg in incoming_messages if msg.get("role") in ["user", "assistant"]]
         if not llm_messages: return jsonify({"error": "No valid user/assistant messages"}), 400

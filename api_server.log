@@ -22484,3 +22484,21 @@ openai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded you
 2025-05-07 21:04:27,843 [INFO] root: Health check requested
 2025-05-07 21:04:36,653 [INFO] root: Health check requested
 2025-05-07 21:04:44,748 [INFO] root: Health check requested
+2025-05-07 22:07:21,885 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 22:07:21,887 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 22:07:21,887 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 22:07:21,894 [INFO] root: Anthropic client initialized.
+2025-05-07 22:07:21,896 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 22:07:21,896 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 22:12:01,465 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 22:12:01,467 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 22:12:01,467 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 22:12:01,471 [INFO] root: Anthropic client initialized.
+2025-05-07 22:12:01,473 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 22:12:01,473 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-07 22:17:27,241 [INFO] root: Logging setup complete. Level: INFO
+2025-05-07 22:17:27,243 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-07 22:17:27,243 [INFO] root: Pinecone initialized (or skipped).
+2025-05-07 22:17:27,248 [INFO] root: Anthropic client initialized.
+2025-05-07 22:17:27,249 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-07 22:17:27,249 [INFO] root: Starting API server on port 5001 (Debug: False)
