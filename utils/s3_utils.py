@@ -59,8 +59,37 @@ def read_file_content(file_key: str, description: str) -> Optional[str]:
     except s3.exceptions.NoSuchKey:
         logger.warning(f"{description} file not found at S3 key: {file_key}")
         return None
+    except Exception as e: logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True)
+    return None
+
+def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
+    """Lists objects under a given S3 prefix, returning their Key, Size, and LastModified."""
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("S3 client or bucket not available for listing objects.")
+        return []
+
+    objects_metadata = []
+    try:
+        logger.debug(f"Listing objects in S3 bucket '{aws_s3_bucket}' with prefix '{base_key_prefix}'")
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_key_prefix):
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    # Skip if it's the prefix itself (folder object)
+                    if obj['Key'] == base_key_prefix and obj['Key'].endswith('/'):
+                        continue
+                    objects_metadata.append({
+                        'Key': obj['Key'],
+                        'Size': obj.get('Size', 0),
+                        'LastModified': obj.get('LastModified')
+                    })
+        logger.info(f"Found {len(objects_metadata)} objects under prefix '{base_key_prefix}'.")
+        return objects_metadata
     except Exception as e:
-        logger.error(f"Error reading {description} from S3 key {file_key}: {e}", exc_info=True)
+        logger.error(f"Error listing objects in S3 for prefix '{base_key_prefix}': {e}", exc_info=True)
+        return []
         return None
 
 def find_file_any_extension(base_pattern: str, description: str) -> Optional[Tuple[str, str]]:

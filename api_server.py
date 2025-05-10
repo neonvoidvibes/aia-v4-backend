@@ -22,7 +22,7 @@ from utils.transcript_utils import TranscriptState, read_new_transcript_content,
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
-    list_agent_names_from_s3 # Import the new function
+    list_agent_names_from_s3, list_s3_objects_metadata # Import the new functions
 )
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
@@ -518,6 +518,105 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
         logger.info(f"Found {len(sorted_doc_names)} unique doc names in ns '{query_namespace}'.")
         return jsonify({"index": index_name, "namespace": namespace_name, "unique_document_names": sorted_doc_names, "vector_ids_checked": len(vector_ids_to_parse)}), 200
     except Exception as e: logger.error(f"Error listing unique docs index '{index_name}', ns '{namespace_name}': {e}", exc_info=True); return jsonify({"error": "Unexpected error listing documents"}), 500
+
+# --- S3 Document Management API Routes ---
+@app.route('/api/s3/list', methods=['GET'])
+@supabase_auth_required(agent_required=False) # No specific agent context needed, just auth
+def list_s3_documents(user):
+    logger.info(f"Received request /api/s3/list from user: {user.id}")
+    s3_prefix = request.args.get('prefix')
+    if not s3_prefix:
+        return jsonify({"error": "Missing 'prefix' query parameter"}), 400
+
+    try:
+        s3_objects = list_s3_objects_metadata(s3_prefix)
+        # Transform to frontend-friendly format
+        formatted_files = []
+        for obj in s3_objects:
+            # Skip folder objects that might be returned by list_objects_v2 if prefix doesn't end with /
+            if obj['Key'].endswith('/') and obj['Size'] == 0:
+                continue
+
+            filename = os.path.basename(obj['Key'])
+            # Basic type detection from extension
+            file_type = "text/plain" # Default
+            if '.' in filename:
+                ext = filename.rsplit('.', 1)[1].lower()
+                if ext in ['txt', 'md', 'log']: file_type = "text/plain"
+                elif ext == 'json': file_type = "application/json"
+                elif ext == 'xml': file_type = "application/xml"
+                # Add more types as needed
+
+            formatted_files.append({
+                "name": filename,
+                "size": obj['Size'],
+                "lastModified": obj['LastModified'].isoformat() if obj.get('LastModified') else None,
+                "s3Key": obj['Key'],
+                "type": file_type
+            })
+        
+        # Filter out files starting with 'rolling-' for transcription lists, if they are not desired.
+        # This specific filtering is for the 'transcripts' prefix use case.
+        # A more generic API wouldn't hardcode this. For now, it's fine as the frontend will primarily use it for transcripts.
+        if "transcripts/" in s3_prefix:
+            formatted_files = [f for f in formatted_files if not f['name'].startswith('rolling-')]
+
+        return jsonify(formatted_files), 200
+    except Exception as e:
+        logger.error(f"Error listing S3 objects for prefix '{s3_prefix}': {e}", exc_info=True)
+        return jsonify({"error": "Internal server error listing S3 objects"}), 500
+
+@app.route('/api/s3/view', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def view_s3_document(user):
+    logger.info(f"Received request /api/s3/view from user: {user.id}")
+    s3_key = request.args.get('s3Key')
+    if not s3_key:
+        return jsonify({"error": "Missing 's3Key' query parameter"}), 400
+
+    try:
+        # Re-use existing s3_utils.read_file_content
+        from utils.s3_utils import read_file_content as s3_read_content # Local import to avoid name clash
+        content = s3_read_content(s3_key, f"S3 file for viewing ({s3_key})")
+        if content is None:
+            return jsonify({"error": "File not found or could not be read"}), 404
+        return jsonify({"content": content}), 200
+    except Exception as e:
+        logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True)
+        return jsonify({"error": "Internal server error viewing S3 object"}), 500
+
+@app.route('/api/s3/download', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def download_s3_document(user):
+    logger.info(f"Received request /api/s3/download from user: {user.id}")
+    s3_key = request.args.get('s3Key')
+    filename_param = request.args.get('filename') # Optional desired filename
+
+    if not s3_key:
+        return jsonify({"error": "Missing 's3Key' query parameter"}), 400
+
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        return jsonify({"error": "S3 client or bucket not configured"}), 500
+
+    try:
+        s3_object = s3.get_object(Bucket=aws_s3_bucket, Key=s3_key)
+        
+        # Determine filename for download
+        download_filename = filename_param or os.path.basename(s3_key)
+        
+        return Response(
+            s3_object['Body'].iter_chunks(),
+            mimetype=s3_object.get('ContentType', 'application/octet-stream'),
+            headers={"Content-Disposition": f"attachment;filename={download_filename}"}
+        )
+    except s3.exceptions.NoSuchKey:
+        logger.warning(f"S3 Download: File not found at key: {s3_key}")
+        return jsonify({"error": "File not found"}), 404
+    except Exception as e:
+        logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True)
+        return jsonify({"error": "Internal server error downloading S3 object"}), 500
 
 # --- Chat API Route ---
 @app.route('/api/chat', methods=['POST'])
