@@ -38461,3 +38461,207 @@ The original query is in Swedish and appear...'
 2025-05-10 23:21:18,189 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
 2025-05-10 23:21:18,189 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
 2025-05-10 23:21:18,189 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-10 23:46:57,202 [INFO] root: Logging setup complete. Level: INFO
+2025-05-10 23:46:57,204 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-10 23:46:57,204 [INFO] root: Pinecone initialized (or skipped).
+2025-05-10 23:46:57,210 [INFO] root: Supabase client initialized successfully.
+2025-05-10 23:46:57,214 [INFO] root: Anthropic client initialized.
+2025-05-10 23:46:57,217 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-10 23:46:57,341 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-10 23:46:57,431 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['roundtable', 'lifegraph', 'fabriclloyds', '_agent', '02agents', 'yggdrasil', '03events', 'tpframtidenhr', 'sturebadet', '00gradient', 'nordicequation', 'wlaevent', 'ikea', 'tpframtiden', 'mindsu', 'river', '_test', 'rr', '01organizations', 'wlg', 'holistic', 'cmf', 'tre-hr', 'playground']
+2025-05-10 23:46:57,541 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-10 23:46:57,542 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-10 23:46:57,542 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-10 23:46:57,542 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 00:04:09,180 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 00:04:09,182 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:04:09,183 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 00:04:09,188 [INFO] root: Supabase client initialized successfully.
+2025-05-11 00:04:09,191 [INFO] root: Anthropic client initialized.
+2025-05-11 00:04:09,194 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 00:04:09,334 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 00:04:09,431 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['cmf', 'yggdrasil', '01organizations', 'fabriclloyds', 'nordicequation', 'tre-hr', '_test', 'playground', 'ikea', 'holistic', 'sturebadet', 'wlaevent', 'tpframtiden', 'river', 'mindsu', '00gradient', 'roundtable', '_agent', 'rr', 'lifegraph', '02agents', '03events', 'tpframtidenhr', 'wlg']
+2025-05-11 00:04:09,757 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 00:04:09,757 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 00:04:09,758 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 00:04:09,758 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 00:11:09,596 [INFO] root: Health check requested
+2025-05-11 00:11:09,845 [INFO] root: Access Granted: User f8e3e957-5872-406f-83b6-121af5ab4dc9 authorized for agent river (ID: 0ea5fbed-706b-404d-b104-1ae60d8dd616).
+2025-05-11 00:11:09,845 [INFO] root: Received request /api/chat method: POST from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:11:09,845 [INFO] root: Chat request for Agent: river, Event: 0000 by User: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:11:10,064 [INFO] utils.s3_utils: Loaded agent-specific system prompt for 'river'.
+2025-05-11 00:11:10,064 [INFO] utils.s3_utils: Final system prompt length: 18866
+2025-05-11 00:11:10,229 [WARNING] utils.s3_utils: No files found matching base pattern 'organizations/river/agents/river/_config/frameworks_aID-river' for agent frameworks.
+2025-05-11 00:11:10,229 [WARNING] utils.s3_utils: No agent-specific frameworks found using pattern 'organizations/river/agents/river/_config/frameworks_aID-river'.
+2025-05-11 00:11:10,229 [INFO] utils.s3_utils: Loaded frameworks, total length: 7021
+2025-05-11 00:11:10,229 [INFO] utils.s3_utils: Attempting org context load using pattern: 'organizations/river/_config/context_oID-river'.
+2025-05-11 00:11:10,314 [INFO] utils.s3_utils: Loaded organization context.
+2025-05-11 00:11:10,314 [INFO] utils.s3_utils: Loaded context, total length: 10551
+2025-05-11 00:11:10,340 [WARNING] utils.s3_utils: No documentation files found directly in 'organizations/river/agents/river/docs/'
+2025-05-11 00:11:10,340 [INFO] root: New TranscriptState for river/0000
+2025-05-11 00:11:10,388 [INFO] utils.transcript_utils: New transcript file detected: organizations/river/agents/river/events/0000/transcripts/transcript_D20250509-T132335_uID-0112_oID-river_aID-river_eID-0000_sID-20250509_132335.txt. Resetting read position to 0.
+2025-05-11 00:11:10,487 [INFO] utils.transcript_utils: S3 get_object successful. Read 118949 bytes.
+2025-05-11 00:11:10,487 [INFO] utils.transcript_utils: Decoded 114081 characters.
+2025-05-11 00:11:10,487 [INFO] utils.transcript_utils: State updated for organizations/river/agents/river/events/0000/transcripts/transcript_D20250509-T132335_uID-0112_oID-river_aID-river_eID-0000_sID-20250509_132335.txt: Position set to 118949 (current S3 size).
+2025-05-11 00:13:26,616 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 00:13:26,618 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:13:26,618 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 00:13:26,623 [INFO] root: Supabase client initialized successfully.
+2025-05-11 00:13:26,626 [INFO] root: Anthropic client initialized.
+2025-05-11 00:13:26,629 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 00:13:26,763 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 00:13:26,855 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['ikea', 'fabriclloyds', 'lifegraph', 'nordicequation', 'tre-hr', 'mindsu', '02agents', '_test', 'cmf', '03events', 'sturebadet', 'holistic', '01organizations', 'rr', 'tpframtidenhr', 'tpframtiden', 'wlaevent', 'river', '00gradient', 'roundtable', '_agent', 'yggdrasil', 'wlg', 'playground']
+2025-05-11 00:13:26,935 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 00:13:26,935 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 00:13:26,935 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 00:13:26,935 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 00:19:25,474 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 00:19:25,478 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:19:25,478 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 00:19:25,482 [INFO] root: Supabase client initialized successfully.
+2025-05-11 00:19:25,486 [INFO] root: Anthropic client initialized.
+2025-05-11 00:19:25,489 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 00:19:25,615 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 00:19:25,708 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['tre-hr', 'rr', 'roundtable', 'river', 'wlg', 'sturebadet', '01organizations', 'fabriclloyds', 'mindsu', '03events', 'lifegraph', 'yggdrasil', '_test', 'wlaevent', '_agent', 'ikea', 'nordicequation', '02agents', 'holistic', 'tpframtidenhr', 'playground', '00gradient', 'cmf', 'tpframtiden']
+2025-05-11 00:19:26,050 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 00:19:26,050 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 00:19:26,050 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 00:19:26,051 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 00:23:08,179 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 00:23:08,182 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:23:08,182 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 00:23:08,187 [INFO] root: Supabase client initialized successfully.
+2025-05-11 00:23:08,191 [INFO] root: Anthropic client initialized.
+2025-05-11 00:23:08,194 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 00:23:08,339 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 00:23:08,440 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['cmf', 'tre-hr', 'yggdrasil', '01organizations', '02agents', '_agent', 'holistic', '_test', 'playground', 'rr', '00gradient', 'tpframtiden', 'wlaevent', 'sturebadet', 'roundtable', 'wlg', '03events', 'fabriclloyds', 'nordicequation', 'lifegraph', 'river', 'mindsu', 'tpframtidenhr', 'ikea']
+2025-05-11 00:23:08,722 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 00:23:08,722 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 00:23:08,723 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 00:23:08,723 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 00:24:49,828 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 00:24:49,830 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:24:49,830 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 00:24:49,836 [INFO] root: Supabase client initialized successfully.
+2025-05-11 00:24:49,839 [INFO] root: Anthropic client initialized.
+2025-05-11 00:24:49,842 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 00:24:49,964 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 00:24:50,073 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['01organizations', '_agent', 'rr', 'sturebadet', 'ikea', 'yggdrasil', 'mindsu', '02agents', 'holistic', '00gradient', 'roundtable', 'lifegraph', 'wlg', '03events', 'playground', '_test', 'wlaevent', 'tpframtiden', 'nordicequation', 'cmf', 'fabriclloyds', 'tre-hr', 'tpframtidenhr', 'river']
+2025-05-11 00:24:50,184 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 00:24:50,184 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 00:24:50,184 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 00:24:50,184 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 00:25:29,185 [INFO] root: Health check requested
+2025-05-11 00:25:29,186 [INFO] root: Health check requested
+2025-05-11 00:25:29,189 [INFO] root: Health check requested
+2025-05-11 00:25:29,189 [INFO] root: Health check requested
+2025-05-11 00:25:29,190 [INFO] root: Health check requested
+2025-05-11 00:25:29,196 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 00:25:29,199 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:25:29,274 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:25:29,274 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:25:29,274 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:25:29,274 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:25:29,274 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 00:25:29,274 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 00:25:29,295 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:25:29,295 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:25:29,295 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:25:29,296 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:25:29,296 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 00:25:29,296 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 00:25:29,366 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 00:25:29,367 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 00:25:29,369 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 26. Filtered objects_metadata count: 25.
+2025-05-11 00:25:29,370 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 00:25:30,124 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 00:25:30,124 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 00:25:31,465 [INFO] root: Health check requested
+2025-05-11 00:25:31,542 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:25:31,542 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:25:31,542 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 00:25:31,569 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 00:28:02,584 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 00:28:02,587 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:28:02,587 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 00:28:02,592 [INFO] root: Supabase client initialized successfully.
+2025-05-11 00:28:02,596 [INFO] root: Anthropic client initialized.
+2025-05-11 00:28:02,599 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 00:28:02,749 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 00:28:02,845 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['holistic', 'roundtable', 'ikea', 'river', 'cmf', 'nordicequation', 'tpframtiden', '_test', 'sturebadet', '02agents', 'rr', '01organizations', 'fabriclloyds', 'mindsu', 'yggdrasil', '00gradient', 'tre-hr', 'lifegraph', 'playground', 'wlaevent', 'wlg', 'tpframtidenhr', '03events', '_agent']
+2025-05-11 00:28:03,150 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 00:28:03,150 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 00:28:03,150 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 00:28:03,150 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 00:34:31,505 [INFO] root: Health check requested
+2025-05-11 00:34:31,503 [INFO] root: Health check requested
+2025-05-11 00:34:31,510 [INFO] root: Health check requested
+2025-05-11 00:34:31,513 [INFO] root: Health check requested
+2025-05-11 00:34:31,513 [INFO] root: Health check requested
+2025-05-11 00:34:31,577 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 00:34:31,603 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:34:31,683 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:34:31,684 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:34:31,684 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:34:31,684 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:34:31,684 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 00:34:31,685 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 00:34:31,685 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:34:31,696 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:34:31,703 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:34:31,708 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:34:31,708 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 00:34:31,708 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 00:34:31,795 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 00:34:31,796 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 26. Filtered objects_metadata count: 25.
+2025-05-11 00:34:31,797 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 00:34:31,798 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 00:34:32,389 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 00:34:32,389 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 00:34:33,931 [INFO] root: Health check requested
+2025-05-11 00:34:33,986 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:34:33,986 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:34:33,986 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 00:34:34,012 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 00:34:47,818 [INFO] root: Health check requested
+2025-05-11 00:34:47,905 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:34:47,905 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:34:50,091 [INFO] root: Health check requested
+2025-05-11 00:34:50,162 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:34:50,162 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:00,430 [INFO] root: Health check requested
+2025-05-11 00:35:00,576 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:35:00,576 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:02,725 [INFO] root: Health check requested
+2025-05-11 00:35:02,769 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:35:02,769 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:03,130 [INFO] root: Health check requested
+2025-05-11 00:35:03,158 [INFO] root: Health check requested
+2025-05-11 00:35:03,165 [INFO] root: Health check requested
+2025-05-11 00:35:03,175 [INFO] root: Health check requested
+2025-05-11 00:35:03,185 [INFO] root: Health check requested
+2025-05-11 00:35:03,186 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 00:35:03,188 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 00:35:03,210 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:35:03,211 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:35:03,211 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:03,211 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:03,211 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 00:35:03,211 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 00:35:03,237 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 26. Filtered objects_metadata count: 25.
+2025-05-11 00:35:03,243 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:35:03,243 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:03,243 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:35:03,243 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 00:35:03,243 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:03,244 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 00:35:03,265 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 00:35:03,281 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 00:35:03,311 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 00:35:03,619 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 00:35:03,620 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 00:35:05,344 [INFO] root: Health check requested
+2025-05-11 00:35:05,408 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 00:35:05,409 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 00:35:05,409 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 00:35:05,435 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.

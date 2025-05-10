@@ -72,23 +72,42 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
 
     objects_metadata = []
     try:
-        logger.debug(f"Listing objects in S3 bucket '{aws_s3_bucket}' with prefix '{base_key_prefix}'")
+        logger.info(f"S3 LIST [BEGIN]: Bucket='{aws_s3_bucket}', Prefix='{base_key_prefix}'")
         paginator = s3.get_paginator('list_objects_v2')
+        raw_object_count = 0
         for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_key_prefix):
             if 'Contents' in page:
                 for obj in page['Contents']:
+                    raw_object_count += 1
+                    logger.debug(f"S3 LIST [RAW_OBJ]: Key='{obj['Key']}', Size={obj.get('Size', 0)}")
                     # Skip if it's the prefix itself (folder object)
                     if obj['Key'] == base_key_prefix and obj['Key'].endswith('/'):
+                        logger.debug(f"S3 LIST [SKIP_FOLDER_OBJ]: Skipped folder object key: {obj['Key']}")
                         continue
+                    
+                    # Additional check: if prefix doesn't end with '/', ensure we're not in a sub-sub-folder.
+                    # This helps if a prefix like "_config" is given, we don't want "_config/sub/file.txt".
+                    # However, frontend prefixes now mostly end with '/', so this might be less critical.
+                    if not base_key_prefix.endswith('/'):
+                        relative_path = obj['Key'][len(base_key_prefix):]
+                        if relative_path.startswith('/') and '/' in relative_path.lstrip('/'):
+                            logger.debug(f"S3 LIST [SKIP_SUB_FOLDER]: Skipped due to being in sub-folder: {obj['Key']} (prefix: {base_key_prefix})")
+                            continue
+                    
                     objects_metadata.append({
                         'Key': obj['Key'],
                         'Size': obj.get('Size', 0),
                         'LastModified': obj.get('LastModified')
                     })
-        logger.info(f"Found {len(objects_metadata)} objects under prefix '{base_key_prefix}'.")
+        logger.info(f"S3 LIST [SUMMARY]: Bucket='{aws_s3_bucket}', Prefix='{base_key_prefix}'. Raw S3 objects found: {raw_object_count}. Filtered objects_metadata count: {len(objects_metadata)}.")
+        if raw_object_count > 0 and not objects_metadata:
+             logger.warning(f"S3 LIST [WARN]: All {raw_object_count} raw S3 objects were filtered out for prefix '{base_key_prefix}'. Check filtering logic or S3 structure.")
+        elif not objects_metadata: # This means raw_object_count was also 0
+            logger.warning(f"S3 LIST [WARN]: No objects (raw or filtered) found for bucket '{aws_s3_bucket}' and prefix '{base_key_prefix}'.")
+
         return objects_metadata
     except Exception as e:
-        logger.error(f"Error listing objects in S3 for prefix '{base_key_prefix}': {e}", exc_info=True)
+        logger.error(f"S3 LIST [ERROR]: Error listing objects in S3 for prefix '{base_key_prefix}': {e}", exc_info=True)
         return []
         return None
 

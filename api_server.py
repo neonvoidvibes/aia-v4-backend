@@ -48,6 +48,16 @@ def setup_logging(debug=False):
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.info(f"Logging setup complete. Level: {logging.getLevelName(log_level)}")
     return root_logger
+
+# Log S3 bucket name on startup
+s3_bucket_on_startup = os.getenv('AWS_S3_BUCKET')
+startup_logger = logging.getLogger(__name__ + ".startup") # Use a distinct logger for startup messages
+if s3_bucket_on_startup:
+    startup_logger.info(f"AWS_S3_BUCKET on startup: '{s3_bucket_on_startup}'")
+else:
+    startup_logger.error("AWS_S3_BUCKET environment variable is NOT SET at startup!")
+
+
 logger = setup_logging(debug=os.getenv('FLASK_DEBUG', 'False').lower() == 'true')
 
 app = Flask(__name__)
