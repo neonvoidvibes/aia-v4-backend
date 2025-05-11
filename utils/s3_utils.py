@@ -1,3 +1,4 @@
+# utils/s3_utils.py
 """Utilities for interacting with AWS S3."""
 
 import os
@@ -59,8 +60,8 @@ def read_file_content(file_key: str, description: str) -> Optional[str]:
     except s3.exceptions.NoSuchKey:
         logger.warning(f"{description} file not found at S3 key: {file_key}")
         return None
-    except Exception as e: logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True)
-    return None
+    except Exception as e: logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True) # This line seems out of place, should be specific to this func
+    return None # Ensure None is returned on generic exception too
 
 def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
     """Lists objects under a given S3 prefix, returning their Key, Size, and LastModified."""
@@ -79,23 +80,42 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
             if 'Contents' in page:
                 for obj in page['Contents']:
                     raw_object_count += 1
-                    logger.debug(f"S3 LIST [RAW_OBJ]: Key='{obj['Key']}', Size={obj.get('Size', 0)}")
-                    # Skip if it's the prefix itself (folder object)
-                    if obj['Key'] == base_key_prefix and obj['Key'].endswith('/'):
-                        logger.debug(f"S3 LIST [SKIP_FOLDER_OBJ]: Skipped folder object key: {obj['Key']}")
+                    object_key = obj['Key']
+                    logger.debug(f"S3 LIST [RAW_OBJ]: Key='{object_key}', Size={obj.get('Size', 0)}")
+
+                    # Skip the folder object itself. This handles cases where base_key_prefix is "folder/"
+                    # and S3 lists "folder/" as an object.
+                    if object_key == base_key_prefix:
+                        logger.debug(f"S3 LIST [SKIP_FOLDER_OBJ]: Skipped object key same as prefix (folder itself): {object_key}")
                         continue
                     
-                    # Additional check: if prefix doesn't end with '/', ensure we're not in a sub-sub-folder.
-                    # This helps if a prefix like "_config" is given, we don't want "_config/sub/file.txt".
-                    # However, frontend prefixes now mostly end with '/', so this might be less critical.
-                    if not base_key_prefix.endswith('/'):
-                        relative_path = obj['Key'][len(base_key_prefix):]
-                        if relative_path.startswith('/') and '/' in relative_path.lstrip('/'):
-                            logger.debug(f"S3 LIST [SKIP_SUB_FOLDER]: Skipped due to being in sub-folder: {obj['Key']} (prefix: {base_key_prefix})")
-                            continue
+                    # Calculate path relative to the base_key_prefix.
+                    # This assumes base_key_prefix is a "folder" (e.g., ends with '/').
+                    # If base_key_prefix is "foo/bar/" and object_key is "foo/bar/file.txt", relative_path is "file.txt".
+                    # If object_key is "foo/bar/baz/file.txt", relative_path is "baz/file.txt".
+                    relative_path = object_key[len(base_key_prefix):]
                     
+                    # If relative_path contains a '/', it's in a subdirectory. Skip it.
+                    if '/' in relative_path:
+                        logger.debug(f"S3 LIST [SKIP_SUB_DIR_OBJ]: Skipped object in subdirectory. Key='{object_key}', Relative='{relative_path}', Prefix='{base_key_prefix}'")
+                        continue
+                    
+                    # If relative_path is empty at this point (e.g. prefix="foo", key="foo/"),
+                    # and it's a 0-byte object (typical for S3 folder markers created by some tools), skip it.
+                    if not relative_path and obj.get('Size', 0) == 0 and object_key.endswith('/'):
+                         logger.debug(f"S3 LIST [SKIP_EMPTY_RELATIVE_FOLDER_MARKER]: Skipped empty relative path folder marker: {object_key}")
+                         continue
+                    
+                    # If relative_path is empty but it's not a typical folder marker (e.g. has size, or doesn't end with /)
+                    # this could be an object named exactly as the prefix but without a trailing slash.
+                    # This scenario is less common if prefixes for folders consistently end with '/'.
+                    # For safety, if relative_path is truly empty after all checks, it means object_key matched base_key_prefix,
+                    # which should have been caught by the first `if object_key == base_key_prefix:` check.
+                    # However, if base_key_prefix was "foo" and object_key was "foo", relative_path is "", and it's a file.
+                    # The current logic should include it. If it was "foo" and key "foo/", it's caught by the empty relative_path + size 0 check.
+
                     objects_metadata.append({
-                        'Key': obj['Key'],
+                        'Key': object_key,
                         'Size': obj.get('Size', 0),
                         'LastModified': obj.get('LastModified')
                     })
@@ -109,7 +129,7 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"S3 LIST [ERROR]: Error listing objects in S3 for prefix '{base_key_prefix}': {e}", exc_info=True)
         return []
-        return None
+        # return None # This was the original line, but the function is typed to return List. Empty list is better.
 
 def find_file_any_extension(base_pattern: str, description: str) -> Optional[Tuple[str, str]]:
     """Find the most recent file matching base pattern with any extension in S3."""

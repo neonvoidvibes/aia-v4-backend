@@ -43679,3 +43679,652 @@ ValueError: too many values to unpack (expected 2)
 2025-05-11 22:38:51,993 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
 2025-05-11 22:38:51,994 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
 2025-05-11 22:38:51,997 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:40:10,341 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 22:40:10,343 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 22:40:10,343 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 22:40:10,348 [INFO] root: Supabase client initialized successfully.
+2025-05-11 22:40:10,351 [INFO] root: Anthropic client initialized.
+2025-05-11 22:40:10,354 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 22:40:10,498 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 22:40:10,605 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['tpframtidenhr', 'lifegraph', 'sturebadet', 'roundtable', 'playground', 'ikea', '00gradient', '02agents', 'tre-hr', 'yggdrasil', 'river', 'mindsu', 'holistic', 'nordicequation', '01organizations', 'cmf', 'wlg', 'rr', '_agent', '_test', '03events', 'wlaevent', 'tpframtiden', 'fabriclloyds']
+2025-05-11 22:40:10,911 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 22:40:10,911 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 22:40:10,911 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 22:40:10,912 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 22:45:13,533 [INFO] root: Health check requested
+2025-05-11 22:45:13,660 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:13,660 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:13,660 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 22:45:13,794 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 22:45:15,920 [INFO] root: Health check requested
+2025-05-11 22:45:15,997 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:15,997 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:15,998 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 22:45:16,044 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 22:45:18,130 [INFO] root: Health check requested
+2025-05-11 22:45:18,183 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:18,184 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:18,184 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 22:45:18,214 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 22:45:20,313 [INFO] root: Health check requested
+2025-05-11 22:45:20,380 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:20,380 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:20,381 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 22:45:20,412 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 22:45:22,497 [INFO] root: Health check requested
+2025-05-11 22:45:22,569 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:22,570 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:22,570 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 22:45:22,611 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 22:45:25,190 [INFO] root: Health check requested
+2025-05-11 22:45:25,202 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 22:45:25,216 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 22:45:26,426 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 22:45:26,427 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 22:45:28,726 [INFO] root: Health check requested
+2025-05-11 22:45:28,808 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:28,809 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:28,809 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 22:45:28,900 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 22:45:30,982 [INFO] root: Health check requested
+2025-05-11 22:45:31,055 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:31,055 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:31,055 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 22:45:31,081 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 22:45:33,439 [INFO] root: Health check requested
+2025-05-11 22:45:33,501 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:33,501 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:33,502 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 22:45:33,530 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 22:45:35,726 [INFO] root: Health check requested
+2025-05-11 22:45:35,784 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:35,784 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:35,785 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 22:45:35,827 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 22:45:37,960 [INFO] root: Health check requested
+2025-05-11 22:45:38,021 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:45:38,021 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:45:38,021 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 22:45:38,048 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 22:45:40,122 [INFO] root: Health check requested
+2025-05-11 22:45:40,138 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 22:45:40,146 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 22:45:40,646 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 22:45:40,647 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 22:54:03,121 [INFO] root: Health check requested
+2025-05-11 22:54:03,253 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:03,253 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:03,253 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 22:54:03,362 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 22:54:05,411 [INFO] root: Health check requested
+2025-05-11 22:54:05,457 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:05,458 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:05,458 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 22:54:05,483 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 22:54:06,938 [INFO] root: Health check requested
+2025-05-11 22:54:06,985 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:06,985 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:07,534 [INFO] root: Health check requested
+2025-05-11 22:54:07,579 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:07,579 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:07,580 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 22:54:07,602 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 22:54:09,230 [INFO] root: Health check requested
+2025-05-11 22:54:09,369 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:09,369 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:09,647 [INFO] root: Health check requested
+2025-05-11 22:54:09,704 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:09,704 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:09,704 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 22:54:09,728 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 22:54:11,889 [INFO] root: Health check requested
+2025-05-11 22:54:11,971 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:11,971 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:11,972 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 22:54:11,997 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 22:54:14,507 [INFO] root: Health check requested
+2025-05-11 22:54:14,513 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 22:54:14,521 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 22:54:15,082 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 22:54:15,082 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 22:54:24,272 [INFO] root: Health check requested
+2025-05-11 22:54:24,356 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:24,356 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:54:26,576 [INFO] root: Health check requested
+2025-05-11 22:54:26,643 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:54:26,643 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:55:05,920 [INFO] root: Health check requested
+2025-05-11 22:55:06,000 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:55:06,000 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:55:08,136 [INFO] root: Health check requested
+2025-05-11 22:55:08,191 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:55:08,191 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:58:33,150 [INFO] root: Health check requested
+2025-05-11 22:58:33,324 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:58:33,324 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 22:58:35,552 [INFO] root: Health check requested
+2025-05-11 22:58:35,626 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 22:58:35,626 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:04:36,490 [INFO] root: Health check requested
+2025-05-11 23:04:36,576 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:04:36,576 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:04:36,577 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:04:36,670 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 23:04:38,760 [INFO] root: Health check requested
+2025-05-11 23:04:38,814 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:04:38,814 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:04:38,814 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:04:38,845 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:04:40,936 [INFO] root: Health check requested
+2025-05-11 23:04:40,980 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:04:40,980 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:04:40,980 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:04:41,008 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:04:43,056 [INFO] root: Health check requested
+2025-05-11 23:04:43,097 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:04:43,097 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:04:43,097 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:04:43,122 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:04:45,245 [INFO] root: Health check requested
+2025-05-11 23:04:45,375 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:04:45,375 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:04:45,375 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:04:45,405 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:04:47,384 [INFO] root: Health check requested
+2025-05-11 23:04:47,436 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:04:47,436 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:04:47,731 [INFO] root: Health check requested
+2025-05-11 23:04:47,734 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:04:47,740 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:04:48,205 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:04:48,205 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 23:04:49,534 [INFO] root: Health check requested
+2025-05-11 23:04:49,582 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:04:49,582 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:13:48,284 [INFO] root: Health check requested
+2025-05-11 23:13:48,479 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:13:48,479 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:13:48,480 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:13:48,577 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 23:13:50,631 [INFO] root: Health check requested
+2025-05-11 23:13:50,700 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:13:50,700 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:13:50,700 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:13:50,729 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:13:52,801 [INFO] root: Health check requested
+2025-05-11 23:13:52,854 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:13:52,854 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:13:52,854 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:13:52,879 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:13:54,937 [INFO] root: Health check requested
+2025-05-11 23:13:55,004 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:13:55,004 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:13:55,004 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:13:55,028 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:13:57,086 [INFO] root: Health check requested
+2025-05-11 23:13:57,143 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:13:57,143 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:13:57,143 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:13:57,173 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:13:58,446 [INFO] root: Health check requested
+2025-05-11 23:13:58,503 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:13:58,503 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:13:59,571 [INFO] root: Health check requested
+2025-05-11 23:13:59,574 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:13:59,587 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:14:00,110 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:14:00,110 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 23:14:00,587 [INFO] root: Health check requested
+2025-05-11 23:14:00,627 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:14:00,627 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:14:07,729 [INFO] root: Health check requested
+2025-05-11 23:14:07,799 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:14:07,799 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:14:09,951 [INFO] root: Health check requested
+2025-05-11 23:14:09,991 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:14:09,991 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:14:22,463 [INFO] root: Health check requested
+2025-05-11 23:14:22,535 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:14:22,535 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:14:24,712 [INFO] root: Health check requested
+2025-05-11 23:14:24,755 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:14:24,755 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:00,066 [INFO] root: Health check requested
+2025-05-11 23:22:00,185 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:00,185 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:00,186 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:22:00,295 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 23:22:02,367 [INFO] root: Health check requested
+2025-05-11 23:22:02,421 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:02,421 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:02,421 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:22:02,445 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:22:04,503 [INFO] root: Health check requested
+2025-05-11 23:22:04,544 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:04,544 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:04,544 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:22:04,566 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:22:06,627 [INFO] root: Health check requested
+2025-05-11 23:22:06,684 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:06,684 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:06,684 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:22:06,707 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:22:08,767 [INFO] root: Health check requested
+2025-05-11 23:22:08,820 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:08,820 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:08,820 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:22:08,842 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:22:11,290 [INFO] root: Health check requested
+2025-05-11 23:22:11,292 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:22:11,303 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:22:11,720 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:22:11,720 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 23:22:18,570 [INFO] root: Health check requested
+2025-05-11 23:22:18,649 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:18,649 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:20,806 [INFO] root: Health check requested
+2025-05-11 23:22:20,849 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:20,849 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:28,714 [INFO] root: Health check requested
+2025-05-11 23:22:28,787 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:28,788 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:22:30,946 [INFO] root: Health check requested
+2025-05-11 23:22:30,991 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:22:30,991 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:19,407 [INFO] root: Health check requested
+2025-05-11 23:31:19,567 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:31:19,567 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:19,568 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:31:19,682 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 23:31:21,775 [INFO] root: Health check requested
+2025-05-11 23:31:21,832 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:31:21,832 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:21,832 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:31:21,861 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:31:23,731 [INFO] root: Health check requested
+2025-05-11 23:31:23,783 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:31:23,783 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:23,924 [INFO] root: Health check requested
+2025-05-11 23:31:23,977 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:31:23,977 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:23,977 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:31:24,003 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:31:25,929 [INFO] root: Health check requested
+2025-05-11 23:31:25,997 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:31:25,998 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:26,062 [INFO] root: Health check requested
+2025-05-11 23:31:26,115 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:31:26,115 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:26,115 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:31:26,138 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:31:28,197 [INFO] root: Health check requested
+2025-05-11 23:31:28,239 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:31:28,239 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:31:28,239 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:31:28,261 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:31:30,619 [INFO] root: Health check requested
+2025-05-11 23:31:30,626 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:31:30,634 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:31:31,080 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:31:31,080 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 23:38:54,312 [INFO] root: Health check requested
+2025-05-11 23:38:54,416 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:38:54,417 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:38:54,417 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:38:54,525 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 23:38:56,597 [INFO] root: Health check requested
+2025-05-11 23:38:56,639 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:38:56,639 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:38:56,639 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:38:56,669 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:38:58,116 [INFO] root: Health check requested
+2025-05-11 23:38:58,158 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:38:58,158 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:38:58,720 [INFO] root: Health check requested
+2025-05-11 23:38:58,760 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:38:58,760 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:38:58,760 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:38:58,787 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:39:00,253 [INFO] root: Health check requested
+2025-05-11 23:39:00,321 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:00,321 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:00,866 [INFO] root: Health check requested
+2025-05-11 23:39:00,924 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:00,924 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:00,924 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:39:00,949 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:39:03,026 [INFO] root: Health check requested
+2025-05-11 23:39:03,068 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:03,068 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:03,068 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:39:03,096 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:39:05,410 [INFO] root: Health check requested
+2025-05-11 23:39:05,412 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:39:05,417 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:39:05,894 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:39:05,894 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 23:39:07,307 [INFO] root: Health check requested
+2025-05-11 23:39:07,347 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:07,347 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:07,347 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:39:07,377 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 24.
+2025-05-11 23:39:09,436 [INFO] root: Health check requested
+2025-05-11 23:39:09,481 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:09,481 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:09,481 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:39:09,507 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:39:11,580 [INFO] root: Health check requested
+2025-05-11 23:39:11,648 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:11,648 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:11,648 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:39:11,672 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 6.
+2025-05-11 23:39:13,745 [INFO] root: Health check requested
+2025-05-11 23:39:13,788 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:13,789 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:13,789 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:39:13,810 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:39:14,206 [INFO] root: Health check requested
+2025-05-11 23:39:14,250 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:14,250 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:15,895 [INFO] root: Health check requested
+2025-05-11 23:39:15,937 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:15,937 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:15,937 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:39:15,964 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:39:16,357 [INFO] root: Health check requested
+2025-05-11 23:39:16,399 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:39:16,399 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:39:18,016 [INFO] root: Health check requested
+2025-05-11 23:39:18,020 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:39:18,026 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:39:18,508 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:39:18,509 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 23:48:15,109 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 23:48:15,110 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:48:15,111 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 23:48:15,116 [INFO] root: Supabase client initialized successfully.
+2025-05-11 23:48:15,119 [INFO] root: Anthropic client initialized.
+2025-05-11 23:48:15,122 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 23:48:15,263 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 23:48:15,351 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['01organizations', '00gradient', 'wlg', 'tpframtiden', 'mindsu', 'wlaevent', 'sturebadet', 'playground', 'nordicequation', '03events', 'tre-hr', '_test', '02agents', '_agent', 'holistic', 'river', 'rr', 'cmf', 'ikea', 'lifegraph', 'roundtable', 'fabriclloyds', 'tpframtidenhr', 'yggdrasil']
+2025-05-11 23:48:15,861 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 23:48:15,862 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 23:48:15,862 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 23:48:15,862 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 23:48:38,509 [INFO] root: Health check requested
+2025-05-11 23:48:38,596 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:48:38,596 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:48:38,596 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:48:38,680 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 0.
+2025-05-11 23:48:38,680 [WARNING] utils.s3_utils: S3 LIST [WARN]: All 25 raw S3 objects were filtered out for prefix 'organizations/river/agents/river/events/0000/transcripts/'. This might indicate all items were in subfolders or did not match other criteria.
+2025-05-11 23:48:40,740 [INFO] root: Health check requested
+2025-05-11 23:48:40,785 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:48:40,785 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:48:40,785 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:48:40,812 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-11 23:48:42,889 [INFO] root: Health check requested
+2025-05-11 23:48:42,928 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:48:42,928 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:48:42,928 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:48:42,955 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-11 23:48:45,017 [INFO] root: Health check requested
+2025-05-11 23:48:45,058 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:48:45,058 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:48:45,058 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:48:45,079 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:48:47,127 [INFO] root: Health check requested
+2025-05-11 23:48:47,174 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:48:47,174 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:48:47,174 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:48:47,199 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:48:49,581 [INFO] root: Health check requested
+2025-05-11 23:48:49,587 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:48:49,599 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:48:50,443 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:48:50,443 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-11 23:49:03,818 [INFO] root: Health check requested
+2025-05-11 23:49:03,918 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:49:03,918 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:49:06,073 [INFO] root: Health check requested
+2025-05-11 23:49:06,128 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:49:06,128 [INFO] root: Received request /api/s3/view from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:53:59,485 [INFO] root: Logging setup complete. Level: INFO
+2025-05-11 23:53:59,487 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:53:59,487 [INFO] root: Pinecone initialized (or skipped).
+2025-05-11 23:53:59,492 [INFO] root: Supabase client initialized successfully.
+2025-05-11 23:53:59,496 [INFO] root: Anthropic client initialized.
+2025-05-11 23:53:59,499 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-11 23:53:59,620 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-11 23:53:59,707 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['tpframtidenhr', 'sturebadet', '_agent', 'holistic', 'lifegraph', '01organizations', '03events', '02agents', 'tpframtiden', 'cmf', 'rr', 'nordicequation', 'wlaevent', '00gradient', 'tre-hr', 'playground', 'yggdrasil', 'wlg', 'roundtable', '_test', 'river', 'mindsu', 'ikea', 'fabriclloyds']
+2025-05-11 23:53:59,990 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-11 23:53:59,991 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-11 23:53:59,991 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-11 23:53:59,991 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-11 23:54:17,094 [INFO] root: Health check requested
+2025-05-11 23:54:17,176 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:54:17,176 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:54:17,176 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-11 23:54:17,259 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 0.
+2025-05-11 23:54:17,259 [WARNING] utils.s3_utils: S3 LIST [WARN]: All 25 raw S3 objects were filtered out for prefix 'organizations/river/agents/river/events/0000/transcripts/'. This might indicate all items were in subfolders or did not match other criteria.
+2025-05-11 23:54:19,335 [INFO] root: Health check requested
+2025-05-11 23:54:19,387 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:54:19,387 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:54:19,387 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:54:19,412 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-11 23:54:21,479 [INFO] root: Health check requested
+2025-05-11 23:54:21,522 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:54:21,522 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:54:21,522 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-11 23:54:21,547 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-11 23:54:23,612 [INFO] root: Health check requested
+2025-05-11 23:54:23,656 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:54:23,656 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:54:23,656 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-11 23:54:23,676 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-11 23:54:25,763 [INFO] root: Health check requested
+2025-05-11 23:54:25,807 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-11 23:54:25,807 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-11 23:54:25,807 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-11 23:54:25,831 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-11 23:54:28,274 [INFO] root: Health check requested
+2025-05-11 23:54:28,277 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-11 23:54:28,281 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-11 23:54:29,010 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-11 23:54:29,011 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-12 00:00:54,852 [INFO] root: Health check requested
+2025-05-12 00:00:54,987 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:00:54,987 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:00:54,987 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-12 00:00:55,111 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 0.
+2025-05-12 00:00:55,111 [WARNING] utils.s3_utils: S3 LIST [WARN]: All 25 raw S3 objects were filtered out for prefix 'organizations/river/agents/river/events/0000/transcripts/'. This might indicate all items were in subfolders or did not match other criteria.
+2025-05-12 00:00:57,189 [INFO] root: Health check requested
+2025-05-12 00:00:57,234 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:00:57,234 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:00:57,234 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:00:57,265 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:00:59,339 [INFO] root: Health check requested
+2025-05-12 00:00:59,376 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:00:59,376 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:00:59,376 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:00:59,400 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:01:01,464 [INFO] root: Health check requested
+2025-05-12 00:01:01,525 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:01:01,525 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:01:01,526 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-12 00:01:01,555 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-12 00:01:03,650 [INFO] root: Health check requested
+2025-05-12 00:01:03,696 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:01:03,696 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:01:03,696 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-12 00:01:03,722 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-12 00:01:06,205 [INFO] root: Health check requested
+2025-05-12 00:01:06,214 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-12 00:01:06,229 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-12 00:01:06,729 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-12 00:01:06,730 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-12 00:07:53,178 [INFO] root: Health check requested
+2025-05-12 00:07:53,315 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:07:53,315 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:07:53,315 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-12 00:07:53,412 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 0.
+2025-05-12 00:07:53,412 [WARNING] utils.s3_utils: S3 LIST [WARN]: All 25 raw S3 objects were filtered out for prefix 'organizations/river/agents/river/events/0000/transcripts/'. This might indicate all items were in subfolders or did not match other criteria.
+2025-05-12 00:07:55,484 [INFO] root: Health check requested
+2025-05-12 00:07:55,540 [INFO] root: Health check requested
+2025-05-12 00:07:55,540 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:07:55,540 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:07:55,540 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-12 00:07:55,576 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 0.
+2025-05-12 00:07:55,576 [WARNING] utils.s3_utils: S3 LIST [WARN]: All 25 raw S3 objects were filtered out for prefix 'organizations/river/agents/river/events/0000/transcripts/'. This might indicate all items were in subfolders or did not match other criteria.
+2025-05-12 00:07:55,588 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:07:55,588 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:07:55,588 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:07:55,618 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:07:57,672 [INFO] root: Health check requested
+2025-05-12 00:07:57,731 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:07:57,731 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:07:57,731 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:07:57,768 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:07:59,821 [INFO] root: Health check requested
+2025-05-12 00:07:59,872 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:07:59,872 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:07:59,872 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:07:59,899 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:08:01,950 [INFO] root: Health check requested
+2025-05-12 00:08:01,987 [INFO] root: Health check requested
+2025-05-12 00:08:02,033 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:08:02,033 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:08:02,033 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:08:02,033 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:08:02,033 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:08:02,033 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-12 00:08:02,062 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:08:02,106 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-12 00:08:04,162 [INFO] root: Health check requested
+2025-05-12 00:08:04,170 [INFO] root: Health check requested
+2025-05-12 00:08:04,236 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:08:04,236 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:08:04,237 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:08:04,237 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-12 00:08:04,237 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:08:04,238 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-12 00:08:04,258 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-12 00:08:04,265 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-12 00:08:06,322 [INFO] root: Health check requested
+2025-05-12 00:08:06,373 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:08:06,373 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:08:06,373 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-12 00:08:06,403 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-12 00:08:06,659 [INFO] root: Health check requested
+2025-05-12 00:08:06,660 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-12 00:08:06,665 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-12 00:08:07,157 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-12 00:08:07,158 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-12 00:08:09,227 [INFO] root: Health check requested
+2025-05-12 00:08:09,238 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-12 00:08:09,241 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-12 00:08:09,701 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-12 00:08:09,701 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-12 00:27:38,807 [INFO] root: Logging setup complete. Level: INFO
+2025-05-12 00:27:38,810 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-12 00:27:38,810 [INFO] root: Pinecone initialized (or skipped).
+2025-05-12 00:27:38,816 [INFO] root: Supabase client initialized successfully.
+2025-05-12 00:27:38,820 [INFO] root: Anthropic client initialized.
+2025-05-12 00:27:38,823 [INFO] root: Agent Sync: Starting synchronization from S3 to Supabase...
+2025-05-12 00:27:38,951 [INFO] utils.s3_utils: S3 client initialized for region eu-north-1.
+2025-05-12 00:27:39,039 [INFO] utils.s3_utils: Found 24 potential agent directories in S3: ['01organizations', 'lifegraph', '00gradient', 'playground', 'rr', '03events', 'tre-hr', 'wlaevent', 'nordicequation', 'tpframtiden', 'fabriclloyds', 'ikea', 'yggdrasil', 'river', 'sturebadet', '_test', 'holistic', 'roundtable', '02agents', 'mindsu', '_agent', 'tpframtidenhr', 'cmf', 'wlg']
+2025-05-12 00:27:39,681 [INFO] root: Agent Sync: Found 24 agents in Supabase.
+2025-05-12 00:27:39,681 [INFO] root: Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.
+2025-05-12 00:27:39,681 [INFO] root: Auto-stop thread: Check every 300s for pauses > 7200s.
+2025-05-12 00:27:39,681 [INFO] root: Starting API server on port 5001 (Debug: False)
+2025-05-12 00:27:57,574 [INFO] root: Health check requested
+2025-05-12 00:27:57,687 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:27:57,687 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:27:57,687 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-12 00:27:57,776 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 0.
+2025-05-12 00:27:57,776 [WARNING] utils.s3_utils: S3 LIST [WARN]: All 25 raw S3 objects were filtered out for prefix 'organizations/river/agents/river/events/0000/transcripts/'. Check filtering logic or S3 structure.
+2025-05-12 00:27:59,844 [INFO] root: Health check requested
+2025-05-12 00:27:59,910 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:27:59,910 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:27:59,910 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:27:59,938 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:28:02,007 [INFO] root: Health check requested
+2025-05-12 00:28:02,061 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:28:02,061 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:28:02,061 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:28:02,086 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:28:04,158 [INFO] root: Health check requested
+2025-05-12 00:28:04,215 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:28:04,215 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:28:04,215 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-12 00:28:04,237 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-12 00:28:06,300 [INFO] root: Health check requested
+2025-05-12 00:28:06,362 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:28:06,362 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:28:06,362 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-12 00:28:06,387 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-12 00:28:08,777 [INFO] root: Health check requested
+2025-05-12 00:28:08,781 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-12 00:28:08,787 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-12 00:28:09,802 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-12 00:28:09,803 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-12 00:33:21,393 [INFO] root: Health check requested
+2025-05-12 00:33:21,533 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:33:21,533 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:21,533 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-12 00:33:21,618 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 25. Filtered objects_metadata count: 1.
+2025-05-12 00:33:23,693 [INFO] root: Health check requested
+2025-05-12 00:33:23,737 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:33:23,737 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:23,737 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:33:23,759 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:33:25,858 [INFO] root: Health check requested
+2025-05-12 00:33:25,894 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:33:25,894 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:25,894 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='_config/'
+2025-05-12 00:33:25,918 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='_config/'. Raw S3 objects found: 7. Filtered objects_metadata count: 2.
+2025-05-12 00:33:27,982 [INFO] root: Health check requested
+2025-05-12 00:33:28,020 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:33:28,020 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:28,020 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'
+2025-05-12 00:33:28,040 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/_config/'. Raw S3 objects found: 2. Filtered objects_metadata count: 1.
+2025-05-12 00:33:30,123 [INFO] root: Health check requested
+2025-05-12 00:33:30,167 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:33:30,167 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:30,168 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'
+2025-05-12 00:33:30,194 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/_config/'. Raw S3 objects found: 10. Filtered objects_metadata count: 9.
+2025-05-12 00:33:31,661 [INFO] root: Health check requested
+2025-05-12 00:33:31,780 [INFO] root: Health check requested
+2025-05-12 00:33:31,928 [INFO] root: Access Granted: User f8e3e957-5872-406f-83b6-121af5ab4dc9 authorized for agent river (ID: 0ea5fbed-706b-404d-b104-1ae60d8dd616).
+2025-05-12 00:33:31,928 [INFO] root: Start recording request from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:31,928 [INFO] root: Starting recording for Agent: river, Event: 0000, Lang: None
+2025-05-12 00:33:32,092 [INFO] root: Recording started successfully.
+2025-05-12 00:33:32,568 [INFO] root: Health check requested
+2025-05-12 00:33:32,571 [INFO] root: Request list unique docs index 'river', ns 'river' (fetch 100 IDs)
+2025-05-12 00:33:32,578 [INFO] utils.pinecone_utils: Pinecone initialized with environment: us-east-1
+2025-05-12 00:33:33,051 [INFO] root: Retrieved 100 vector IDs for parsing.
+2025-05-12 00:33:33,052 [INFO] root: Found 4 unique doc names in ns 'river'.
+2025-05-12 00:33:34,755 [INFO] root: Health check requested
+2025-05-12 00:33:36,835 [INFO] root: Health check requested
+2025-05-12 00:33:38,913 [INFO] root: Health check requested
+2025-05-12 00:33:39,933 [INFO] root: Health check requested
+2025-05-12 00:33:40,021 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:33:40,021 [INFO] root: Received request /api/s3/list from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:40,021 [INFO] utils.s3_utils: S3 LIST [BEGIN]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'
+2025-05-12 00:33:40,098 [INFO] utils.s3_utils: S3 LIST [SUMMARY]: Bucket='aiademomagicaudio', Prefix='organizations/river/agents/river/events/0000/transcripts/'. Raw S3 objects found: 26. Filtered objects_metadata count: 2.
+2025-05-12 00:33:41,003 [INFO] root: Health check requested
+2025-05-12 00:33:43,087 [INFO] root: Health check requested
+2025-05-12 00:33:45,182 [INFO] root: Health check requested
+2025-05-12 00:33:47,243 [INFO] root: Health check requested
+2025-05-12 00:33:47,388 [INFO] root: Health check requested
+2025-05-12 00:33:47,468 [WARNING] root: Authorization check skipped for user f8e3e957-5872-406f-83b6-121af5ab4dc9: No agent_name provided.
+2025-05-12 00:33:47,468 [INFO] root: Stop recording request from user: f8e3e957-5872-406f-83b6-121af5ab4dc9
+2025-05-12 00:33:47,468 [INFO] root: Stop recording requested. Initiating background stop...
+2025-05-12 00:33:47,468 [INFO] root: Background stop thread started.
+2025-05-12 00:33:47,469 [INFO] root: Stop recording request acknowledged. Background cleanup initiated.
+2025-05-12 00:33:49,311 [INFO] root: Health check requested
+2025-05-12 00:33:51,097 [INFO] root: Background stop thread: magic_audio.stop() completed.
+2025-05-12 00:33:51,097 [INFO] root: Background stop thread finished.
+2025-05-12 00:33:51,393 [INFO] root: Health check requested
+2025-05-12 00:33:53,455 [INFO] root: Health check requested
+2025-05-12 00:33:55,538 [INFO] root: Health check requested
+2025-05-12 00:33:57,656 [INFO] root: Health check requested
