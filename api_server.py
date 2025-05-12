@@ -1,4 +1,3 @@
-# api_server.py
 import os
 import sys
 import logging
@@ -9,12 +8,21 @@ import time
 import json
 from datetime import datetime, timezone, timedelta
 import urllib.parse 
+from functools import wraps # For decorator
+from typing import Optional, List, Dict, Any, Tuple, Union 
 import uuid 
 from collections import defaultdict
+import subprocess # For ffmpeg
+
+# WebSocket library
 from flask_sock import Sock 
+
+# Supabase Imports
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError
+from gotrue.types import User as SupabaseUser # Import the User type for type hinting
 
+# Import necessary modules from our project
 from utils.retrieval_handler import RetrievalHandler
 from utils.transcript_utils import TranscriptState, read_new_transcript_content
 from utils.s3_utils import (
@@ -85,9 +93,12 @@ SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
     "jepp :)", "inga problem :)", "precis :)"
 ])
 
-anthropic_client: Anthropic | None = None
-try: init_pinecone(); logger.info("Pinecone initialized (or skipped).")
-except Exception as e: logger.warning(f"Pinecone initialization failed: {e}")
+anthropic_client: Optional[Anthropic] = None
+try: 
+    init_pinecone()
+    logger.info("Pinecone initialized (or skipped).")
+except Exception as e: 
+    logger.warning(f"Pinecone initialization failed: {e}")
 
 supabase: Optional[Client] = None
 try:
@@ -101,7 +112,7 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}", exc_info=True)
 
-transcript_state_cache = {} 
+transcript_state_cache: Dict[Tuple[str, str], TranscriptState] = {} 
 transcript_state_lock = threading.Lock() 
 
 try:
@@ -109,43 +120,92 @@ try:
     if not anthropic_api_key: raise ValueError("ANTHROPIC_API_KEY not found")
     anthropic_client = Anthropic(api_key=anthropic_api_key)
     logger.info("Anthropic client initialized.")
-except Exception as e: logger.critical(f"Failed Anthropic client init: {e}", exc_info=True); anthropic_client = None
+except Exception as e: 
+    logger.critical(f"Failed Anthropic client init: {e}", exc_info=True)
+    anthropic_client = None
 
-def log_retry_error(retry_state): logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
+def log_retry_error(retry_state): 
+    logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
 retry_strategy = retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry_error_callback=log_retry_error, retry=(retry_if_exception_type(APIStatusError)))
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
-session_locks = defaultdict(threading.Lock) 
+session_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock) 
 
-def verify_user(token: Optional[str]) -> Optional[Dict[str, Any]]:
-    if not supabase: logger.error("Auth check failed: Supabase client not initialized."); return None
-    if not token: logger.warning("Auth check failed: No token provided."); return None
+def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: # Return type changed to SupabaseUser
+    """Verifies the JWT and returns the Supabase User object or None."""
+    if not supabase:
+        logger.error("Auth check failed: Supabase client not initialized.")
+        return None
+
+    if not token:
+        logger.warning("Auth check failed: No token provided.")
+        return None
+
     try:
         user_resp = supabase.auth.get_user(token)
-        if user_resp and hasattr(user_resp, 'user') and user_resp.user:
+        # The user object is directly on user_resp.user
+        if user_resp and user_resp.user:
             logger.debug(f"Token verified for user ID: {user_resp.user.id}")
-            return user_resp.user
+            return user_resp.user 
         else:
-            logger.warning("Auth check failed: Invalid token or user not found.")
+            logger.warning("Auth check failed: Invalid token or user not found in response.")
             return None
-    except AuthApiError as e: logger.warning(f"Auth API Error during token verification: {e}"); return None
-    except Exception as e: logger.error(f"Unexpected error during token verification: {e}", exc_info=True); return None
+    except AuthApiError as e:
+        logger.warning(f"Auth API Error during token verification: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error during token verification: {e}", exc_info=True)
+        return None
 
-def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[Response]]:
-    if not supabase: logger.error("Auth check failed: Supabase client not initialized."); return None, jsonify({"error": "Auth service unavailable"}), 503
+def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]: # User object type changed
+    """Verifies JWT, checks user access to the agent by name, returns (user_object_or_None, Flask_Response_Object_or_None)."""
+    if not supabase:
+        logger.error("Auth check failed: Supabase client not initialized.")
+        return None, jsonify({"error": "Auth service unavailable"}, 503)
+
     user = verify_user(token)
-    if not user: return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
-    if not agent_name: logger.warning(f"Authorization check skipped for user {user.id}: No agent_name provided."); return user, None
+    if not user: 
+        return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
+    
+    if not agent_name:
+        logger.debug(f"Authorization check: User {user.id} authenticated. No specific agent access check required for this route.")
+        return user, None
+
     try:
         agent_res = supabase.table("agents").select("id").eq("name", agent_name).limit(1).execute()
-        if hasattr(agent_res, 'error') and agent_res.error: logger.error(f"DB error finding agent_id for '{agent_name}': {agent_res.error}"); return None, jsonify({"error": "Database error checking agent"}), 500
-        if not agent_res.data: logger.warning(f"Auth check failed: Agent '{agent_name}' not found."); return None, jsonify({"error": "Forbidden: Agent not found"}), 403
+        if hasattr(agent_res, 'error') and agent_res.error:
+            logger.error(f"Database error finding agent_id for name '{agent_name}': {agent_res.error}")
+            return None, jsonify({"error": "Database error checking agent"}), 500
+        if not agent_res.data:
+            logger.warning(f"Authorization check failed: Agent with name '{agent_name}' not found in DB.")
+            return None, jsonify({"error": "Forbidden: Agent not found"}), 403
+        
         agent_id = agent_res.data[0]['id']
-        access_res = supabase.table("user_agent_access").select("agent_id").eq("user_id", user.id).eq("agent_id", agent_id).limit(1).execute()
-        if hasattr(access_res, 'error') and access_res.error: logger.error(f"DB error checking access user {user.id}/agent {agent_name}: {access_res.error}"); return None, jsonify({"error": "Database error checking permissions"}), 500
-        if not access_res.data: logger.warning(f"Access Denied: User {user.id} to agent {agent_name}."); return None, jsonify({"error": "Forbidden: Access denied to this agent"}), 403
-        logger.info(f"Access Granted: User {user.id} for agent {agent_name}."); return user, None
-    except Exception as e: logger.error(f"Unexpected error agent access check user {user.id}/agent {agent_name}: {e}", exc_info=True); return None, jsonify({"error": "Internal server error during authorization"}), 500
+        logger.debug(f"Found agent_id '{agent_id}' for name '{agent_name}'.")
+
+        access_res = supabase.table("user_agent_access") \
+            .select("agent_id") \
+            .eq("user_id", user.id) \
+            .eq("agent_id", agent_id) \
+            .limit(1) \
+            .execute()
+
+        logger.debug(f"DB Check for user {user.id} accessing agent {agent_name} (ID: {agent_id}): {access_res.data}")
+
+        if hasattr(access_res, 'error') and access_res.error:
+            logger.error(f"Database error checking access for user {user.id} / agent {agent_name}: {access_res.error}")
+            return None, jsonify({"error": "Database error checking permissions"}), 500
+
+        if not access_res.data:
+            logger.warning(f"Access Denied: User {user.id} does not have access to agent {agent_name} (ID: {agent_id}).")
+            return None, jsonify({"error": "Forbidden: Access denied to this agent"}), 403
+
+        logger.info(f"Access Granted: User {user.id} authorized for agent {agent_name} (ID: {agent_id}).")
+        return user, None 
+
+    except Exception as e:
+        logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
+        return None, jsonify({"error": "Internal server error during authorization"}), 500
 
 def supabase_auth_required(agent_required: bool = True):
     def decorator(f):
@@ -153,16 +213,29 @@ def supabase_auth_required(agent_required: bool = True):
         def decorated_function(*args, **kwargs):
             auth_header = request.headers.get("Authorization")
             token = None
-            if auth_header and auth_header.startswith("Bearer "): token = auth_header.split(" ", 1)[1]
-            agent_name = None
+            if auth_header and auth_header.startswith("Bearer "): 
+                token = auth_header.split(" ", 1)[1]
+            
+            agent_name_from_payload = None
             if agent_required:
-                if request.is_json and request.json and 'agent' in request.json: agent_name = request.json.get('agent')
-                elif 'payload' in request.args and 'agent' in request.args.get('payload', type=dict): agent_name = request.args.get('payload', type=dict).get('agent')
-                elif 'agent' in request.args : agent_name = request.args.get('agent')
+                if request.is_json and request.json and 'agent' in request.json:
+                    agent_name_from_payload = request.json.get('agent')
+                elif 'agent' in request.args: # Check query params for GET or if agent is passed in query for POST
+                    agent_name_from_payload = request.args.get('agent')
+                # Example for payload in query for GET (less common for POST-style actions)
+                # elif 'payload' in request.args:
+                #     try:
+                #         payload_dict = json.loads(request.args.get('payload'))
+                #         agent_name_from_payload = payload_dict.get('agent')
+                #     except (json.JSONDecodeError, TypeError):
+                #         pass # Ignore if payload is not valid JSON or not a dict
 
-            user, error_response = verify_user_agent_access(token, agent_name if agent_required else None)
-            if error_response: status_code = error_response.status_code; error_json = error_response.get_json(); return jsonify(error_json), status_code
-            return f(user=user, *args, **kwargs)
+            user, error_response = verify_user_agent_access(token, agent_name_from_payload if agent_required else None)
+            if error_response: 
+                status_code = error_response.status_code if hasattr(error_response, 'status_code') else 500
+                error_json = error_response.get_json() if hasattr(error_response, 'get_json') else {"error": "Unknown authorization error"}
+                return jsonify(error_json), status_code
+            return f(user=user, *args, **kwargs) 
         return decorated_function
     return decorator
 
@@ -175,7 +248,7 @@ def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
 @app.route('/api/health', methods=['GET'])
 def health_check():
     logger.info("Health check requested")
-    return jsonify({"status": "ok", "message": "Backend is running", "anthropic_client": anthropic_client is not None, "s3_client": get_s3_client() is not None}), 200
+    return jsonify({"status": "ok", "message": "Backend is running", "anthropic_client_initialized": anthropic_client is not None, "s3_client_initialized": get_s3_client() is not None}), 200
 
 def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> Dict[str, Any]:
     if session_id and session_id in active_sessions:
@@ -189,27 +262,24 @@ def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> 
             "event": session.get('event_id'),
             "current_total_audio_duration_processed_seconds": session.get('current_total_audio_duration_processed_seconds', 0)
         }
-    if not active_sessions: return {"is_recording": False, "is_backend_processing_paused": False}
-    first_active = next((s for s_id, s in active_sessions.items() if s.get('is_active')), None)
-    if first_active:
-        return {
-            "is_recording": True, 
-            "is_backend_processing_paused": first_active.get('is_backend_processing_paused', False),
-            "agent": first_active.get('agent_name'),
-            "event": first_active.get('event_id'),
-        }
-    return {"is_recording": False, "is_backend_processing_paused": False}
+    if not active_sessions: return {"is_recording": False, "is_backend_processing_paused": False, "message": "No active sessions"}
+    
+    first_active_session_id = next((s_id for s_id, s_data in active_sessions.items() if s_data.get('is_active')), None)
+    if first_active_session_id:
+        return _get_current_recording_status_snapshot(first_active_session_id) 
+    
+    return {"is_recording": False, "is_backend_processing_paused": False, "message": "No currently active recording sessions"}
 
 @app.route('/api/recording/start', methods=['POST'])
-@supabase_auth_required(agent_required=True)
-def start_recording_route(user):
+@supabase_auth_required(agent_required=True) 
+def start_recording_route(user: SupabaseUser): 
     data = request.json
-    agent_name = data.get('agent')
+    agent_name = data.get('agent') 
     event_id = data.get('event')
-    language = data.get('language') # Language from client if provided
+    language = data.get('language') 
     
-    if not agent_name or not event_id:
-        return jsonify({"status": "error", "message": "Missing agent or event ID"}), 400
+    if not event_id: 
+        return jsonify({"status": "error", "message": "Missing event ID"}), 400
 
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
@@ -217,35 +287,32 @@ def start_recording_route(user):
     s3_transcript_base_filename = f"transcript_D{session_start_time_utc.strftime('%Y%m%d')}-T{session_start_time_utc.strftime('%H%M%S')}_uID-{user.id}_oID-river_aID-{agent_name}_eID-{event_id}_sID-{session_id}.txt"
     s3_transcript_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/{s3_transcript_base_filename}"
     
-    temp_audio_dir = os.path.join('tmp', 'audio_sessions', session_id)
-    os.makedirs(temp_audio_dir, exist_ok=True)
-    # temp_audio_file_path will be where the continuously appended raw audio goes for the whole session.
-    # Segments for transcription will be extracted from this.
-    temp_audio_file_path = os.path.join(temp_audio_dir, 'session_audio_stream.raw') 
-
+    temp_audio_base_dir = os.path.join('tmp', 'audio_sessions', session_id)
+    os.makedirs(temp_audio_base_dir, exist_ok=True)
+    
     active_sessions[session_id] = {
         "user_id": user.id,
         "agent_name": agent_name,
         "event_id": event_id,
-        "language": language, # Store language
+        "language": language, 
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_transcript_key,
-        "temp_audio_file_path": temp_audio_file_path, # Path to the main accumulating audio file
+        "temp_audio_session_dir": temp_audio_base_dir, 
         "is_backend_processing_paused": False,
         "current_total_audio_duration_processed_seconds": 0.0,
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True, 
-        "audio_buffer_for_current_segment": bytearray(), # Buffer for audio bytes intended for the *next* transcription segment
-        "accumulated_audio_duration_for_current_segment_seconds": 0.0, # Duration in the above buffer
+        "audio_buffer_for_current_segment": bytearray(), 
+        "accumulated_audio_duration_for_current_segment_seconds": 0.0,
     }
     logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
-    logger.info(f"Session raw audio path: {temp_audio_file_path}, S3 transcript key: {s3_transcript_key}")
+    logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
     
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if s3 and aws_s3_bucket:
-        header = f"# Transcript - Session {session_id}\nAgent: {agent_name}, Event: {event_id}\nStarted: {session_start_time_utc.isoformat()}\n\n"
+        header = f"# Transcript - Session {session_id}\nAgent: {agent_name}, Event: {event_id}\nUser: {user.id}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
         try:
             s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=header.encode('utf-8'))
             logger.info(f"Initialized S3 transcript file: {s3_transcript_key}")
@@ -267,28 +334,19 @@ def _finalize_session(session_id: str):
 
     logger.info(f"Finalizing session {session_id}...")
     session_data = active_sessions[session_id]
-    session_data["is_active"] = False # Mark as inactive first
+    session_data["is_active"] = False 
     
-    # Process any remaining audio in session_data['audio_buffer_for_current_segment']
     if session_data['audio_buffer_for_current_segment']:
-        logger.info(f"Processing remaining {len(session_data['audio_buffer_for_current_segment'])} bytes of audio for session {session_id}")
-        
-        temp_segment_dir = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), "segments")
-        os.makedirs(temp_segment_dir, exist_ok=True)
-        temp_segment_path = os.path.join(temp_segment_dir, f"final_segment_{uuid.uuid4().hex}.wav")
-        
-        try:
-        if session_data['audio_buffer_for_current_segment']: # Use the correct buffer name
         logger.info(f"Processing remaining {len(session_data['audio_buffer_for_current_segment'])} bytes of audio for session {session_id} during finalization.")
         
         remaining_audio_data = bytes(session_data['audio_buffer_for_current_segment'])
         session_data['audio_buffer_for_current_segment'].clear()
 
-        temp_segment_dir = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), "segments")
+        temp_segment_dir = os.path.join(session_data['temp_audio_session_dir'], "segments")
         os.makedirs(temp_segment_dir, exist_ok=True)
         
         final_base_filename = f"final_segment_{uuid.uuid4().hex}"
-        final_input_blob_path = os.path.join(temp_segment_dir, f"{final_base_filename}.webm")
+        final_input_blob_path = os.path.join(temp_segment_dir, f"{final_base_filename}.webm") 
         final_output_wav_path = os.path.join(temp_segment_dir, f"{final_base_filename}.wav")
 
         try:
@@ -297,7 +355,7 @@ def _finalize_session(session_id: str):
             logger.info(f"Saved final audio blob to {final_input_blob_path}")
 
             ffmpeg_command = [
-                'ffmpeg', '-y',
+                'ffmpeg', '-y', 
                 '-i', final_input_blob_path,
                 '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le',
                 final_output_wav_path
@@ -316,53 +374,54 @@ def _finalize_session(session_id: str):
         finally:
             if os.path.exists(final_input_blob_path):
                 try: os.remove(final_input_blob_path)
-                except OSError: pass 
+                except OSError: pass
             if os.path.exists(final_output_wav_path):
                 try: os.remove(final_output_wav_path)
                 except OSError: pass
 
-    # 2. Close WebSocket if open
     ws = session_data.get("websocket_connection")
+    if ws:
         try:
             logger.info(f"Closing WebSocket for session {session_id}.")
             ws.close(reason="Session stopped by server")
         except Exception as e:
             logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
     
-    temp_session_audio_dir = os.path.dirname(session_data['temp_audio_file_path']) # This is tmp/audio_sessions/<session_id>
+    temp_session_audio_dir = session_data['temp_audio_session_dir']
     if os.path.exists(temp_session_audio_dir):
         try:
-            # Clean up segments subdirectory first
             segments_dir = os.path.join(temp_session_audio_dir, "segments")
             if os.path.exists(segments_dir):
                 for f_name in os.listdir(segments_dir): os.remove(os.path.join(segments_dir, f_name))
                 os.rmdir(segments_dir)
-            # Clean up main session audio file (if it was used, currently buffer is in memory)
-            if os.path.exists(session_data['temp_audio_file_path']):
-                 os.remove(session_data['temp_audio_file_path'])
-            os.rmdir(temp_session_audio_dir) # Remove the session's main temp directory
+            
+            main_audio_file_placeholder = os.path.join(temp_session_audio_dir, 'session_audio_stream.raw')
+            if os.path.exists(main_audio_file_placeholder):
+                 os.remove(main_audio_file_placeholder)
+            os.rmdir(temp_session_audio_dir) 
             logger.info(f"Cleaned up temporary directory: {temp_session_audio_dir}")
         except Exception as e:
             logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
 
     if session_id in active_sessions: 
         del active_sessions[session_id]
-    if session_id in session_locks: # Clean up lock too
+    if session_id in session_locks: 
         del session_locks[session_id]
     logger.info(f"Session {session_id} finalized and removed from active sessions.")
 
 @app.route('/api/recording/stop', methods=['POST'])
-@supabase_auth_required(agent_required=False)
-def stop_recording_route(user):
+@supabase_auth_required(agent_required=False) 
+def stop_recording_route(user: SupabaseUser): 
     data = request.json
     session_id = data.get('session_id')
     if not session_id:
         return jsonify({"status": "error", "message": "Missing session_id"}), 400
 
-    logger.info(f"Stop recording request for session {session_id} by user {user.id}")
+    logger.info(f"Stop recording request for session {session_id} by user {user.id}") 
     
     if session_id not in active_sessions:
-        return jsonify({"status": "error", "message": "Session not found or already stopped", "session_id": session_id}), 404
+        logger.warning(f"Stop request for session {session_id}, but session not found in active_sessions. It might have already been finalized.")
+        return jsonify({"status": "success", "message": "Session already stopped or not found", "session_id": session_id}), 200 
     
     _finalize_session(session_id)
     
@@ -376,7 +435,7 @@ def stop_recording_route(user):
 @sock.route('/ws/audio_stream/<session_id>')
 def audio_stream_socket(ws, session_id: str):
     token = request.args.get('token')
-    user = verify_user(token)
+    user = verify_user(token) 
     
     if not user:
         logger.warning(f"WebSocket Auth Failed: Invalid token for session {session_id}. Closing.")
@@ -401,12 +460,6 @@ def audio_stream_socket(ws, session_id: str):
     logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
     AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15 
-    # Assume 16kHz, 16-bit mono for estimation if not specified by client
-    active_sessions[session_id]["is_active"] = True
-    logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
-
-    AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15
-    import subprocess # For ffmpeg
 
     try:
         while True:
@@ -429,13 +482,13 @@ def audio_stream_socket(ws, session_id: str):
                     control_msg = json.loads(message)
                     action = control_msg.get("action")
                     logger.info(f"WebSocket session {session_id}: Received control message: {control_msg}")
-                    if action == "set_processing_state":
+                    if action == "set_processing_state": 
                         active_sessions[session_id]["is_backend_processing_paused"] = control_msg.get("paused", False)
                         logger.info(f"Session {session_id}: Backend audio processing "
                                     f"{'paused' if control_msg.get('paused') else 'resumed'} based on client state.")
-                    elif action == "stop_stream":
+                    elif action == "stop_stream": 
                         logger.info(f"WebSocket session {session_id}: Received 'stop_stream'. Initiating finalization.")
-                        _finalize_session(session_id)
+                        _finalize_session(session_id) 
                         break 
                 except json.JSONDecodeError:
                     logger.warning(f"WebSocket session {session_id}: Received invalid JSON control message: {message}")
@@ -446,8 +499,6 @@ def audio_stream_socket(ws, session_id: str):
                 session_data = active_sessions[session_id]
                 session_data["audio_buffer_for_current_segment"].extend(message)
                 
-                # Estimate duration, client sends blobs of `timeslice` (e.g., 3000ms).
-                # TODO: Make this more accurate or use client-sent duration.
                 session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 # Placeholder
 
                 if not session_data["is_backend_processing_paused"] and \
@@ -457,29 +508,26 @@ def audio_stream_socket(ws, session_id: str):
                     
                     segment_data_to_process = bytes(session_data["audio_buffer_for_current_segment"]) 
                     session_data["audio_buffer_for_current_segment"].clear() 
-                    # We use the estimated duration here for triggering, actual duration for S3 offset is determined by Whisper.
                     session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
 
-                    temp_segment_dir = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), "segments")
+                    temp_segment_dir = os.path.join(session_data['temp_audio_session_dir'], "segments")
                     os.makedirs(temp_segment_dir, exist_ok=True)
                     
-                    # Assume client sends WebM/Opus. Client MediaRecorder typically produces .webm
                     base_filename = f"segment_{datetime.now().strftime('%H%M%S%f')}"
                     temp_input_blob_path = os.path.join(temp_segment_dir, f"{base_filename}.webm")
                     temp_output_wav_path = os.path.join(temp_segment_dir, f"{base_filename}.wav")
                     
                     try:
                         with open(temp_input_blob_path, 'wb') as f_blob:
-                            f_blob.write(segment_data_to_process)
+                            f_blob.write(segment_data_to_process) 
                         logger.info(f"Session {session_id}: Saved segment blob to {temp_input_blob_path} ({len(segment_data_to_process)} bytes)")
                         
-                        # Convert to WAV using ffmpeg
                         ffmpeg_command = [
-                            'ffmpeg', '-y', # -y to overwrite output file if it exists
+                            'ffmpeg', '-y', 
                             '-i', temp_input_blob_path,
-                            '-ar', '16000',        # Audio sample rate 16kHz
-                            '-ac', '1',            # Mono audio
-                            '-acodec', 'pcm_s16le', # Signed 16-bit PCM little-endian
+                            '-ar', '16000',        
+                            '-ac', '1',            
+                            '-acodec', 'pcm_s16le', 
                             temp_output_wav_path
                         ]
                         logger.info(f"Session {session_id}: Executing ffmpeg: {' '.join(ffmpeg_command)}")
@@ -489,8 +537,7 @@ def audio_stream_socket(ws, session_id: str):
                             logger.error(f"Session {session_id}: ffmpeg conversion failed for {temp_input_blob_path}. Return code: {result.returncode}")
                             logger.error(f"ffmpeg stderr: {result.stderr}")
                             logger.error(f"ffmpeg stdout: {result.stdout}")
-                            # Skip transcription for this segment if conversion fails
-                            continue # To the next message in WebSocket loop
+                            continue 
                         
                         logger.info(f"Session {session_id}: Successfully converted {temp_input_blob_path} to {temp_output_wav_path}")
                         
@@ -501,11 +548,11 @@ def audio_stream_socket(ws, session_id: str):
                         
                     except Exception as e:
                         logger.error(f"Session {session_id}: Error during segment conversion/processing for {temp_input_blob_path}: {e}", exc_info=True)
-                    finally:
+                    finally: 
                         if os.path.exists(temp_input_blob_path):
                             try: os.remove(temp_input_blob_path)
                             except OSError as e_del: logger.warning(f"Error deleting temp blob {temp_input_blob_path}: {e_del}")
-                        if os.path.exists(temp_output_wav_path):
+                        if os.path.exists(temp_output_wav_path): 
                             try: os.remove(temp_output_wav_path)
                             except OSError as e_del: logger.warning(f"Error deleting temp wav {temp_output_wav_path}: {e_del}")
             
@@ -528,7 +575,8 @@ def audio_stream_socket(ws, session_id: str):
 
 @app.route('/api/recording/status', methods=['GET'])
 def get_recording_status_route():
-    status_data = _get_current_recording_status_snapshot() 
+    session_id_param = request.args.get('session_id')
+    status_data = _get_current_recording_status_snapshot(session_id_param) 
     return jsonify(status_data), 200
 
 @app.route('/api/index/<string:index_name>/stats', methods=['GET'])
@@ -564,17 +612,18 @@ def list_vector_ids_in_namespace(index_name: str, namespace_name: str):
         list_response = index.list(namespace=query_namespace, limit=limit)
         vector_ids = []; next_page_token = None
         try:
-            if hasattr(list_response, '__iter__'):
-                 for id_batch in list_response:
+            if hasattr(list_response, '__iter__'): 
+                 for id_batch in list_response: 
                      if isinstance(id_batch, list) and all(isinstance(item, str) for item in id_batch): vector_ids.extend(id_batch);
-                     elif hasattr(id_batch, 'ids') and isinstance(id_batch.ids, list): vector_ids.extend(id_batch.ids);
-                     else: logger.warning(f"Unexpected item type from list gen: {type(id_batch)}");
-                     if len(vector_ids) >= limit: vector_ids = vector_ids[:limit]; break
-            else:
-                logger.warning(f"index.list() not iterable. Type: {type(list_response)}")
+                     elif hasattr(id_batch, 'ids') and isinstance(id_batch.ids, list): vector_ids.extend(id_batch.ids); 
+                     else: logger.warning(f"Unexpected item type from list generator: {type(id_batch)}");
+                     if len(vector_ids) >= limit: vector_ids = vector_ids[:limit]; break 
+            else: 
+                logger.warning(f"index.list() did not return a generator. Type: {type(list_response)}")
                 if hasattr(list_response, 'ids') and isinstance(list_response.ids, list): vector_ids = list_response.ids[:limit]
                 elif hasattr(list_response, 'vectors') and isinstance(list_response.vectors, list): vector_ids = [v.id for v in list_response.vectors][:limit]
-                if hasattr(list_response, 'pagination') and list_response.pagination and hasattr(list_response.pagination, 'next'): next_page_token = list_response.pagination.next
+                if hasattr(list_response, 'pagination') and list_response.pagination and hasattr(list_response.pagination, 'next'):
+                    next_page_token = list_response.pagination.next
         except Exception as proc_e: logger.error(f"Error processing list response: {proc_e}", exc_info=True)
         logger.info(f"Found {len(vector_ids)} vector IDs in '{query_namespace}'. Next Token: {next_page_token}")
         return jsonify({"namespace": namespace_name, "vector_ids": vector_ids, "next_token": next_page_token}), 200
@@ -594,22 +643,34 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
         query_namespace = "" if namespace_name == "_default" else namespace_name
         vector_ids_to_parse = []
         try:
-            list_response = index.list(namespace=query_namespace, limit=limit); count = 0
-            if hasattr(list_response, '__iter__'):
+            list_response = index.list(namespace=query_namespace, limit=limit); 
+            count = 0
+            if hasattr(list_response, '__iter__'): 
                  for id_batch in list_response:
                      if isinstance(id_batch, list) and all(isinstance(item, str) for item in id_batch): vector_ids_to_parse.extend(id_batch); count += len(id_batch)
                      else: logger.warning(f"Unexpected item type from list gen: {type(id_batch)}")
-                     if count >= limit: break
-            else: logger.warning(f"index.list() not iterable. Type: {type(list_response)}")
-            logger.info(f"Retrieved {len(vector_ids_to_parse)} vector IDs for parsing.")
+                     if count >= limit: break 
+            elif hasattr(list_response, 'ids') and isinstance(list_response.ids, list): 
+                vector_ids_to_parse = list_response.ids
+            else: logger.warning(f"index.list() returned unexpected type: {type(list_response)}")
+
+            logger.info(f"Retrieved {len(vector_ids_to_parse)} vector IDs for parsing document names.")
         except Exception as list_e: logger.error(f"Error listing vector IDs: {list_e}", exc_info=True); return jsonify({"error": "Failed list vector IDs from Pinecone"}), 500
+        
         unique_doc_names = set()
         for vec_id in vector_ids_to_parse:
             try:
                 last_underscore_index = vec_id.rfind('_')
-                if last_underscore_index != -1: unique_doc_names.add(urllib.parse.unquote_plus(vec_id[:last_underscore_index]))
-                else: logger.warning(f"Vector ID '{vec_id}' no expected suffix.")
+                if last_underscore_index != -1: 
+                    doc_name_part = vec_id[:last_underscore_index]
+                    if vec_id[last_underscore_index+1:].isdigit():
+                         unique_doc_names.add(urllib.parse.unquote_plus(doc_name_part))
+                    else: 
+                         unique_doc_names.add(urllib.parse.unquote_plus(vec_id)) 
+                else: 
+                    unique_doc_names.add(urllib.parse.unquote_plus(vec_id))
             except Exception as parse_e: logger.error(f"Error parsing vector ID '{vec_id}': {parse_e}")
+        
         sorted_doc_names = sorted(list(unique_doc_names))
         logger.info(f"Found {len(sorted_doc_names)} unique doc names in ns '{query_namespace}'.")
         return jsonify({"index": index_name, "namespace": namespace_name, "unique_document_names": sorted_doc_names, "vector_ids_checked": len(vector_ids_to_parse)}), 200
@@ -617,8 +678,8 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
 
 @app.route('/api/s3/list', methods=['GET'])
 @supabase_auth_required(agent_required=False)
-def list_s3_documents(user):
-    logger.info(f"Received request /api/s3/list from user: {user.id}")
+def list_s3_documents(user: SupabaseUser):
+    logger.info(f"Received request /api/s3/list from user: {user.id}") 
     s3_prefix = request.args.get('prefix')
     if not s3_prefix: return jsonify({"error": "Missing 'prefix' query parameter"}), 400
     try:
@@ -643,8 +704,8 @@ def list_s3_documents(user):
 
 @app.route('/api/s3/view', methods=['GET'])
 @supabase_auth_required(agent_required=False)
-def view_s3_document(user):
-    logger.info(f"Received request /api/s3/view from user: {user.id}")
+def view_s3_document(user: SupabaseUser):
+    logger.info(f"Received request /api/s3/view from user: {user.id}") 
     s3_key = request.args.get('s3Key')
     if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
     try:
@@ -656,8 +717,8 @@ def view_s3_document(user):
 
 @app.route('/api/s3/download', methods=['GET'])
 @supabase_auth_required(agent_required=False)
-def download_s3_document(user):
-    logger.info(f"Received request /api/s3/download from user: {user.id}")
+def download_s3_document(user: SupabaseUser):
+    logger.info(f"Received request /api/s3/download from user: {user.id}") 
     s3_key = request.args.get('s3Key'); filename_param = request.args.get('filename')
     if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
     s3 = get_s3_client(); aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
@@ -675,8 +736,8 @@ def download_s3_document(user):
 
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
-def handle_chat(user): 
-    logger.info(f"Received request /api/chat method: {request.method} from user: {user.id}")
+def handle_chat(user: SupabaseUser): 
+    logger.info(f"Received request /api/chat method: {request.method} from user: {user.id}") 
     global transcript_state_cache
     if not anthropic_client: logger.error("Chat fail: Anthropic client not init."); return jsonify({"error": "AI service unavailable"}), 503
     try:
@@ -777,7 +838,7 @@ def cleanup_idle_sessions():
         time.sleep(5 * 60) 
         now = time.time()
         sessions_to_cleanup = []
-        for session_id, session_data in list(active_sessions.items()):
+        for session_id, session_data in list(active_sessions.items()): # Iterate over a copy
             if not session_data.get("is_active", False): 
                  if now - session_data.get("last_activity_timestamp", 0) > (15 * 60): 
                       logger.warning(f"Found stale inactive session {session_id}. Adding to cleanup queue.")
@@ -793,9 +854,9 @@ def cleanup_idle_sessions():
                 logger.warning(f"Session {session_id} has an active WebSocket but is idle. Marking for cleanup.")
                 sessions_to_cleanup.append(session_id)
         
-        for session_id in sessions_to_cleanup:
-            logger.info(f"Idle session cleanup: Finalizing session {session_id}")
-            _finalize_session(session_id)
+        for session_id_to_clean in sessions_to_cleanup:
+            logger.info(f"Idle session cleanup: Finalizing session {session_id_to_clean}")
+            _finalize_session(session_id_to_clean)
 
 if __name__ == '__main__':
     if supabase: sync_agents_from_s3_to_supabase()
@@ -807,7 +868,18 @@ if __name__ == '__main__':
 
     port = int(os.getenv('PORT', 5001)); debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
-    use_reloader = False 
+    use_reloader_env = os.getenv('FLASK_USE_RELOADER', 'False').lower() == 'true'
     
+    # For Gunicorn, it handles workers. For local `python api_server.py`, Flask's reloader is used if debug_mode.
+    # However, with background threads, reloader can cause issues (e.g. duplicate threads).
+    # It's often better to explicitly control reloader for stability during development with threads.
+    # If GUNICORN_CMD env var is set (like in Render's Dockerfile), Gunicorn is managing the app.
     if not os.getenv("GUNICORN_CMD"): 
-        app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=use_reloader)
+        # When running directly with `python api_server.py`:
+        # If debug_mode is True, Flask's default is use_reloader=True.
+        # We set use_reloader based on FLASK_USE_RELOADER or keep it False if not specified to avoid thread issues.
+        effective_reloader = use_reloader_env if debug_mode else False
+        logger.info(f"Running with Flask dev server. Debug: {debug_mode}, Reloader: {effective_reloader}")
+        app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=effective_reloader)
+    else:
+        logger.info("Gunicorn is expected to manage the application. Flask's app.run() will not be called directly.")
