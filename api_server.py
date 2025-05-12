@@ -6,23 +6,29 @@ from dotenv import load_dotenv
 import threading
 import time
 import json
-from datetime import datetime, timezone, timedelta # Added timedelta
+from datetime import datetime, timezone, timedelta
 import urllib.parse # For decoding filenames in IDs
 from functools import wraps # For decorator
-from typing import Optional, List, Dict, Any, Tuple # Added Tuple
+from typing import Optional, List, Dict, Any, Tuple 
+import uuid # For generating session IDs
+from collections import defaultdict
+
+# WebSocket library
+from flask_sock import Sock # Import Sock
 
 # Supabase Imports
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError
 
 # Import necessary modules from our project
-from magic_audio import MagicAudio
+# MagicAudio import might be removed or refactored if its direct use for recording is gone
+# from magic_audio import MagicAudio 
 from utils.retrieval_handler import RetrievalHandler
-from utils.transcript_utils import TranscriptState, read_new_transcript_content, read_all_transcripts_in_folder, get_latest_transcript_file
+from utils.transcript_utils import TranscriptState, read_new_transcript_content #, read_all_transcripts_in_folder, get_latest_transcript_file
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
-    list_agent_names_from_s3, list_s3_objects_metadata # Import the new functions
+    list_agent_names_from_s3, list_s3_objects_metadata 
 )
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
@@ -43,25 +49,24 @@ def setup_logging(debug=False):
     except Exception as e: print(f"Error setting up file logger: {e}", file=sys.stderr)
     ch = logging.StreamHandler(sys.stdout); ch.setLevel(log_level)
     cf = logging.Formatter('[%(levelname)-8s] %(name)s: %(message)s'); ch.setFormatter(cf); root_logger.addHandler(ch)
-    for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug']:
+    for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock']:
         logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.info(f"Logging setup complete. Level: {logging.getLevelName(log_level)}")
     return root_logger
 
-# Log S3 bucket name on startup
 s3_bucket_on_startup = os.getenv('AWS_S3_BUCKET')
-startup_logger = logging.getLogger(__name__ + ".startup") # Use a distinct logger for startup messages
+startup_logger = logging.getLogger(__name__ + ".startup") 
 if s3_bucket_on_startup:
     startup_logger.info(f"AWS_S3_BUCKET on startup: '{s3_bucket_on_startup}'")
 else:
     startup_logger.error("AWS_S3_BUCKET environment variable is NOT SET at startup!")
 
-
 logger = setup_logging(debug=os.getenv('FLASK_DEBUG', 'False').lower() == 'true')
 
 app = Flask(__name__)
-CORS(app)
+CORS(app) 
+sock = Sock(app) 
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 
 SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
@@ -85,21 +90,10 @@ SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
     "jepp :)", "inga problem :)", "precis :)"
 ])
 
-magic_audio_instance: MagicAudio | None = None
-magic_audio_lock = threading.Lock()
-recording_status = {
-    "is_recording": False, "is_paused": False, "start_time": None,
-    "pause_start_time": None, # Tracks start of current pause period
-    "last_pause_timestamp": None, # Tracks the absolute time the last pause began, used for auto-stop
-    "elapsed_time": 0, # Stores cumulative elapsed time *excluding* pauses
-    "agent": None, "event": None
-}
-
 anthropic_client: Anthropic | None = None
 try: init_pinecone(); logger.info("Pinecone initialized (or skipped).")
 except Exception as e: logger.warning(f"Pinecone initialization failed: {e}")
 
-# Initialize Supabase Client
 supabase: Optional[Client] = None
 try:
     supabase_url = os.environ.get("SUPABASE_URL")
@@ -112,8 +106,8 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}", exc_info=True)
 
-transcript_state_cache = {}
-transcript_state_lock = threading.Lock()
+transcript_state_cache = {} 
+transcript_state_lock = threading.Lock() 
 
 try:
     anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -125,124 +119,57 @@ except Exception as e: logger.critical(f"Failed Anthropic client init: {e}", exc
 def log_retry_error(retry_state): logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
 retry_strategy = retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry_error_callback=log_retry_error, retry=(retry_if_exception_type(APIStatusError)))
 
-# --- Supabase Auth Helper Functions ---
+active_sessions: Dict[str, Dict[str, Any]] = {}
+session_locks = defaultdict(threading.Lock) 
 
 def verify_user(token: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Verifies the JWT and returns the user object or None."""
-    if not supabase:
-        logger.error("Auth check failed: Supabase client not initialized.")
-        return None # Or raise an internal server error
-
-    if not token:
-        logger.warning("Auth check failed: No token provided.")
-        return None
-
+    if not supabase: logger.error("Auth check failed: Supabase client not initialized."); return None
+    if not token: logger.warning("Auth check failed: No token provided."); return None
     try:
-        # Verify the token and get user data
         user_resp = supabase.auth.get_user(token)
-        # Check if user data exists and is valid
         if user_resp and hasattr(user_resp, 'user') and user_resp.user:
             logger.debug(f"Token verified for user ID: {user_resp.user.id}")
             return user_resp.user
         else:
             logger.warning("Auth check failed: Invalid token or user not found.")
             return None
-    except AuthApiError as e:
-        logger.warning(f"Auth API Error during token verification: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error during token verification: {e}", exc_info=True)
-        return None
+    except AuthApiError as e: logger.warning(f"Auth API Error during token verification: {e}"); return None
+    except Exception as e: logger.error(f"Unexpected error during token verification: {e}", exc_info=True); return None
 
 def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[Response]]:
-    """Verifies JWT, checks user access to the agent by name, returns (user, error_response)."""
-    if not supabase:
-        logger.error("Auth check failed: Supabase client not initialized.")
-        return None, jsonify({"error": "Auth service unavailable"}), 503
-
+    if not supabase: logger.error("Auth check failed: Supabase client not initialized."); return None, jsonify({"error": "Auth service unavailable"}), 503
     user = verify_user(token)
-    if not user:
-        return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
-
-    if not agent_name:
-        logger.warning(f"Authorization check skipped for user {user.id}: No agent_name provided.")
-        return user, None # Assume agent check is optional if not provided
-
+    if not user: return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
+    if not agent_name: logger.warning(f"Authorization check skipped for user {user.id}: No agent_name provided."); return user, None
     try:
-        # 1. Find the agent_id from the agent_name
         agent_res = supabase.table("agents").select("id").eq("name", agent_name).limit(1).execute()
-        if hasattr(agent_res, 'error') and agent_res.error:
-            logger.error(f"Database error finding agent_id for name '{agent_name}': {agent_res.error}")
-            return None, jsonify({"error": "Database error checking agent"}), 500
-        if not agent_res.data:
-            logger.warning(f"Authorization check failed: Agent with name '{agent_name}' not found in DB.")
-            # Treat as forbidden - agent doesn't exist for permission check
-            return None, jsonify({"error": "Forbidden: Agent not found"}), 403
+        if hasattr(agent_res, 'error') and agent_res.error: logger.error(f"DB error finding agent_id for '{agent_name}': {agent_res.error}"); return None, jsonify({"error": "Database error checking agent"}), 500
+        if not agent_res.data: logger.warning(f"Auth check failed: Agent '{agent_name}' not found."); return None, jsonify({"error": "Forbidden: Agent not found"}), 403
         agent_id = agent_res.data[0]['id']
-        logger.debug(f"Found agent_id '{agent_id}' for name '{agent_name}'.")
+        access_res = supabase.table("user_agent_access").select("agent_id").eq("user_id", user.id).eq("agent_id", agent_id).limit(1).execute()
+        if hasattr(access_res, 'error') and access_res.error: logger.error(f"DB error checking access user {user.id}/agent {agent_name}: {access_res.error}"); return None, jsonify({"error": "Database error checking permissions"}), 500
+        if not access_res.data: logger.warning(f"Access Denied: User {user.id} to agent {agent_name}."); return None, jsonify({"error": "Forbidden: Access denied to this agent"}), 403
+        logger.info(f"Access Granted: User {user.id} for agent {agent_name}."); return user, None
+    except Exception as e: logger.error(f"Unexpected error agent access check user {user.id}/agent {agent_name}: {e}", exc_info=True); return None, jsonify({"error": "Internal server error during authorization"}), 500
 
-        # 2. Check user access using user_id and agent_id
-        access_res = supabase.table("user_agent_access") \
-            .select("agent_id") \
-            .eq("user_id", user.id) \
-            .eq("agent_id", agent_id) \
-            .limit(1) \
-            .execute()
-
-        logger.debug(f"DB Check for user {user.id} accessing agent {agent_name} (ID: {agent_id}): {access_res.data}")
-
-        if hasattr(access_res, 'error') and access_res.error:
-            logger.error(f"Database error checking access for user {user.id} / agent {agent_name}: {access_res.error}")
-            return None, jsonify({"error": "Database error checking permissions"}), 500
-
-        if not access_res.data:
-            logger.warning(f"Access Denied: User {user.id} does not have access to agent {agent_name} (ID: {agent_id}).")
-            return None, jsonify({"error": "Forbidden: Access denied to this agent"}), 403
-
-        logger.info(f"Access Granted: User {user.id} authorized for agent {agent_name} (ID: {agent_id}).")
-        return user, None # User is authenticated and authorized
-
-    except Exception as e:
-        logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
-        return None, jsonify({"error": "Internal server error during authorization"}), 500
-
-# Decorator for simplified route protection
 def supabase_auth_required(agent_required: bool = True):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             auth_header = request.headers.get("Authorization")
             token = None
-            if auth_header and auth_header.startswith("Bearer "):
-                token = auth_header.split(" ", 1)[1]
-
-            agent_name = None # Use agent name now
+            if auth_header and auth_header.startswith("Bearer "): token = auth_header.split(" ", 1)[1]
+            agent_name = None
             if agent_required:
-                # Attempt to get agent name from request JSON body first
-                if request.is_json and request.json and 'agent' in request.json:
-                    agent_name = request.json.get('agent')
-                # Or from Flask route parameters if not in body (adapt as needed)
-                # Example: if agent_name is part of the URL like /api/agent/<agent_name>
-                # agent_name = kwargs.get('agent_name') # This depends on your route definition
+                if request.is_json and request.json and 'agent' in request.json: agent_name = request.json.get('agent')
+                elif 'payload' in request.args and 'agent' in request.args.get('payload', type=dict): agent_name = request.args.get('payload', type=dict).get('agent')
+                elif 'agent' in request.args : agent_name = request.args.get('agent')
 
-            # Pass agent_name to the verification function
             user, error_response = verify_user_agent_access(token, agent_name if agent_required else None)
-
-            if error_response:
-                # Return the error response directly from the helper
-                status_code = error_response.status_code
-                error_json = error_response.get_json()
-                return jsonify(error_json), status_code
-
-            # Inject user object into the request context or pass as argument if needed
-            # For simplicity, we'll just proceed if auth is successful.
-            # You could use Flask's 'g' object: g.user = user
-            return f(user=user, *args, **kwargs) # Pass user object to the route function
+            if error_response: status_code = error_response.status_code; error_json = error_response.get_json(); return jsonify(error_json), status_code
+            return f(user=user, *args, **kwargs)
         return decorated_function
     return decorator
-
-# --- End Supabase Auth Helper Functions ---
-
 
 @retry_strategy
 def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
@@ -255,196 +182,297 @@ def health_check():
     logger.info("Health check requested")
     return jsonify({"status": "ok", "message": "Backend is running", "anthropic_client": anthropic_client is not None, "s3_client": get_s3_client() is not None}), 200
 
-@app.route('/api/status', methods=['GET'])
-def get_app_status():
-    with magic_audio_lock: rec_status = recording_status.copy()
-    status_data = {
-        'agent_name': rec_status.get("agent", "N/A"), 'event_id': rec_status.get("event", "N/A"),
-        'listen_transcript': False, 'memory_enabled': True,
-        'is_recording': rec_status.get("is_recording", False), 'is_paused': rec_status.get("is_paused", False),
-    }
-    logger.debug(f"Reporting app status: {status_data}")
-    return jsonify(status_data), 200
+def transcription_service_placeholder(audio_file_path: str, session_data: Dict[str, Any]):
+    logger.info(f"TRANSCRIPTION_PLACEHOLDER: Would transcribe {audio_file_path} for session {session_data.get('session_id')}")
+    time.sleep(0.5) 
+    s3_key = session_data.get('s3_transcript_key', 'unknown_transcript.txt')
+    new_transcript_line = f"[{datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]}] Placeholder transcribed text for {os.path.basename(audio_file_path)}\n"
+    
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if s3 and aws_s3_bucket:
+        try:
+            with session_locks[session_data['session_id']]: 
+                existing_content = ""
+                try:
+                    obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_key)
+                    existing_content = obj['Body'].read().decode('utf-8')
+                except s3.exceptions.NoSuchKey:
+                    logger.info(f"S3 transcript {s3_key} not found, creating new.")
+                
+                updated_content = existing_content + new_transcript_line
+                s3.put_object(Bucket=aws_s3_bucket, Key=s3_key, Body=updated_content.encode('utf-8'))
+                logger.info(f"TRANSCRIPTION_PLACEHOLDER: Appended to S3 {s3_key}")
+        except Exception as e:
+            logger.error(f"TRANSCRIPTION_PLACEHOLDER: S3 error {e}")
+    
+    segment_duration_seconds = 3.0 
+    session_data['current_total_audio_duration_processed_seconds'] = session_data.get('current_total_audio_duration_processed_seconds', 0.0) + segment_duration_seconds
+    logger.info(f"TRANSCRIPTION_PLACEHOLDER: Updated processed duration for session {session_data['session_id']} to {session_data['current_total_audio_duration_processed_seconds']:.2f}s")
 
-def _get_current_recording_status_snapshot():
-    """Helper to get a snapshot of the current recording status for responses.
-       Calculates current elapsed time dynamically if recording and not paused.
-    """
-    status_copy = recording_status.copy() # Work with a copy
-    calculated_elapsed = status_copy["elapsed_time"] # Start with stored cumulative time
+    try: os.remove(audio_file_path); logger.info(f"TRANSCRIPTION_PLACEHOLDER: Deleted temp segment {audio_file_path}")
+    except OSError as e: logger.error(f"TRANSCRIPTION_PLACEHOLDER: Error deleting temp segment {audio_file_path}: {e}")
 
-    if status_copy["is_recording"] and not status_copy["is_paused"] and status_copy["start_time"]:
-        # If actively recording, add time since last resume/start
-        calculated_elapsed = time.time() - status_copy["start_time"]
-
-    return {
-        "is_recording": status_copy["is_recording"],
-        "is_paused": status_copy["is_paused"],
-        "elapsed_time": int(calculated_elapsed),
-        "agent": status_copy.get("agent"),
-        "event": status_copy.get("event"),
-        "last_pause_timestamp": status_copy.get("last_pause_timestamp") # Include this field
-    }
+def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> Dict[str, Any]:
+    if session_id and session_id in active_sessions:
+        session = active_sessions[session_id]
+        return {
+            "session_id": session_id,
+            "is_recording": session.get('is_active', False),
+            "is_backend_processing_paused": session.get('is_backend_processing_paused', False),
+            "session_start_time_utc": session.get('session_start_time_utc').isoformat() if session.get('session_start_time_utc') else None,
+            "agent": session.get('agent_name'),
+            "event": session.get('event_id'),
+            "current_total_audio_duration_processed_seconds": session.get('current_total_audio_duration_processed_seconds', 0)
+        }
+    if not active_sessions: return {"is_recording": False, "is_backend_processing_paused": False}
+    first_active = next((s for s_id, s in active_sessions.items() if s.get('is_active')), None)
+    if first_active:
+        return {
+            "is_recording": True, 
+            "is_backend_processing_paused": first_active.get('is_backend_processing_paused', False),
+            "agent": first_active.get('agent_name'),
+            "event": first_active.get('event_id'),
+        }
+    return {"is_recording": False, "is_backend_processing_paused": False}
 
 @app.route('/api/recording/start', methods=['POST'])
-@supabase_auth_required(agent_required=True) # Requires agent in payload
-def start_recording_route(user): # User object passed by decorator
-    global magic_audio_instance, recording_status
-    logger.info(f"Start recording request from user: {user.id}")
-    with magic_audio_lock:
-        if recording_status["is_recording"]:
-            return jsonify({"status": "error", "message": "Already recording", "recording_status": _get_current_recording_status_snapshot()}), 400
-        data = request.json; agent = data.get('agent'); event = data.get('event'); language = data.get('language')
-        # Agent already verified by decorator, no need to check existence here
-        if not event: # Check event explicitly
-            return jsonify({"status": "error", "message": "Missing event", "recording_status": _get_current_recording_status_snapshot()}), 400
-        logger.info(f"Starting recording for Agent: {agent}, Event: {event}, Lang: {language}")
-        try:
-            if magic_audio_instance:
-                try: magic_audio_instance.stop() # Ensure previous stops completely first
-                except Exception as e: logger.warning(f"Error stopping previous audio instance: {e}")
-            magic_audio_instance = MagicAudio(agent=agent, event=event, language=language)
-            magic_audio_instance.start()
-            recording_status.update({
-                "is_recording": True, "is_paused": False, "start_time": time.time(),
-                "pause_start_time": None, # Reset pause specific fields
-                "last_pause_timestamp": None, # Reset this field too
-                "elapsed_time": 0, # Reset elapsed time
-                "agent": agent, "event": event
-            })
-            logger.info("Recording started successfully.")
-            return jsonify({"status": "success", "message": "Recording started", "recording_status": _get_current_recording_status_snapshot()})
-        except Exception as e:
-            logger.error(f"Failed to start recording: {e}", exc_info=True); magic_audio_instance = None
-            recording_status.update({"is_recording": False, "is_paused": False, "start_time": None, "elapsed_time": 0, "agent": None, "event": None})
-            return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
+@supabase_auth_required(agent_required=True)
+def start_recording_route(user):
+    data = request.json
+    agent_name = data.get('agent')
+    event_id = data.get('event')
+    
+    if not agent_name or not event_id:
+        return jsonify({"status": "error", "message": "Missing agent or event ID"}), 400
 
-def _stop_magic_audio_async(instance_to_stop):
-    """Function to run magic_audio.stop() in a separate thread."""
-    global magic_audio_instance # Need global to potentially clear the instance ref
-    if instance_to_stop:
-        logger.info("Background stop thread started.")
+    session_id = uuid.uuid4().hex
+    session_start_time_utc = datetime.now(timezone.utc)
+    
+    s3_transcript_base_filename = f"transcript_D{session_start_time_utc.strftime('%Y%m%d')}-T{session_start_time_utc.strftime('%H%M%S')}_uID-{user.id}_oID-river_aID-{agent_name}_eID-{event_id}_sID-{session_id}.txt"
+    s3_transcript_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/{s3_transcript_base_filename}"
+    
+    temp_audio_dir = os.path.join('tmp', 'audio_sessions', session_id)
+    os.makedirs(temp_audio_dir, exist_ok=True)
+    temp_audio_file_path = os.path.join(temp_audio_dir, 'audio.raw')
+
+    active_sessions[session_id] = {
+        "user_id": user.id,
+        "agent_name": agent_name,
+        "event_id": event_id,
+        "session_start_time_utc": session_start_time_utc,
+        "s3_transcript_key": s3_transcript_key,
+        "temp_audio_file_path": temp_audio_file_path,
+        "is_backend_processing_paused": False,
+        "current_total_audio_duration_processed_seconds": 0.0,
+        "websocket_connection": None,
+        "last_activity_timestamp": time.time(),
+        "is_active": True, 
+        "audio_buffer": bytearray(), 
+        "accumulated_audio_since_last_transcription_seconds": 0.0,
+    }
+    logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
+    logger.info(f"Temp audio path: {temp_audio_file_path}, S3 key: {s3_transcript_key}")
+    
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if s3 and aws_s3_bucket:
+        header = f"# Transcript - Session {session_id}\nAgent: {agent_name}, Event: {event_id}\nStarted: {session_start_time_utc.isoformat()}\n\n"
         try:
-            instance_to_stop.stop() # This might block
-            logger.info("Background stop thread: magic_audio.stop() completed.")
-            # Clear global instance only if it hasn't been replaced by a new one
-            with magic_audio_lock:
-                if magic_audio_instance == instance_to_stop:
-                    magic_audio_instance = None
-                    logger.info("Background stop thread: Cleared global magic_audio_instance.")
+            s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=header.encode('utf-8'))
+            logger.info(f"Initialized S3 transcript file: {s3_transcript_key}")
         except Exception as e:
-            logger.error(f"Background stop thread error: {e}", exc_info=True)
-        logger.info("Background stop thread finished.")
-    else:
-        logger.warning("Background stop thread: No instance provided to stop.")
+            logger.error(f"Failed to initialize S3 transcript file {s3_transcript_key}: {e}")
+
+    return jsonify({
+        "status": "success", 
+        "message": "Recording session initiated", 
+        "session_id": session_id,
+        "session_start_time_utc": session_start_time_utc.isoformat(),
+        "recording_status": _get_current_recording_status_snapshot(session_id)
+    })
+
+def _finalize_session(session_id: str):
+    if session_id not in active_sessions:
+        logger.warning(f"Finalize: Session {session_id} not found or already cleaned up.")
+        return
+
+    logger.info(f"Finalizing session {session_id}...")
+    session_data = active_sessions[session_id]
+    
+    if session_data['audio_buffer']:
+        logger.info(f"Processing remaining {len(session_data['audio_buffer'])} bytes of audio for session {session_id}")
+        temp_segment_path = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), f"final_segment_{uuid.uuid4().hex}.wav")
+        try:
+            with open(temp_segment_path, 'wb') as f:
+                f.write(session_data['audio_buffer']) 
+            logger.info(f"Saved final segment to {temp_segment_path}")
+            transcription_service_placeholder(temp_segment_path, session_data) 
+        except Exception as e:
+            logger.error(f"Error processing final audio segment for session {session_id}: {e}")
+        finally:
+            if os.path.exists(temp_segment_path):
+                try: os.remove(temp_segment_path)
+                except OSError: pass 
+
+    ws = session_data.get("websocket_connection")
+    if ws:
+        try:
+            logger.info(f"Closing WebSocket for session {session_id}.")
+            ws.close(reason="Session stopped by server")
+        except Exception as e:
+            logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
+    
+    temp_audio_dir = os.path.dirname(session_data['temp_audio_file_path'])
+    if os.path.exists(temp_audio_dir):
+        try:
+            for f_name in os.listdir(temp_audio_dir): os.remove(os.path.join(temp_audio_dir, f_name))
+            os.rmdir(temp_audio_dir)
+            logger.info(f"Cleaned up temporary directory: {temp_audio_dir}")
+        except Exception as e:
+            logger.error(f"Error cleaning up temp directory {temp_audio_dir}: {e}")
+
+    if session_id in active_sessions: 
+        del active_sessions[session_id]
+    logger.info(f"Session {session_id} finalized and removed from active sessions.")
 
 @app.route('/api/recording/stop', methods=['POST'])
-@supabase_auth_required(agent_required=False) # Just need authentication
-def stop_recording_route(user): # User object passed by decorator
-    global magic_audio_instance, recording_status
-    logger.info(f"Stop recording request from user: {user.id}")
-    with magic_audio_lock:
-        if not recording_status["is_recording"] or not magic_audio_instance:
-            recording_status.update({"is_recording": False, "is_paused": False, "start_time": None, "pause_start_time": None, "last_pause_timestamp": None, "elapsed_time": 0})
-            logger.info("Stop called but not recording or instance missing. Status reset.")
-            return jsonify({"status": "success", "message": "Not recording or instance missing", "recording_status": _get_current_recording_status_snapshot()}), 200
+@supabase_auth_required(agent_required=False)
+def stop_recording_route(user):
+    data = request.json
+    session_id = data.get('session_id')
+    if not session_id:
+        return jsonify({"status": "error", "message": "Missing session_id"}), 400
 
-        logger.info("Stop recording requested. Initiating background stop...")
+    logger.info(f"Stop recording request for session {session_id} by user {user.id}")
+    
+    if session_id not in active_sessions:
+        return jsonify({"status": "error", "message": "Session not found or already stopped", "session_id": session_id}), 404
+    
+    _finalize_session(session_id)
+    
+    return jsonify({
+        "status": "success", 
+        "message": "Recording session stopped", 
+        "session_id": session_id,
+        "recording_status": {"is_recording": False, "is_backend_processing_paused": False} 
+    })
 
-        # --- Optimistic Update & Async Stop ---
-        # 1. Capture the instance to stop
-        instance_to_stop = magic_audio_instance
-        magic_audio_instance = None # Immediately nullify global ref to prevent reuse
+@sock.route('/ws/audio_stream/<session_id>')
+def audio_stream_socket(ws, session_id: str):
+    token = request.args.get('token')
+    user = verify_user(token)
+    
+    if not user:
+        logger.warning(f"WebSocket Auth Failed: Invalid token for session {session_id}. Closing.")
+        ws.close(reason='Authentication failed')
+        return
 
-        # 2. Calculate final elapsed time *before* resetting status
-        final_elapsed_time = recording_status["elapsed_time"] # Start with stored cumulative
-        if recording_status["is_recording"] and not recording_status["is_paused"] and recording_status["start_time"]:
-             # If it was running when stop was called, add the last running duration
-             final_elapsed_time = time.time() - recording_status["start_time"]
+    logger.info(f"WebSocket connection attempt for session {session_id}, user {user.id}")
 
-        # 3. Update global status optimistically (reflecting stopped state)
-        recording_status.update({
-            "is_recording": False, "is_paused": False, "start_time": None,
-            "pause_start_time": None, "last_pause_timestamp": None,
-            "elapsed_time": int(final_elapsed_time) # Store calculated time
-        })
+    if session_id not in active_sessions:
+        logger.warning(f"WebSocket: Session {session_id} not found. Closing.")
+        ws.close(reason='Session not found or not initialized')
+        return
+    
+    if active_sessions[session_id].get("websocket_connection") is not None:
+        logger.warning(f"WebSocket: Session {session_id} already has a WebSocket connection. Closing new one.")
+        ws.close(reason='Session already has an active stream')
+        return
 
-        # 4. Start background thread to call the blocking stop method
-        stop_thread = threading.Thread(target=_stop_magic_audio_async, args=(instance_to_stop,))
-        stop_thread.daemon = True # Allow app to exit even if this thread hangs (though stop should eventually finish)
-        stop_thread.start()
+    active_sessions[session_id]["websocket_connection"] = ws
+    active_sessions[session_id]["last_activity_timestamp"] = time.time()
+    active_sessions[session_id]["is_active"] = True 
+    logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
-        # 5. Return success response immediately
-        logger.info("Stop recording request acknowledged. Background cleanup initiated.")
-        # Return the status reflecting the *optimistic* stopped state
-        final_status = _get_current_recording_status_snapshot()
-        final_status["elapsed_time"] = 0 # Explicitly set 0 for UI stop
-        return jsonify({"status": "success", "message": "Stop initiated", "recording_status": final_status})
+    AUDIO_SEGMENT_DURATION_SECONDS = 15 
 
-@app.route('/api/recording/pause', methods=['POST'])
-@supabase_auth_required(agent_required=False) # Just need authentication
-def pause_recording_route(user): # User object passed by decorator
-    global magic_audio_instance, recording_status
-    logger.info(f"Pause recording request from user: {user.id}")
-    with magic_audio_lock:
-        if not recording_status["is_recording"] or not magic_audio_instance:
-            return jsonify({"status": "error", "message": "Not recording", "recording_status": _get_current_recording_status_snapshot()}), 400
-        if recording_status["is_paused"]:
-            return jsonify({"status": "success", "message": "Already paused", "recording_status": _get_current_recording_status_snapshot()}), 200
-        logger.info("Pausing recording...")
-        try:
-            magic_audio_instance.pause()
-            pause_time = time.time()
-            recording_status["is_paused"] = True
-            recording_status["pause_start_time"] = pause_time
-            recording_status["last_pause_timestamp"] = pause_time # Record the absolute time pause began
-            if recording_status["start_time"]:
-                # Update the stored elapsed time up to the pause point
-                recording_status["elapsed_time"] = pause_time - recording_status["start_time"]
-            logger.info("Recording paused.")
-            return jsonify({"status": "success", "message": "Recording paused", "recording_status": _get_current_recording_status_snapshot()})
-        except Exception as e:
-            logger.error(f"Error pausing recording: {e}", exc_info=True)
-            return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
+    try:
+        while True:
+            message = ws.receive(timeout=1) 
 
-@app.route('/api/recording/resume', methods=['POST'])
-@supabase_auth_required(agent_required=False) # Just need authentication
-def resume_recording_route(user): # User object passed by decorator
-    global magic_audio_instance, recording_status
-    logger.info(f"Resume recording request from user: {user.id}")
-    with magic_audio_lock:
-        if not recording_status["is_recording"] or not magic_audio_instance:
-            return jsonify({"status": "error", "message": "Not recording", "recording_status": _get_current_recording_status_snapshot()}), 400
-        if not recording_status["is_paused"]:
-            return jsonify({"status": "success", "message": "Not paused", "recording_status": _get_current_recording_status_snapshot()}), 200
-        logger.info("Resuming recording...")
-        try:
-            # Adjust start_time based on how long it was paused
-            if recording_status["pause_start_time"] and recording_status["start_time"]:
-                pause_duration = time.time() - recording_status["pause_start_time"]
-                # Effectively shift the start time forward by the pause duration
-                # This means elapsed time = current_time - adjusted_start_time
-                recording_status["start_time"] += pause_duration
-                logger.debug(f"Resuming after {pause_duration:.2f}s pause. Adjusted start time.")
-            else: logger.warning("Could not calculate pause duration accurately on resume.")
+            if message is None: 
+                if active_sessions.get(session_id) and (time.time() - active_sessions[session_id]["last_activity_timestamp"] > 60): 
+                    logger.warning(f"WebSocket for session {session_id} timed out due to inactivity. Closing.")
+                    break 
+                continue 
 
-            magic_audio_instance.resume()
-            recording_status["is_paused"] = False
-            recording_status["pause_start_time"] = None # Clear current pause start
-            recording_status["last_pause_timestamp"] = None # Clear absolute pause timestamp
-            logger.info("Recording resumed.")
-            return jsonify({"status": "success", "message": "Recording resumed", "recording_status": _get_current_recording_status_snapshot()})
-        except Exception as e:
-            logger.error(f"Error resuming recording: {e}", exc_info=True)
-            return jsonify({"status": "error", "message": str(e), "recording_status": _get_current_recording_status_snapshot()}), 500
+            active_sessions[session_id]["last_activity_timestamp"] = time.time()
+
+            if isinstance(message, str):
+                try:
+                    control_msg = json.loads(message)
+                    action = control_msg.get("action")
+                    logger.info(f"WebSocket session {session_id}: Received control message: {control_msg}")
+                    if action == "set_processing_state":
+                        active_sessions[session_id]["is_backend_processing_paused"] = control_msg.get("paused", False)
+                        logger.info(f"Session {session_id}: Backend processing "
+                                    f"{'paused' if control_msg.get('paused') else 'resumed'}.")
+                    elif action == "stop_stream":
+                        logger.info(f"WebSocket session {session_id}: Received 'stop_stream'. Initiating finalization.")
+                        ws.close(reason="Client requested stop_stream") 
+                        break 
+                except json.JSONDecodeError:
+                    logger.warning(f"WebSocket session {session_id}: Received invalid JSON control message: {message}")
+                except Exception as e:
+                    logger.error(f"WebSocket session {session_id}: Error processing control message '{message}': {e}")
+
+            elif isinstance(message, bytes):
+                session_data = active_sessions[session_id]
+                session_data["audio_buffer"].extend(message)
+                
+                bytes_per_second = 16000 * 2 
+                estimated_duration_of_chunk = len(message) / bytes_per_second
+                session_data["accumulated_audio_since_last_transcription_seconds"] += estimated_duration_of_chunk
+
+                if not session_data["is_backend_processing_paused"] and \
+                   session_data["accumulated_audio_since_last_transcription_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS:
+                    
+                    logger.info(f"Session {session_id}: Accumulated {session_data['accumulated_audio_since_last_transcription_seconds']:.2f}s of audio. Processing.")
+                    
+                    segment_data_to_process = bytes(session_data["audio_buffer"]) 
+                    session_data["audio_buffer"].clear() 
+                    session_data["accumulated_audio_since_last_transcription_seconds"] = 0.0
+
+                    temp_segment_path = os.path.join(
+                        os.path.dirname(session_data['temp_audio_file_path']), 
+                        f"segment_{datetime.now().strftime('%H%M%S%f')}.wav" 
+                    )
+                    try:
+                        with open(temp_segment_path, 'wb') as f_seg:
+                            f_seg.write(segment_data_to_process) 
+                        logger.info(f"Session {session_id}: Saved segment to {temp_segment_path} ({len(segment_data_to_process)} bytes)")
+                        
+                        transcription_service_placeholder(temp_segment_path, session_data)
+                    except Exception as e:
+                        logger.error(f"Session {session_id}: Error saving/processing segment {temp_segment_path}: {e}")
+                        if os.path.exists(temp_segment_path):
+                            try: os.remove(temp_segment_path)
+                            except OSError: pass
+            
+            if session_id not in active_sessions:
+                logger.info(f"WebSocket session {session_id}: Session was externally stopped. Closing connection.")
+                if not ws.closed: ws.close(reason="Session stopped externally")
+                break
+
+    except ConnectionResetError:
+        logger.warning(f"WebSocket for session {session_id} (user {user.id}): Connection reset by client.")
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
+    finally:
+        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected.")
+        if session_id in active_sessions and active_sessions[session_id].get("is_active", False):
+            logger.info(f"WebSocket for session {session_id} disconnected; ensuring session finalization.")
+            active_sessions[session_id]["is_active"] = False 
+            _finalize_session(session_id) 
+        else:
+            logger.info(f"WebSocket for session {session_id}: Session already finalized or marked inactive.")
 
 @app.route('/api/recording/status', methods=['GET'])
 def get_recording_status_route():
-    with magic_audio_lock:
-        status_data = _get_current_recording_status_snapshot()
+    status_data = _get_current_recording_status_snapshot() 
     return jsonify(status_data), 200
 
-# --- Pinecone Routes (Unchanged) ---
 @app.route('/api/index/<string:index_name>/stats', methods=['GET'])
 def get_pinecone_index_stats(index_name: str):
     logger.info(f"Request received for stats of index: {index_name}")
@@ -529,119 +557,76 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
         return jsonify({"index": index_name, "namespace": namespace_name, "unique_document_names": sorted_doc_names, "vector_ids_checked": len(vector_ids_to_parse)}), 200
     except Exception as e: logger.error(f"Error listing unique docs index '{index_name}', ns '{namespace_name}': {e}", exc_info=True); return jsonify({"error": "Unexpected error listing documents"}), 500
 
-# --- S3 Document Management API Routes ---
 @app.route('/api/s3/list', methods=['GET'])
-@supabase_auth_required(agent_required=False) # No specific agent context needed, just auth
+@supabase_auth_required(agent_required=False)
 def list_s3_documents(user):
     logger.info(f"Received request /api/s3/list from user: {user.id}")
     s3_prefix = request.args.get('prefix')
-    if not s3_prefix:
-        return jsonify({"error": "Missing 'prefix' query parameter"}), 400
-
+    if not s3_prefix: return jsonify({"error": "Missing 'prefix' query parameter"}), 400
     try:
         s3_objects = list_s3_objects_metadata(s3_prefix)
-        # Transform to frontend-friendly format
         formatted_files = []
         for obj in s3_objects:
-            # Skip folder objects that might be returned by list_objects_v2 if prefix doesn't end with /
-            if obj['Key'].endswith('/') and obj['Size'] == 0:
-                continue
-
-            filename = os.path.basename(obj['Key'])
-            # Basic type detection from extension
-            file_type = "text/plain" # Default
+            if obj['Key'].endswith('/') and obj['Size'] == 0: continue
+            filename = os.path.basename(obj['Key']); file_type = "text/plain"
             if '.' in filename:
                 ext = filename.rsplit('.', 1)[1].lower()
                 if ext in ['txt', 'md', 'log']: file_type = "text/plain"
                 elif ext == 'json': file_type = "application/json"
                 elif ext == 'xml': file_type = "application/xml"
-                # Add more types as needed
-
             formatted_files.append({
-                "name": filename,
-                "size": obj['Size'],
+                "name": filename, "size": obj['Size'],
                 "lastModified": obj['LastModified'].isoformat() if obj.get('LastModified') else None,
-                "s3Key": obj['Key'],
-                "type": file_type
+                "s3Key": obj['Key'], "type": file_type
             })
-        
-        # Filter out files starting with 'rolling-' for transcription lists, if they are not desired.
-        # This specific filtering is for the 'transcripts' prefix use case.
-        # A more generic API wouldn't hardcode this. For now, it's fine as the frontend will primarily use it for transcripts.
-        if "transcripts/" in s3_prefix:
-            formatted_files = [f for f in formatted_files if not f['name'].startswith('rolling-')]
-
+        if "transcripts/" in s3_prefix: formatted_files = [f for f in formatted_files if not f['name'].startswith('rolling-')]
         return jsonify(formatted_files), 200
-    except Exception as e:
-        logger.error(f"Error listing S3 objects for prefix '{s3_prefix}': {e}", exc_info=True)
-        return jsonify({"error": "Internal server error listing S3 objects"}), 500
+    except Exception as e: logger.error(f"Error listing S3 objects for prefix '{s3_prefix}': {e}", exc_info=True); return jsonify({"error": "Internal server error listing S3 objects"}), 500
 
 @app.route('/api/s3/view', methods=['GET'])
 @supabase_auth_required(agent_required=False)
 def view_s3_document(user):
     logger.info(f"Received request /api/s3/view from user: {user.id}")
     s3_key = request.args.get('s3Key')
-    if not s3_key:
-        return jsonify({"error": "Missing 's3Key' query parameter"}), 400
-
+    if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
     try:
-        # Re-use existing s3_utils.read_file_content
-        from utils.s3_utils import read_file_content as s3_read_content # Local import to avoid name clash
+        from utils.s3_utils import read_file_content as s3_read_content 
         content = s3_read_content(s3_key, f"S3 file for viewing ({s3_key})")
-        if content is None:
-            return jsonify({"error": "File not found or could not be read"}), 404
+        if content is None: return jsonify({"error": "File not found or could not be read"}), 404
         return jsonify({"content": content}), 200
-    except Exception as e:
-        logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True)
-        return jsonify({"error": "Internal server error viewing S3 object"}), 500
+    except Exception as e: logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error viewing S3 object"}), 500
 
 @app.route('/api/s3/download', methods=['GET'])
 @supabase_auth_required(agent_required=False)
 def download_s3_document(user):
     logger.info(f"Received request /api/s3/download from user: {user.id}")
-    s3_key = request.args.get('s3Key')
-    filename_param = request.args.get('filename') # Optional desired filename
-
-    if not s3_key:
-        return jsonify({"error": "Missing 's3Key' query parameter"}), 400
-
-    s3 = get_s3_client()
-    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-    if not s3 or not aws_s3_bucket:
-        return jsonify({"error": "S3 client or bucket not configured"}), 500
-
+    s3_key = request.args.get('s3Key'); filename_param = request.args.get('filename')
+    if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
+    s3 = get_s3_client(); aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket: return jsonify({"error": "S3 client or bucket not configured"}), 500
     try:
         s3_object = s3.get_object(Bucket=aws_s3_bucket, Key=s3_key)
-        
-        # Determine filename for download
         download_filename = filename_param or os.path.basename(s3_key)
-        
         return Response(
             s3_object['Body'].iter_chunks(),
             mimetype=s3_object.get('ContentType', 'application/octet-stream'),
-            headers={"Content-Disposition": f"attachment;filename={download_filename}"}
+            headers={"Content-Disposition": f"attachment;filename=\"{download_filename}\""} 
         )
-    except s3.exceptions.NoSuchKey:
-        logger.warning(f"S3 Download: File not found at key: {s3_key}")
-        return jsonify({"error": "File not found"}), 404
-    except Exception as e:
-        logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True)
-        return jsonify({"error": "Internal server error downloading S3 object"}), 500
+    except s3.exceptions.NoSuchKey: logger.warning(f"S3 Download: File not found at key: {s3_key}"); return jsonify({"error": "File not found"}), 404
+    except Exception as e: logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error downloading S3 object"}), 500
 
-# --- Chat API Route ---
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
-def handle_chat(user): # User object is now passed by the decorator
+def handle_chat(user): 
     logger.info(f"Received request /api/chat method: {request.method} from user: {user.id}")
     global transcript_state_cache
-    # Anthropic client check can remain, but auth is handled by decorator
     if not anthropic_client: logger.error("Chat fail: Anthropic client not init."); return jsonify({"error": "AI service unavailable"}), 503
     try:
         data = request.json
         if not data or 'messages' not in data: return jsonify({"error": "Missing 'messages'"}), 400
-        agent_name = data.get('agent') # Agent existence already verified by decorator if agent_required=True
+        agent_name = data.get('agent') 
         event_id = data.get('event', '0000')
-        session_id = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S'))
+        chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) 
         logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id} by User: {user.id}")
         incoming_messages = data['messages']
         llm_messages = [{"role": msg["role"], "content": msg["content"]} for msg in incoming_messages if msg.get("role") in ["user", "assistant"]]
@@ -665,8 +650,8 @@ def handle_chat(user): # User object is now passed by the decorator
         is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
         if not is_simple_query and last_user_message_content:
             logger.info(f"Complex query ('{normalized_query[:50]}...'), RAG.")
-            try:
-                retriever = RetrievalHandler(index_name=agent_name, agent_name=agent_name, session_id=session_id, event_id=event_id, anthropic_client=anthropic_client)
+            try: 
+                retriever = RetrievalHandler(index_name=agent_name, agent_name=agent_name, session_id=chat_session_id_log, event_id=event_id, anthropic_client=anthropic_client)
                 retrieved_docs = retriever.get_relevant_context(query=last_user_message_content, top_k=5)
                 if retrieved_docs:
                     items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
@@ -677,17 +662,20 @@ def handle_chat(user): # User object is now passed by the decorator
         elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
         else: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block
+        
         transcript_content_to_add = ""; state_key = (agent_name, event_id)
         with transcript_state_lock:
             if state_key not in transcript_state_cache: transcript_state_cache[state_key] = TranscriptState(); logger.info(f"New TranscriptState for {agent_name}/{event_id}")
             current_transcript_state = transcript_state_cache[state_key]
         try:
             new_transcript = read_new_transcript_content(current_transcript_state, agent_name, event_id)
-            if new_transcript: label = "[REAL-TIME Meeting Transcript Update]"; transcript_content_to_add = f"{label}\n{new_transcript}"; llm_messages.insert(-1, {'role': 'user', 'content': transcript_content_to_add})
-        except Exception as e: logger.error(f"Error reading tx updates: {e}", exc_info=True)
+            if new_transcript: label = "[Meeting Transcript Update (from S3 polling)]"; transcript_content_to_add = f"{label}\n{new_transcript}"; llm_messages.insert(-1, {'role': 'user', 'content': transcript_content_to_add})
+        except Exception as e: logger.error(f"Error reading tx updates from S3: {e}", exc_info=True)
+
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
         final_system_prompt += f"\nCurrent Time Context: {time_str}"
         llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-3-5-sonnet-20240620"); llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
+        
         def generate_stream():
             response_content = ""; stream_error = None
             try:
@@ -702,104 +690,66 @@ def handle_chat(user): # User object is now passed by the decorator
         return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
     except Exception as e: logger.error(f"Error in /api/chat: {e}", exc_info=True); return jsonify({"error": "Internal server error"}), 500
 
-# --- Auto-Stop Background Task (Updated) ---
-def auto_stop_long_paused_recordings():
-    global magic_audio_instance, recording_status, magic_audio_lock
-    pause_timeout_seconds = 2 * 60 * 60; check_interval_seconds = 5 * 60
-    logger.info(f"Auto-stop thread: Check every {check_interval_seconds}s for pauses > {pause_timeout_seconds}s.")
-    while True:
-        time.sleep(check_interval_seconds)
-        with magic_audio_lock:
-            if (recording_status["is_recording"] and recording_status["is_paused"] and recording_status["last_pause_timestamp"] is not None):
-                pause_duration = time.time() - recording_status["last_pause_timestamp"]
-                if pause_duration > pause_timeout_seconds:
-                    logger.warning(f"Auto-stopping recording for {recording_status.get('agent')}/{recording_status.get('event')} after {pause_duration:.0f}s pause.")
-                    try:
-                        if magic_audio_instance: _stop_magic_audio_async(magic_audio_instance) # Use async helper
-                        # Update status optimistically here as well
-                        # Use the stored elapsed_time which reflects the time *before* the pause started
-                        elapsed = recording_status["elapsed_time"]
-                        recording_status.update({
-                            "is_recording": False, "is_paused": False, "start_time": None,
-                            "pause_start_time": None, "last_pause_timestamp": None,
-                            "elapsed_time": int(elapsed) # Keep the elapsed time up to the pause point
-                        })
-                        magic_audio_instance = None # Clear ref
-                        logger.info("Recording auto-stopped.")
-                    except Exception as e: logger.error(f"Error during auto-stop: {e}", exc_info=True)
-                else:
-                    # logger.debug(f"Auto-stop check: Recording not paused or pause duration ({pause_duration:.0f}s) < timeout ({pause_timeout_seconds}s).")
-                    pass # Reduce log noise
-
-# --- Agent Sync Function ---
 def sync_agents_from_s3_to_supabase():
-    """Fetches agent names from S3 and inserts missing ones into Supabase 'agents' table."""
-    if not supabase:
-        logger.warning("Agent Sync: Supabase client not initialized. Skipping.")
-        return
-
+    if not supabase: logger.warning("Agent Sync: Supabase client not initialized. Skipping."); return
     logger.info("Agent Sync: Starting synchronization from S3 to Supabase...")
-
-    # 1. Get agents from S3
     s3_agent_names = list_agent_names_from_s3()
-    if s3_agent_names is None:
-        logger.error("Agent Sync: Failed to list agent names from S3. Aborting.")
-        return
-    if not s3_agent_names:
-        logger.info("Agent Sync: No agent directories found in S3.")
-        # Decide if we should proceed or stop if S3 is empty. Let's proceed for now.
-        # return
-
-    # 2. Get existing agents from Supabase
+    if s3_agent_names is None: logger.error("Agent Sync: Failed to list agent names from S3. Aborting."); return
+    if not s3_agent_names: logger.info("Agent Sync: No agent directories found in S3."); return
     try:
         response = supabase.table("agents").select("name").execute()
-        if hasattr(response, 'error') and response.error:
-            logger.error(f"Agent Sync: Error querying agents from Supabase: {response.error}")
-            return
+        if hasattr(response, 'error') and response.error: logger.error(f"Agent Sync: Error querying agents from Supabase: {response.error}"); return
         db_agent_names = {agent['name'] for agent in response.data}
         logger.info(f"Agent Sync: Found {len(db_agent_names)} agents in Supabase.")
-    except Exception as e:
-        logger.error(f"Agent Sync: Unexpected error querying Supabase agents: {e}", exc_info=True)
-        return
-
-    # 3. Find missing agents
+    except Exception as e: logger.error(f"Agent Sync: Unexpected error querying Supabase agents: {e}", exc_info=True); return
     missing_agents = [name for name in s3_agent_names if name not in db_agent_names]
-
-    if not missing_agents:
-        logger.info("Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.")
-        return
-
+    if not missing_agents: logger.info("Agent Sync: Supabase 'agents' table is up-to-date with S3 directories."); return
     logger.info(f"Agent Sync: Found {len(missing_agents)} agents in S3 to add to Supabase: {missing_agents}")
-
-    # 4. Prepare data for insertion
     agents_to_insert = [{'name': name, 'description': f'Agent discovered from S3 path: {name}'} for name in missing_agents]
-
-    # 5. Insert missing agents
     try:
         insert_response = supabase.table("agents").insert(agents_to_insert).execute()
-        if hasattr(insert_response, 'error') and insert_response.error:
-            logger.error(f"Agent Sync: Error inserting agents into Supabase: {insert_response.error}")
-        elif insert_response.data:
-            logger.info(f"Agent Sync: Successfully inserted {len(insert_response.data)} new agents into Supabase.")
-        else:
-             logger.warning(f"Agent Sync: Insert call succeeded but reported 0 rows inserted. Check response: {insert_response}")
-
-    except Exception as e:
-        logger.error(f"Agent Sync: Unexpected error inserting agents: {e}", exc_info=True)
-
+        if hasattr(insert_response, 'error') and insert_response.error: logger.error(f"Agent Sync: Error inserting agents into Supabase: {insert_response.error}")
+        elif insert_response.data: logger.info(f"Agent Sync: Successfully inserted {len(insert_response.data)} new agents into Supabase.")
+        else: logger.warning(f"Agent Sync: Insert call succeeded but reported 0 rows inserted. Check response: {insert_response}")
+    except Exception as e: logger.error(f"Agent Sync: Unexpected error inserting agents: {e}", exc_info=True)
     logger.info("Agent Sync: Synchronization finished.")
 
+def cleanup_idle_sessions():
+    while True:
+        time.sleep(5 * 60) 
+        now = time.time()
+        sessions_to_cleanup = []
+        for session_id, session_data in list(active_sessions.items()):
+            if not session_data.get("is_active", False): 
+                 if now - session_data.get("last_activity_timestamp", 0) > (15 * 60): 
+                      logger.warning(f"Found stale inactive session {session_id}. Adding to cleanup queue.")
+                      sessions_to_cleanup.append(session_id)
+                 continue
 
-# --- Main Execution ---
+            if session_data.get("websocket_connection") is None and \
+               now - session_data.get("last_activity_timestamp", 0) > (10 * 60): 
+                logger.warning(f"Session {session_id} has no WebSocket and is idle. Marking for cleanup.")
+                sessions_to_cleanup.append(session_id)
+            elif session_data.get("websocket_connection") is not None and \
+                 now - session_data.get("last_activity_timestamp", 0) > (30 * 60): 
+                logger.warning(f"Session {session_id} has an active WebSocket but is idle. Marking for cleanup.")
+                sessions_to_cleanup.append(session_id)
+        
+        for session_id in sessions_to_cleanup:
+            logger.info(f"Idle session cleanup: Finalizing session {session_id}")
+            _finalize_session(session_id)
+
 if __name__ == '__main__':
-    # Perform Agent Sync *after* Supabase client init
-    if supabase:
-        sync_agents_from_s3_to_supabase()
-    else:
-        logger.warning("Skipping agent sync because Supabase client failed to initialize.")
+    if supabase: sync_agents_from_s3_to_supabase()
+    else: logger.warning("Skipping agent sync because Supabase client failed to initialize.")
+    
+    idle_cleanup_thread = threading.Thread(target=cleanup_idle_sessions, daemon=True)
+    idle_cleanup_thread.start()
+    logger.info("Idle session cleanup thread started.")
 
-    auto_stop_thread = threading.Thread(target=auto_stop_long_paused_recordings, daemon=True); auto_stop_thread.start()
     port = int(os.getenv('PORT', 5001)); debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
-    use_reloader = False # Disable reloader if debug is on, as sync should run once
-    app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=use_reloader)
+    use_reloader = False 
+    
+    if not os.getenv("GUNICORN_CMD"): 
+        app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=use_reloader)
