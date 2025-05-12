@@ -1,5 +1,6 @@
 # Core Flask & Web
 Flask>=3.0.0
+gunicorn # Added for Render deployment
 python-dotenv>=1.0.0
 
 # LLM & Embeddings
