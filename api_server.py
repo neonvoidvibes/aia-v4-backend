@@ -1,3 +1,4 @@
+# api_server.py
 import os
 import sys
 import logging
@@ -7,24 +8,15 @@ import threading
 import time
 import json
 from datetime import datetime, timezone, timedelta
-import urllib.parse # For decoding filenames in IDs
-from functools import wraps # For decorator
-from typing import Optional, List, Dict, Any, Tuple 
-import uuid # For generating session IDs
+import urllib.parse 
+import uuid 
 from collections import defaultdict
-
-# WebSocket library
-from flask_sock import Sock # Import Sock
-
-# Supabase Imports
+from flask_sock import Sock 
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError
 
-# Import necessary modules from our project
-# MagicAudio import might be removed or refactored if its direct use for recording is gone
-# from magic_audio import MagicAudio 
 from utils.retrieval_handler import RetrievalHandler
-from utils.transcript_utils import TranscriptState, read_new_transcript_content #, read_all_transcripts_in_folder, get_latest_transcript_file
+from utils.transcript_utils import TranscriptState, read_new_transcript_content
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
@@ -32,10 +24,12 @@ from utils.s3_utils import (
 )
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
-
 from anthropic import Anthropic, APIStatusError, AnthropicError
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
+
+# Import the new transcription service
+from transcription_service import process_audio_segment_and_update_s3
 
 load_dotenv()
 
@@ -52,6 +46,7 @@ def setup_logging(debug=False):
     for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock']:
         logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
+    logging.getLogger('transcription_service').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.info(f"Logging setup complete. Level: {logging.getLevelName(log_level)}")
     return root_logger
 
@@ -182,37 +177,6 @@ def health_check():
     logger.info("Health check requested")
     return jsonify({"status": "ok", "message": "Backend is running", "anthropic_client": anthropic_client is not None, "s3_client": get_s3_client() is not None}), 200
 
-def transcription_service_placeholder(audio_file_path: str, session_data: Dict[str, Any]):
-    logger.info(f"TRANSCRIPTION_PLACEHOLDER: Would transcribe {audio_file_path} for session {session_data.get('session_id')}")
-    time.sleep(0.5) 
-    s3_key = session_data.get('s3_transcript_key', 'unknown_transcript.txt')
-    new_transcript_line = f"[{datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]}] Placeholder transcribed text for {os.path.basename(audio_file_path)}\n"
-    
-    s3 = get_s3_client()
-    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-    if s3 and aws_s3_bucket:
-        try:
-            with session_locks[session_data['session_id']]: 
-                existing_content = ""
-                try:
-                    obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_key)
-                    existing_content = obj['Body'].read().decode('utf-8')
-                except s3.exceptions.NoSuchKey:
-                    logger.info(f"S3 transcript {s3_key} not found, creating new.")
-                
-                updated_content = existing_content + new_transcript_line
-                s3.put_object(Bucket=aws_s3_bucket, Key=s3_key, Body=updated_content.encode('utf-8'))
-                logger.info(f"TRANSCRIPTION_PLACEHOLDER: Appended to S3 {s3_key}")
-        except Exception as e:
-            logger.error(f"TRANSCRIPTION_PLACEHOLDER: S3 error {e}")
-    
-    segment_duration_seconds = 3.0 
-    session_data['current_total_audio_duration_processed_seconds'] = session_data.get('current_total_audio_duration_processed_seconds', 0.0) + segment_duration_seconds
-    logger.info(f"TRANSCRIPTION_PLACEHOLDER: Updated processed duration for session {session_data['session_id']} to {session_data['current_total_audio_duration_processed_seconds']:.2f}s")
-
-    try: os.remove(audio_file_path); logger.info(f"TRANSCRIPTION_PLACEHOLDER: Deleted temp segment {audio_file_path}")
-    except OSError as e: logger.error(f"TRANSCRIPTION_PLACEHOLDER: Error deleting temp segment {audio_file_path}: {e}")
-
 def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> Dict[str, Any]:
     if session_id and session_id in active_sessions:
         session = active_sessions[session_id]
@@ -242,6 +206,7 @@ def start_recording_route(user):
     data = request.json
     agent_name = data.get('agent')
     event_id = data.get('event')
+    language = data.get('language') # Language from client if provided
     
     if not agent_name or not event_id:
         return jsonify({"status": "error", "message": "Missing agent or event ID"}), 400
@@ -254,25 +219,28 @@ def start_recording_route(user):
     
     temp_audio_dir = os.path.join('tmp', 'audio_sessions', session_id)
     os.makedirs(temp_audio_dir, exist_ok=True)
-    temp_audio_file_path = os.path.join(temp_audio_dir, 'audio.raw')
+    # temp_audio_file_path will be where the continuously appended raw audio goes for the whole session.
+    # Segments for transcription will be extracted from this.
+    temp_audio_file_path = os.path.join(temp_audio_dir, 'session_audio_stream.raw') 
 
     active_sessions[session_id] = {
         "user_id": user.id,
         "agent_name": agent_name,
         "event_id": event_id,
+        "language": language, # Store language
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_transcript_key,
-        "temp_audio_file_path": temp_audio_file_path,
+        "temp_audio_file_path": temp_audio_file_path, # Path to the main accumulating audio file
         "is_backend_processing_paused": False,
         "current_total_audio_duration_processed_seconds": 0.0,
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True, 
-        "audio_buffer": bytearray(), 
-        "accumulated_audio_since_last_transcription_seconds": 0.0,
+        "audio_buffer_for_current_segment": bytearray(), # Buffer for audio bytes intended for the *next* transcription segment
+        "accumulated_audio_duration_for_current_segment_seconds": 0.0, # Duration in the above buffer
     }
     logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
-    logger.info(f"Temp audio path: {temp_audio_file_path}, S3 key: {s3_transcript_key}")
+    logger.info(f"Session raw audio path: {temp_audio_file_path}, S3 transcript key: {s3_transcript_key}")
     
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
@@ -299,41 +267,88 @@ def _finalize_session(session_id: str):
 
     logger.info(f"Finalizing session {session_id}...")
     session_data = active_sessions[session_id]
+    session_data["is_active"] = False # Mark as inactive first
     
-    if session_data['audio_buffer']:
-        logger.info(f"Processing remaining {len(session_data['audio_buffer'])} bytes of audio for session {session_id}")
-        temp_segment_path = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), f"final_segment_{uuid.uuid4().hex}.wav")
+    # Process any remaining audio in session_data['audio_buffer_for_current_segment']
+    if session_data['audio_buffer_for_current_segment']:
+        logger.info(f"Processing remaining {len(session_data['audio_buffer_for_current_segment'])} bytes of audio for session {session_id}")
+        
+        temp_segment_dir = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), "segments")
+        os.makedirs(temp_segment_dir, exist_ok=True)
+        temp_segment_path = os.path.join(temp_segment_dir, f"final_segment_{uuid.uuid4().hex}.wav")
+        
         try:
-            with open(temp_segment_path, 'wb') as f:
-                f.write(session_data['audio_buffer']) 
-            logger.info(f"Saved final segment to {temp_segment_path}")
-            transcription_service_placeholder(temp_segment_path, session_data) 
-        except Exception as e:
-            logger.error(f"Error processing final audio segment for session {session_id}: {e}")
-        finally:
-            if os.path.exists(temp_segment_path):
-                try: os.remove(temp_segment_path)
-                except OSError: pass 
+        if session_data['audio_buffer_for_current_segment']: # Use the correct buffer name
+        logger.info(f"Processing remaining {len(session_data['audio_buffer_for_current_segment'])} bytes of audio for session {session_id} during finalization.")
+        
+        remaining_audio_data = bytes(session_data['audio_buffer_for_current_segment'])
+        session_data['audio_buffer_for_current_segment'].clear()
 
+        temp_segment_dir = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), "segments")
+        os.makedirs(temp_segment_dir, exist_ok=True)
+        
+        final_base_filename = f"final_segment_{uuid.uuid4().hex}"
+        final_input_blob_path = os.path.join(temp_segment_dir, f"{final_base_filename}.webm")
+        final_output_wav_path = os.path.join(temp_segment_dir, f"{final_base_filename}.wav")
+
+        try:
+            with open(final_input_blob_path, 'wb') as f_blob:
+                f_blob.write(remaining_audio_data)
+            logger.info(f"Saved final audio blob to {final_input_blob_path}")
+
+            ffmpeg_command = [
+                'ffmpeg', '-y',
+                '-i', final_input_blob_path,
+                '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le',
+                final_output_wav_path
+            ]
+            result = subprocess.run(ffmpeg_command, capture_output=True, text=True, check=False)
+
+            if result.returncode == 0:
+                logger.info(f"Successfully converted final blob to WAV: {final_output_wav_path}")
+                s3_lock_for_session = session_locks[session_id]
+                process_audio_segment_and_update_s3(final_output_wav_path, session_data, s3_lock_for_session)
+            else:
+                logger.error(f"ffmpeg conversion failed for final segment {final_input_blob_path}. RC: {result.returncode}, Err: {result.stderr}")
+
+        except Exception as e:
+            logger.error(f"Error processing final audio segment for session {session_id}: {e}", exc_info=True)
+        finally:
+            if os.path.exists(final_input_blob_path):
+                try: os.remove(final_input_blob_path)
+                except OSError: pass 
+            if os.path.exists(final_output_wav_path):
+                try: os.remove(final_output_wav_path)
+                except OSError: pass
+
+    # 2. Close WebSocket if open
     ws = session_data.get("websocket_connection")
-    if ws:
         try:
             logger.info(f"Closing WebSocket for session {session_id}.")
             ws.close(reason="Session stopped by server")
         except Exception as e:
             logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
     
-    temp_audio_dir = os.path.dirname(session_data['temp_audio_file_path'])
-    if os.path.exists(temp_audio_dir):
+    temp_session_audio_dir = os.path.dirname(session_data['temp_audio_file_path']) # This is tmp/audio_sessions/<session_id>
+    if os.path.exists(temp_session_audio_dir):
         try:
-            for f_name in os.listdir(temp_audio_dir): os.remove(os.path.join(temp_audio_dir, f_name))
-            os.rmdir(temp_audio_dir)
-            logger.info(f"Cleaned up temporary directory: {temp_audio_dir}")
+            # Clean up segments subdirectory first
+            segments_dir = os.path.join(temp_session_audio_dir, "segments")
+            if os.path.exists(segments_dir):
+                for f_name in os.listdir(segments_dir): os.remove(os.path.join(segments_dir, f_name))
+                os.rmdir(segments_dir)
+            # Clean up main session audio file (if it was used, currently buffer is in memory)
+            if os.path.exists(session_data['temp_audio_file_path']):
+                 os.remove(session_data['temp_audio_file_path'])
+            os.rmdir(temp_session_audio_dir) # Remove the session's main temp directory
+            logger.info(f"Cleaned up temporary directory: {temp_session_audio_dir}")
         except Exception as e:
-            logger.error(f"Error cleaning up temp directory {temp_audio_dir}: {e}")
+            logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
 
     if session_id in active_sessions: 
         del active_sessions[session_id]
+    if session_id in session_locks: # Clean up lock too
+        del session_locks[session_id]
     logger.info(f"Session {session_id} finalized and removed from active sessions.")
 
 @app.route('/api/recording/stop', methods=['POST'])
@@ -385,7 +400,13 @@ def audio_stream_socket(ws, session_id: str):
     active_sessions[session_id]["is_active"] = True 
     logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
-    AUDIO_SEGMENT_DURATION_SECONDS = 15 
+    AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15 
+    # Assume 16kHz, 16-bit mono for estimation if not specified by client
+    active_sessions[session_id]["is_active"] = True
+    logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
+
+    AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15
+    import subprocess # For ffmpeg
 
     try:
         while True:
@@ -397,6 +418,10 @@ def audio_stream_socket(ws, session_id: str):
                     break 
                 continue 
 
+            if session_id not in active_sessions or not active_sessions[session_id].get("is_active"):
+                logger.info(f"WebSocket session {session_id}: Session seems to have been stopped/cleaned up. Closing WS.")
+                break
+
             active_sessions[session_id]["last_activity_timestamp"] = time.time()
 
             if isinstance(message, str):
@@ -406,11 +431,11 @@ def audio_stream_socket(ws, session_id: str):
                     logger.info(f"WebSocket session {session_id}: Received control message: {control_msg}")
                     if action == "set_processing_state":
                         active_sessions[session_id]["is_backend_processing_paused"] = control_msg.get("paused", False)
-                        logger.info(f"Session {session_id}: Backend processing "
-                                    f"{'paused' if control_msg.get('paused') else 'resumed'}.")
+                        logger.info(f"Session {session_id}: Backend audio processing "
+                                    f"{'paused' if control_msg.get('paused') else 'resumed'} based on client state.")
                     elif action == "stop_stream":
                         logger.info(f"WebSocket session {session_id}: Received 'stop_stream'. Initiating finalization.")
-                        ws.close(reason="Client requested stop_stream") 
+                        _finalize_session(session_id)
                         break 
                 except json.JSONDecodeError:
                     logger.warning(f"WebSocket session {session_id}: Received invalid JSON control message: {message}")
@@ -419,39 +444,73 @@ def audio_stream_socket(ws, session_id: str):
 
             elif isinstance(message, bytes):
                 session_data = active_sessions[session_id]
-                session_data["audio_buffer"].extend(message)
+                session_data["audio_buffer_for_current_segment"].extend(message)
                 
-                bytes_per_second = 16000 * 2 
-                estimated_duration_of_chunk = len(message) / bytes_per_second
-                session_data["accumulated_audio_since_last_transcription_seconds"] += estimated_duration_of_chunk
+                # Estimate duration, client sends blobs of `timeslice` (e.g., 3000ms).
+                # TODO: Make this more accurate or use client-sent duration.
+                session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 # Placeholder
 
                 if not session_data["is_backend_processing_paused"] and \
-                   session_data["accumulated_audio_since_last_transcription_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS:
+                   session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
                     
-                    logger.info(f"Session {session_id}: Accumulated {session_data['accumulated_audio_since_last_transcription_seconds']:.2f}s of audio. Processing.")
+                    logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s). Processing.")
                     
-                    segment_data_to_process = bytes(session_data["audio_buffer"]) 
-                    session_data["audio_buffer"].clear() 
-                    session_data["accumulated_audio_since_last_transcription_seconds"] = 0.0
+                    segment_data_to_process = bytes(session_data["audio_buffer_for_current_segment"]) 
+                    session_data["audio_buffer_for_current_segment"].clear() 
+                    # We use the estimated duration here for triggering, actual duration for S3 offset is determined by Whisper.
+                    session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
 
-                    temp_segment_path = os.path.join(
-                        os.path.dirname(session_data['temp_audio_file_path']), 
-                        f"segment_{datetime.now().strftime('%H%M%S%f')}.wav" 
-                    )
+                    temp_segment_dir = os.path.join(os.path.dirname(session_data['temp_audio_file_path']), "segments")
+                    os.makedirs(temp_segment_dir, exist_ok=True)
+                    
+                    # Assume client sends WebM/Opus. Client MediaRecorder typically produces .webm
+                    base_filename = f"segment_{datetime.now().strftime('%H%M%S%f')}"
+                    temp_input_blob_path = os.path.join(temp_segment_dir, f"{base_filename}.webm")
+                    temp_output_wav_path = os.path.join(temp_segment_dir, f"{base_filename}.wav")
+                    
                     try:
-                        with open(temp_segment_path, 'wb') as f_seg:
-                            f_seg.write(segment_data_to_process) 
-                        logger.info(f"Session {session_id}: Saved segment to {temp_segment_path} ({len(segment_data_to_process)} bytes)")
+                        with open(temp_input_blob_path, 'wb') as f_blob:
+                            f_blob.write(segment_data_to_process)
+                        logger.info(f"Session {session_id}: Saved segment blob to {temp_input_blob_path} ({len(segment_data_to_process)} bytes)")
                         
-                        transcription_service_placeholder(temp_segment_path, session_data)
+                        # Convert to WAV using ffmpeg
+                        ffmpeg_command = [
+                            'ffmpeg', '-y', # -y to overwrite output file if it exists
+                            '-i', temp_input_blob_path,
+                            '-ar', '16000',        # Audio sample rate 16kHz
+                            '-ac', '1',            # Mono audio
+                            '-acodec', 'pcm_s16le', # Signed 16-bit PCM little-endian
+                            temp_output_wav_path
+                        ]
+                        logger.info(f"Session {session_id}: Executing ffmpeg: {' '.join(ffmpeg_command)}")
+                        result = subprocess.run(ffmpeg_command, capture_output=True, text=True, check=False)
+
+                        if result.returncode != 0:
+                            logger.error(f"Session {session_id}: ffmpeg conversion failed for {temp_input_blob_path}. Return code: {result.returncode}")
+                            logger.error(f"ffmpeg stderr: {result.stderr}")
+                            logger.error(f"ffmpeg stdout: {result.stdout}")
+                            # Skip transcription for this segment if conversion fails
+                            continue # To the next message in WebSocket loop
+                        
+                        logger.info(f"Session {session_id}: Successfully converted {temp_input_blob_path} to {temp_output_wav_path}")
+                        
+                        s3_lock_for_session = session_locks[session_id]
+                        success = process_audio_segment_and_update_s3(temp_output_wav_path, session_data, s3_lock_for_session)
+                        if not success:
+                             logger.error(f"Session {session_id}: Transcription or S3 update failed for segment {temp_output_wav_path}")
+                        
                     except Exception as e:
-                        logger.error(f"Session {session_id}: Error saving/processing segment {temp_segment_path}: {e}")
-                        if os.path.exists(temp_segment_path):
-                            try: os.remove(temp_segment_path)
-                            except OSError: pass
+                        logger.error(f"Session {session_id}: Error during segment conversion/processing for {temp_input_blob_path}: {e}", exc_info=True)
+                    finally:
+                        if os.path.exists(temp_input_blob_path):
+                            try: os.remove(temp_input_blob_path)
+                            except OSError as e_del: logger.warning(f"Error deleting temp blob {temp_input_blob_path}: {e_del}")
+                        if os.path.exists(temp_output_wav_path):
+                            try: os.remove(temp_output_wav_path)
+                            except OSError as e_del: logger.warning(f"Error deleting temp wav {temp_output_wav_path}: {e_del}")
             
             if session_id not in active_sessions:
-                logger.info(f"WebSocket session {session_id}: Session was externally stopped. Closing connection.")
+                logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
                 if not ws.closed: ws.close(reason="Session stopped externally")
                 break
 
@@ -463,7 +522,6 @@ def audio_stream_socket(ws, session_id: str):
         logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected.")
         if session_id in active_sessions and active_sessions[session_id].get("is_active", False):
             logger.info(f"WebSocket for session {session_id} disconnected; ensuring session finalization.")
-            active_sessions[session_id]["is_active"] = False 
             _finalize_session(session_id) 
         else:
             logger.info(f"WebSocket for session {session_id}: Session already finalized or marked inactive.")

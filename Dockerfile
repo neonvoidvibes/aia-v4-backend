@@ -10,6 +10,7 @@ RUN apt-get update -y && \
     portaudio19-dev \
     libasound2-dev \
     build-essential \
+    ffmpeg \
     git \
     curl \
     && apt-get clean \
