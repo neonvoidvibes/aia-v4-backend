@@ -4,13 +4,12 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies required for PortAudio and other potential needs
-# Also install git, which can be useful for pip installs from git repositories
-# and curl for debugging or health checks if needed.
+# Install system dependencies required for PortAudio, build tools, and other potential needs
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
     portaudio19-dev \
     libasound2-dev \
+    build-essential \
     git \
     curl \
     && apt-get clean \
