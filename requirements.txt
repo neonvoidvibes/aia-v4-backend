@@ -1,6 +1,7 @@
 # Core Flask & Web
 Flask>=3.0.0
 gunicorn # Added for Render deployment
+Flask-CORS>=4.0.0 # Added for Cross-Origin Resource Sharing
 python-dotenv>=1.0.0
 
 # LLM & Embeddings
