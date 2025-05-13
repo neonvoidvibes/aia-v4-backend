@@ -1,61 +1,45 @@
 # transcription_service.py
 import os
 import io
-# Global S3 client instance (lazy loaded)
-s3_client_instance = None # Renamed to avoid confusion with boto3.client
-s3_client_lock = threading.Lock()
-
-
-def get_s3_client(config: Optional[BotoConfig] = None) -> Optional[boto3.client]:
-"""
-Initializes and returns an S3 client, or None on failure.
-Reads env vars inside the function.
-If a BotoConfig is provided, it's used for this specific client instance (not cached globally).
-The global client is initialized without specific config for general use.
-"""
-global s3_client_instance
-
-if config: # If a specific config is requested, create a new client with it
-    aws_region_cfg = os.getenv('AWS_REGION')
-    if not aws_region_cfg:
-        logger.error("AWS_REGION env var not found for S3 client with custom config.")
-        return None
-    try:
-        logger.debug(f"Creating new S3 client with custom config for region {aws_region_cfg}")
-        return boto3.client('s3', region_name=aws_region_cfg, config=config)
-    except Exception as e:
-        logger.error(f"Failed to initialize S3 client with custom config: {e}", exc_info=True)
-        return None
-
-# For global instance (no specific config)
-with s3_client_lock:
+import logging
+import json
+import re
+import time # For sleep in transcribe_audio retry
+from datetime import datetime, timezone, timedelta
+import boto3
 from botocore.config import Config as BotoConfig # For S3 timeouts
-    if s3_client_instance is None:
-        aws_region_global = os.getenv('AWS_REGION')
-        aws_s3_bucket_global = os.getenv('AWS_S3_BUCKET')
+import openai
+import requests # For OpenAI API call
+from typing import Dict, Any, Optional, List
+import threading # For s3_lock type hint
+import subprocess # For ffprobe fallback
 
-        if not aws_region_global or not aws_s3_bucket_global:
-            logger.error("Global S3 Client: AWS_REGION or AWS_S3_BUCKET env vars not found.")
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# --- Utility Functions (adapted from magic_audio.py) ---
+
+def get_s3_client() -> Optional[boto3.client]:
+    """Initializes and returns an S3 client, or None on failure."""
+    try:
+        aws_region = os.getenv('AWS_REGION')
+        if not aws_region:
+            logger.error("AWS_REGION environment variable not found.")
             return None
-        try:
-            # Default config for the global client
-            default_boto_config = BotoConfig(
-                connect_timeout=10,
-                read_timeout=30, # General read timeout
-                retries={'max_attempts': 3}
-            )
-            s3_client_instance = boto3.client(
-                's3',
-                region_name=aws_region_global,
-                config=default_boto_config
-            )
-            logger.info(f"Global S3 client initialized for region {aws_region_global} with default timeouts.")
-        except Exception as e:
-            logger.error(f"Failed to initialize global S3 client: {e}", exc_info=True)
-            s3_client_instance = None
-return s3_client_instance
-
-def read_file_content(file_key: str, description: str) -> Optional[str]:
+        
+        # Credentials should be handled by the AWS SDK's default credential chain
+        # (IAM role, environment variables, shared credential file, etc.)
+        # Apply default timeouts for the global client
+        default_boto_config = BotoConfig(
+            connect_timeout=15, # Increased connect timeout
+            read_timeout=45,    # Increased read timeout for potentially larger files
+            retries={'max_attempts': 3}
+        )
+        client = boto3.client('s3', region_name=aws_region, config=default_boto_config)
+        logger.debug(f"S3 client initialized for region {aws_region} in transcription_service with timeouts.")
+        return client
+    except Exception as e:
+        logger.error(f"Failed to initialize S3 client in transcription_service: {e}", exc_info=True)
         return None
 
 def _format_time_delta(seconds_delta: float, base_datetime_utc: datetime) -> str:
@@ -217,7 +201,7 @@ def process_audio_segment_and_update_s3(
         logger.error("OpenAI API key not found. Cannot transcribe.")
         return False
 
-    s3 = get_s3_client()
+    s3 = get_s3_client() # This will now use the client with default timeouts
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
         logger.error("S3 client or bucket not configured. Cannot update transcript.")
@@ -230,42 +214,31 @@ def process_audio_segment_and_update_s3(
 
     if not transcription_result or not transcription_result.get('segments'):
         logger.warning(f"Transcription failed or returned no segments for {temp_segment_wav_path}.")
-        return False # Or handle as partial success if some segments transcribed
+        # Even if transcription fails, we should update the processed duration based on the actual segment length
+        # to prevent this segment from being re-processed or causing an offset error for subsequent segments.
+        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
+        logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (transcription failed/empty)")
+        return True # Considered success in terms of processing the audio chunk, even if no text.
 
     # 2. Acquire lock, download current S3 transcript, append new, upload
     new_transcript_lines = []
-    processed_segment_duration = 0.0
-
+    
     for segment in transcription_result.get('segments', []):
         raw_text = segment.get('text', '').strip()
         filtered_text = filter_hallucinations(raw_text)
 
         if is_valid_transcription(filtered_text):
-            # Timestamps from Whisper are relative to the start of the current segment
             whisper_start_time = segment.get('start', 0.0)
             whisper_end_time = segment.get('end', 0.0)
-
-            # Calculate absolute timestamps relative to the session start
             absolute_start_seconds = segment_offset_seconds + whisper_start_time
             absolute_end_seconds = segment_offset_seconds + whisper_end_time
-            
             timestamp_str = format_timestamp_range(absolute_start_seconds, absolute_end_seconds, session_start_time_utc)
             new_transcript_lines.append(f"{timestamp_str} {filtered_text}")
-            
-            # Track the end of the last valid segment to update processed duration
-            # whisper_end_time is relative to the current segment.
-            # The actual duration of the *entire segment file* is what matters for the offset update.
-            # We now use `segment_actual_duration` calculated by ffprobe in api_server.py.
-            # No need to use `processed_segment_duration` based on whisper internal segment times anymore.
-            pass # Placeholder, `segment_actual_duration` is used later
-
         else:
             logger.debug(f"Segment filtered out: '{raw_text}'")
 
-
     if not new_transcript_lines:
         logger.info(f"No valid new transcript lines generated for {temp_segment_wav_path} after filtering.")
-        # Update the processed duration using the actual segment duration if available
         session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
         logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (empty transcript segment)")
         return True
@@ -276,24 +249,11 @@ def process_audio_segment_and_update_s3(
         session_id_for_log = session_data.get('session_id', 'UNKNOWN_SESSION')
         logger.debug(f"S3_LOCK_ACQUIRED for session {session_id_for_log}, updating {s3_transcript_key}")
         
-        s3_config = BotoConfig(
-            connect_timeout=10, # seconds
-            read_timeout=15,    # seconds
-            retries={'max_attempts': 2}
-        )
-        # Re-initialize s3 client with this config for this operation, or ensure global client uses it.
-        # For simplicity here, assuming a local re-init or that the global s3 client is reconfigured.
-        # A better approach would be to pass configured s3 client. For now, this highlights timeout points.
-        # s3_local_op = boto3.client('s3', region_name=os.getenv('AWS_REGION'), config=s3_config)
-        # Using global s3 for now, timeouts need to be set when client is created in get_s3_client or passed.
-        # The current get_s3_client doesn't take config. This is a conceptual placement for now.
-        # For actual timeout application, get_s3_client() would need to be enhanced or a new client created here with config.
-
         try:
             existing_content = ""
             logger.debug(f"S3_GET_ATTEMPT: Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}' for session {session_id_for_log}")
             try:
-                obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key) # Add config=s3_config if using local s3_local_op
+                obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key) 
                 logger.debug(f"S3_GET_SUCCESS: Reading body for session {session_id_for_log}. ContentLength: {obj.get('ContentLength', 'N/A')}")
                 body_bytes = obj['Body'].read()
                 logger.debug(f"S3_GET_READ_BODY_SUCCESS: Read {len(body_bytes)} bytes for session {session_id_for_log}.")
@@ -301,7 +261,7 @@ def process_audio_segment_and_update_s3(
                 logger.info(f"S3_GET_DECODE_SUCCESS: Downloaded existing transcript (length {len(existing_content)}) from {s3_transcript_key}. ETag: {obj.get('ETag')}")
             except s3.exceptions.NoSuchKey:
                 logger.info(f"S3_GET_NOSUCHKEY: Transcript {s3_transcript_key} not found for session {session_id_for_log}. Will create new.")
-                if not existing_content.startswith("# Transcript"):
+                if not existing_content.startswith("# Transcript"): 
                      header = f"# Transcript - Session {session_id_for_log}\n"
                      header += f"Agent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\n"
                      header += f"Session Started (UTC): {session_start_time_utc.isoformat()}\n\n"
@@ -314,14 +274,14 @@ def process_audio_segment_and_update_s3(
             updated_content = existing_content + appended_text
             
             logger.debug(f"S3_PUT_ATTEMPT: Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}', NewTotalLength={len(updated_content)} for session {session_id_for_log}")
-            put_response = s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8')) # Add config=s3_config if using local s3_local_op
+            put_response = s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8')) 
             logger.info(f"S3_PUT_SUCCESS: Appended {len(appended_text)} chars (total {len(updated_content)} chars) to {s3_transcript_key}. ETag: {put_response.get('ETag')}")
 
             session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
             logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s using segment duration {segment_actual_duration:.2f}s")
 
             return True
-        except Exception as e_s3_update:
+        except Exception as e_s3_update: 
             logger.error(f"S3_OPERATION_FAIL: Overall error during S3 transcript update for {s3_transcript_key} (session {session_id_for_log}): {e_s3_update}", exc_info=True)
             return False
         finally:

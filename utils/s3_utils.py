@@ -426,4 +426,3 @@ def list_agent_names_from_s3() -> Optional[List[str]]:
     except Exception as e:
         logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True)
         return None
-        
