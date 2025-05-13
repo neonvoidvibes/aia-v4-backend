@@ -303,7 +303,9 @@ def start_recording_route(user: SupabaseUser):
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True, 
-        "audio_buffer_for_current_segment": bytearray(), 
+        "audio_buffer_for_current_segment": bytearray(), # Will be deprecated by blob_paths
+        "current_segment_blob_paths": [], # New: To store paths of individual blobs for the current segment
+        "current_segment_blob_count": 0, # New: Counter for blobs in the current segment
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
     }
     logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
@@ -336,69 +338,85 @@ def _finalize_session(session_id: str):
     session_data = active_sessions[session_id]
     session_data["is_active"] = False 
     
-    if session_data['audio_buffer_for_current_segment']:
-        logger.info(f"Processing remaining {len(session_data['audio_buffer_for_current_segment'])} bytes of audio for session {session_id} during finalization.")
+    # Process remaining individually saved blobs
+    remaining_blob_paths = session_data.get("current_segment_blob_paths", [])
+    if remaining_blob_paths:
+        logger.info(f"Processing {len(remaining_blob_paths)} remaining audio blobs for session {session_id} during finalization.")
         
-        remaining_audio_data = bytes(session_data['audio_buffer_for_current_segment'])
-        session_data['audio_buffer_for_current_segment'].clear()
-
-        temp_segment_dir = os.path.join(session_data['temp_audio_session_dir'], "segments")
-        os.makedirs(temp_segment_dir, exist_ok=True)
+        temp_processing_dir = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
+        os.makedirs(temp_processing_dir, exist_ok=True)
         
-        final_base_filename = f"final_segment_{uuid.uuid4().hex}"
-        final_input_blob_path = os.path.join(temp_segment_dir, f"{final_base_filename}.webm") 
-        final_output_wav_path = os.path.join(temp_segment_dir, f"{final_base_filename}.wav")
-
+        final_segment_uuid = f"final_{uuid.uuid4().hex}"
+        final_filelist_path = os.path.join(temp_processing_dir, f"filelist_{final_segment_uuid}.txt")
+        final_concatenated_webm_path = os.path.join(temp_processing_dir, f"concat_{final_segment_uuid}.webm")
+        final_output_wav_path = os.path.join(temp_processing_dir, f"final_audio_{final_segment_uuid}.wav")
+        
         try:
-            with open(final_input_blob_path, 'wb') as f_blob:
-                f_blob.write(remaining_audio_data)
-            logger.info(f"Saved final audio blob to {final_input_blob_path}")
+            with open(final_filelist_path, "w") as f_list:
+                for p in remaining_blob_paths:
+                    if os.path.exists(p): # Ensure blob part still exists
+                        f_list.write(f"file '{os.path.abspath(p)}'\n")
+            
+            if os.path.getsize(final_filelist_path) > 0: # Proceed only if filelist is not empty
+                concat_command = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', final_filelist_path, '-c', 'copy', final_concatenated_webm_path]
+                concat_result = subprocess.run(concat_command, capture_output=True, text=True, check=False)
 
-            ffmpeg_command = [
-                'ffmpeg', '-y', 
-                '-i', final_input_blob_path,
-                '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le',
-                final_output_wav_path
-            ]
-            result = subprocess.run(ffmpeg_command, capture_output=True, text=True, check=False)
+                if concat_result.returncode == 0:
+                    logger.info(f"Successfully concatenated final blobs for session {session_id} to {final_concatenated_webm_path}")
+                    convert_command = ['ffmpeg', '-y', '-i', final_concatenated_webm_path, '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', final_output_wav_path]
+                    convert_result = subprocess.run(convert_command, capture_output=True, text=True, check=False)
 
-            if result.returncode == 0:
-                logger.info(f"Successfully converted final blob to WAV: {final_output_wav_path}")
-                s3_lock_for_session = session_locks[session_id]
-                process_audio_segment_and_update_s3(final_output_wav_path, session_data, s3_lock_for_session)
+                    if convert_result.returncode == 0:
+                        logger.info(f"Successfully converted final concatenated blob to WAV: {final_output_wav_path}")
+                        s3_lock_for_session = session_locks[session_id]
+                        process_audio_segment_and_update_s3(final_output_wav_path, session_data, s3_lock_for_session)
+                    else:
+                        logger.error(f"ffmpeg conversion failed for final segment {final_concatenated_webm_path}. RC: {convert_result.returncode}, Err: {convert_result.stderr}")
+                else:
+                    logger.error(f"ffmpeg concat failed for final blobs of session {session_id}. RC: {concat_result.returncode}, Err: {concat_result.stderr}")
             else:
-                logger.error(f"ffmpeg conversion failed for final segment {final_input_blob_path}. RC: {result.returncode}, Err: {result.stderr}")
+                logger.info(f"Final filelist for session {session_id} was empty. No final segment to process.")
 
         except Exception as e:
             logger.error(f"Error processing final audio segment for session {session_id}: {e}", exc_info=True)
         finally:
-            if os.path.exists(final_input_blob_path):
-                try: os.remove(final_input_blob_path)
-                except OSError: pass
-            if os.path.exists(final_output_wav_path):
-                try: os.remove(final_output_wav_path)
-                except OSError: pass
-
+            # Clean up processing files for this final segment
+            final_files_to_delete = [final_filelist_path, final_concatenated_webm_path, final_output_wav_path]
+            for f_path in final_files_to_delete:
+                if os.path.exists(f_path):
+                    try: os.remove(f_path)
+                    except OSError: pass
+            # Clean up the individual blob parts themselves
+            for p_path in remaining_blob_paths:
+                if os.path.exists(p_path):
+                    try: os.remove(p_path)
+                    except OSError: pass
+            # Clear the list from session_data
+            session_data["current_segment_blob_paths"] = []
+            session_data["current_segment_blob_count"] = 0
+            
     ws = session_data.get("websocket_connection")
-    if ws:
+    if ws and not ws.closed:
+        logger.info(f"WebSocket session {session_id}: Fallback WS close in finally block.")
         try:
-            logger.info(f"Closing WebSocket for session {session_id}.")
-            ws.close(reason="Session stopped by server")
-        except Exception as e:
-            logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
+            ws.close(1000, "Session stopped by server")
+        except Exception as e_close:
+            logger.error(f"WebSocket session {session_id}: Error in fallback WS close: {e_close}")
     
     temp_session_audio_dir = session_data['temp_audio_session_dir']
     if os.path.exists(temp_session_audio_dir):
         try:
-            segments_dir = os.path.join(temp_session_audio_dir, "segments")
-            if os.path.exists(segments_dir):
-                for f_name in os.listdir(segments_dir): os.remove(os.path.join(segments_dir, f_name))
-                os.rmdir(segments_dir)
+            # More thorough cleanup
+            for root_dir, dirs, files in os.walk(temp_session_audio_dir, topdown=False):
+                for name in files:
+                    try: os.remove(os.path.join(root_dir, name))
+                    except OSError as e_file: logger.warning(f"Error deleting file {os.path.join(root_dir, name)}: {e_file}")
+                for name in dirs:
+                    try: os.rmdir(os.path.join(root_dir, name))
+                    except OSError as e_dir: logger.warning(f"Error deleting dir {os.path.join(root_dir, name)}: {e_dir}")
+            try: os.rmdir(temp_session_audio_dir) # Remove the main session directory itself
+            except OSError as e_main_dir: logger.warning(f"Error deleting main session dir {temp_session_audio_dir}: {e_main_dir}")
             
-            main_audio_file_placeholder = os.path.join(temp_session_audio_dir, 'session_audio_stream.raw')
-            if os.path.exists(main_audio_file_placeholder):
-                 os.remove(main_audio_file_placeholder)
-            os.rmdir(temp_session_audio_dir) 
             logger.info(f"Cleaned up temporary directory: {temp_session_audio_dir}")
         except Exception as e:
             logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
@@ -497,64 +515,94 @@ def audio_stream_socket(ws, session_id: str):
 
             elif isinstance(message, bytes):
                 session_data = active_sessions[session_id]
-                session_data["audio_buffer_for_current_segment"].extend(message)
                 
-                session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 # Placeholder
+                # Save individual blob
+                current_segment_parts_dir = os.path.join(session_data['temp_audio_session_dir'], "current_segment_parts")
+                os.makedirs(current_segment_parts_dir, exist_ok=True)
+                
+                blob_index = session_data.get("current_segment_blob_count", 0)
+                blob_filename = f"blob_{blob_index:04d}.webm"
+                blob_path = os.path.join(current_segment_parts_dir, blob_filename)
+                
+                try:
+                    with open(blob_path, "wb") as f_blob:
+                        f_blob.write(message)
+                    session_data.setdefault("current_segment_blob_paths", []).append(blob_path)
+                    session_data["current_segment_blob_count"] = blob_index + 1
+                    logger.debug(f"Session {session_id}: Saved blob {blob_index+1} to {blob_path} ({len(message)} bytes)")
+                except Exception as e_save:
+                    logger.error(f"Session {session_id}: Error saving blob {blob_path}: {e_save}", exc_info=True)
+                    continue # Skip processing this blob if save fails
+
+                session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 # Approx based on 3000ms timeslice
 
                 if not session_data["is_backend_processing_paused"] and \
                    session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
                     
-                    logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s). Processing.")
+                    logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s). Processing segment.")
                     
-                    segment_data_to_process = bytes(session_data["audio_buffer_for_current_segment"]) 
-                    session_data["audio_buffer_for_current_segment"].clear() 
+                    blob_paths_for_segment = list(session_data["current_segment_blob_paths"]) # Make a copy
+                    
+                    # Reset for next segment accumulation
+                    session_data["current_segment_blob_paths"] = []
+                    session_data["current_segment_blob_count"] = 0
                     session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
 
-                    temp_segment_dir = os.path.join(session_data['temp_audio_session_dir'], "segments")
-                    os.makedirs(temp_segment_dir, exist_ok=True)
-                    
-                    base_filename = f"segment_{datetime.now().strftime('%H%M%S%f')}"
-                    temp_input_blob_path = os.path.join(temp_segment_dir, f"{base_filename}.webm")
-                    temp_output_wav_path = os.path.join(temp_segment_dir, f"{base_filename}.wav")
-                    
-                    try:
-                        with open(temp_input_blob_path, 'wb') as f_blob:
-                            f_blob.write(segment_data_to_process) 
-                        logger.info(f"Session {session_id}: Saved segment blob to {temp_input_blob_path} ({len(segment_data_to_process)} bytes)")
-                        
-                        ffmpeg_command = [
-                            'ffmpeg', '-y', 
-                            '-i', temp_input_blob_path,
-                            '-ar', '16000',        
-                            '-ac', '1',            
-                            '-acodec', 'pcm_s16le', 
-                            temp_output_wav_path
-                        ]
-                        logger.info(f"Session {session_id}: Executing ffmpeg: {' '.join(ffmpeg_command)}")
-                        result = subprocess.run(ffmpeg_command, capture_output=True, text=True, check=False)
+                    if not blob_paths_for_segment:
+                        logger.warning(f"Session {session_id}: No blob paths to process for segment, though duration target met. Skipping.")
+                        continue
 
-                        if result.returncode != 0:
-                            logger.error(f"Session {session_id}: ffmpeg conversion failed for {temp_input_blob_path}. Return code: {result.returncode}")
-                            logger.error(f"ffmpeg stderr: {result.stderr}")
-                            logger.error(f"ffmpeg stdout: {result.stdout}")
+                    temp_processing_dir = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
+                    os.makedirs(temp_processing_dir, exist_ok=True)
+                    
+                    segment_uuid = uuid.uuid4().hex
+                    filelist_path = os.path.join(temp_processing_dir, f"filelist_{segment_uuid}.txt")
+                    concatenated_webm_path = os.path.join(temp_processing_dir, f"concat_{segment_uuid}.webm")
+                    final_output_wav_path = os.path.join(temp_processing_dir, f"final_audio_{segment_uuid}.wav")
+
+                    try:
+                        with open(filelist_path, "w") as f_list:
+                            for p in blob_paths_for_segment:
+                                f_list.write(f"file '{os.path.abspath(p)}'\n")
+                        logger.info(f"Session {session_id}: Created filelist {filelist_path} with {len(blob_paths_for_segment)} blobs.")
+
+                        concat_command = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', filelist_path, '-c', 'copy', concatenated_webm_path]
+                        logger.info(f"Session {session_id}: Executing ffmpeg concat: {' '.join(concat_command)}")
+                        concat_result = subprocess.run(concat_command, capture_output=True, text=True, check=False)
+
+                        if concat_result.returncode != 0:
+                            logger.error(f"Session {session_id}: ffmpeg concat failed. RC: {concat_result.returncode}")
+                            logger.error(f"ffmpeg concat stderr: {concat_result.stderr}")
+                            continue # Skip to next message loop iteration
+
+                        logger.info(f"Session {session_id}: Successfully concatenated blobs to {concatenated_webm_path}")
+
+                        convert_command = ['ffmpeg', '-y', '-i', concatenated_webm_path, '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', final_output_wav_path]
+                        logger.info(f"Session {session_id}: Executing ffmpeg convert: {' '.join(convert_command)}")
+                        convert_result = subprocess.run(convert_command, capture_output=True, text=True, check=False)
+
+                        if convert_result.returncode != 0:
+                            logger.error(f"Session {session_id}: ffmpeg conversion failed for {concatenated_webm_path}. RC: {convert_result.returncode}")
+                            logger.error(f"ffmpeg convert stderr: {convert_result.stderr}")
                             continue 
                         
-                        logger.info(f"Session {session_id}: Successfully converted {temp_input_blob_path} to {temp_output_wav_path}")
+                        logger.info(f"Session {session_id}: Successfully converted {concatenated_webm_path} to {final_output_wav_path}")
                         
                         s3_lock_for_session = session_locks[session_id]
-                        success = process_audio_segment_and_update_s3(temp_output_wav_path, session_data, s3_lock_for_session)
+                        success = process_audio_segment_and_update_s3(final_output_wav_path, session_data, s3_lock_for_session)
                         if not success:
-                             logger.error(f"Session {session_id}: Transcription or S3 update failed for segment {temp_output_wav_path}")
+                             logger.error(f"Session {session_id}: Transcription or S3 update failed for segment {final_output_wav_path}")
                         
                     except Exception as e:
-                        logger.error(f"Session {session_id}: Error during segment conversion/processing for {temp_input_blob_path}: {e}", exc_info=True)
+                        logger.error(f"Session {session_id}: Error during segment processing pipeline: {e}", exc_info=True)
                     finally: 
-                        if os.path.exists(temp_input_blob_path):
-                            try: os.remove(temp_input_blob_path)
-                            except OSError as e_del: logger.warning(f"Error deleting temp blob {temp_input_blob_path}: {e_del}")
-                        if os.path.exists(temp_output_wav_path): 
-                            try: os.remove(temp_output_wav_path)
-                            except OSError as e_del: logger.warning(f"Error deleting temp wav {temp_output_wav_path}: {e_del}")
+                        files_to_delete = [filelist_path, concatenated_webm_path, final_output_wav_path] + blob_paths_for_segment
+                        for f_path in files_to_delete:
+                            if os.path.exists(f_path):
+                                try: os.remove(f_path)
+                                except OSError as e_del: logger.warning(f"Session {session_id}: Error deleting temp file {f_path}: {e_del}")
+                        # Attempt to remove current_segment_parts_dir if empty, and segments_processing if empty
+                        # This is more complex due to potential multiple processing steps; simpler to clean fully in _finalize_session
             
             if session_id not in active_sessions:
                 logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
