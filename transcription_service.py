@@ -217,69 +217,89 @@ def process_audio_segment_and_update_s3(
         logger.debug(f"S3_LOCK_ACQUIRED for session {session_id_for_log} in process_audio_segment_and_update_s3")
 
         lines_to_append_to_s3 = []
+        marker_processed_and_cleared = False
 
         # Check for and prepare pause/resume marker
+        # This must happen before appending audio transcript lines to maintain chronological order if possible
+        # The marker's timestamp (event_offset_for_marker) is relative to the start of the session,
+        # just like the audio segment's offset (segment_offset_seconds).
+        
         marker_to_write = session_data.get("pause_marker_to_write")
         event_offset_for_marker = session_data.get("pause_event_timestamp_offset")
 
         if marker_to_write is not None and event_offset_for_marker is not None:
-            session_data["pause_marker_to_write"] = None # Clear under lock
-            session_data["pause_event_timestamp_offset"] = None # Clear under lock
-            logger.info(f"Session {session_id_for_log}: Processing marker '{marker_to_write}' for offset {event_offset_for_marker:.2f}s.")
-            
-            formatted_timestamp_for_marker = _format_time_delta(event_offset_for_marker, session_start_time_utc)
-            marker_line = f"{marker_to_write} [AT: {formatted_timestamp_for_marker} UTC]"
-            lines_to_append_to_s3.append(marker_line)
+            # Check if this marker should be written *before* the current audio segment's transcription
+            # This simple check assumes markers are processed close to their occurrence.
+            # A more robust solution might involve a sorted queue of events (markers and transcriptions).
+            if event_offset_for_marker <= segment_offset_seconds:
+                logger.info(f"Session {session_id_for_log}: Processing marker '{marker_to_write}' for offset {event_offset_for_marker:.2f}s (before current audio segment).")
+                formatted_timestamp_for_marker = _format_time_delta(event_offset_for_marker, session_start_time_utc)
+                marker_line = f"[{formatted_timestamp_for_marker} UTC] {marker_to_write}"
+                lines_to_append_to_s3.append(marker_line)
+                
+                # Clear the marker from session_data *only if it's being added now*
+                session_data["pause_marker_to_write"] = None
+                session_data["pause_event_timestamp_offset"] = None
+                marker_processed_and_cleared = True
+            else:
+                logger.info(f"Session {session_id_for_log}: Marker '{marker_to_write}' for offset {event_offset_for_marker:.2f}s is *after* current audio segment offset {segment_offset_seconds:.2f}s. Will process later.")
         
         # Add processed audio transcript lines
         if processed_transcript_lines:
             lines_to_append_to_s3.extend(processed_transcript_lines)
+
+        # If a marker was not processed because its offset was too high,
+        # it remains in session_data for the next call to process_audio_segment_and_update_s3.
 
         if not lines_to_append_to_s3:
             logger.info(f"No new content (marker or transcript) to append for session {session_id_for_log}.")
             # Still update duration as audio segment was processed (even if transcription was empty)
             session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
             logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (no new lines to S3)")
-            # Cleanup temp WAV file
-            if os.path.exists(temp_segment_wav_path):
-                try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
-                except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
-            logger.debug(f"S3_LOCK_RELEASED for session {session_id_for_log} (no S3 write)")
-            return True
-
-        # If there are lines to append, perform S3 operations
-        try:
-            existing_content = ""
+        else:
+            # If there are lines to append, perform S3 operations
             try:
-                obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
-                existing_content = obj['Body'].read().decode('utf-8')
-            except s3.exceptions.NoSuchKey:
-                logger.info(f"Transcript {s3_transcript_key} not found. Creating with header.")
-                if not existing_content.startswith("# Transcript"):
-                     header = f"# Transcript - Session {session_id_for_log}\n"
-                     header += f"Agent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\n"
-                     header += f"Session Started (UTC): {session_start_time_utc.isoformat()}\n\n"
-                     existing_content = header
-            
-            appended_text = "\n".join(lines_to_append_to_s3) + "\n"
-            updated_content = existing_content + appended_text
-            
-            s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
-            logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
+                existing_content = ""
+                try:
+                    obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
+                    existing_content = obj['Body'].read().decode('utf-8')
+                except s3.exceptions.NoSuchKey:
+                    logger.info(f"Transcript {s3_transcript_key} not found. Creating with header.")
+                    if not existing_content.startswith("# Transcript"):
+                         header = f"# Transcript - Session {session_id_for_log}\n"
+                         header += f"Agent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\n"
+                         header += f"Session Started (UTC): {session_start_time_utc.isoformat()}\n\n"
+                         existing_content = header
+                
+                appended_text = "\n".join(lines_to_append_to_s3) + "\n"
+                updated_content = existing_content + appended_text
+                
+                s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
+                logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
 
-            # Update duration after successful S3 write
-            session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
-            logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s")
-            
-            success_flag = True
-        except Exception as e_s3_update:
-            logger.error(f"Error during S3 transcript update for {s3_transcript_key}: {e_s3_update}", exc_info=True)
-            success_flag = False
-        finally:
-            # Cleanup temp WAV file regardless of S3 success/failure within this block
-            if os.path.exists(temp_segment_wav_path):
-                try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
-                except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
-            logger.debug(f"S3_LOCK_RELEASED for session {session_id_for_log}")
+                # Update duration after successful S3 write
+                session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
+                logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s")
+                
+            except Exception as e_s3_update:
+                logger.error(f"Error during S3 transcript update for {s3_transcript_key}: {e_s3_update}", exc_info=True)
+                # If S3 write failed, and we had prepared a marker, we should NOT clear it from session_data
+                # so it can be retried. The `marker_processed_and_cleared` flag helps here.
+                if marker_processed_and_cleared: # If we thought we processed it
+                    logger.warning(f"S3 write failed for session {session_id_for_log}, but marker was cleared. This marker might be lost if not re-queued.")
+                    # Potentially re-queue the marker if S3 fails - complex, for now, log it.
+                
+                # Cleanup temp WAV file and release lock, then return False
+                if os.path.exists(temp_segment_wav_path):
+                    try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV after S3 error: {temp_segment_wav_path}")
+                    except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path} after S3 error: {e_del}")
+                logger.debug(f"S3_LOCK_RELEASED for session {session_id_for_log} (S3 write error)")
+                return False # Indicate S3 update failure
+
+        # Cleanup temp WAV file
+        if os.path.exists(temp_segment_wav_path):
+            try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
+            except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
         
-        return success_flag
+        logger.debug(f"S3_LOCK_RELEASED for session {session_id_for_log}")
+        return True
