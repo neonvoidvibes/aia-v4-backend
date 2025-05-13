@@ -599,10 +599,16 @@ def audio_stream_socket(ws, session_id: str):
                                 logger.error(f"Session {session_id}: ffmpeg concat failed. RC: {concat_result.returncode}")
                                 logger.error(f"ffmpeg concat stderr: {concat_result.stderr}")
                                 for p_del in blob_paths_for_segment: # Cleanup blobs if concat fails
-                                     if os.path.exists(p_del): try: os.remove(p_del)
-                                     except OSError: pass
-                                if os.path.exists(filelist_path): try: os.remove(filelist_path)
-                                except OSError: pass
+                                     if os.path.exists(p_del):
+                                         try:
+                                             os.remove(p_del)
+                                         except OSError:
+                                             pass
+                                if os.path.exists(filelist_path):
+                                    try:
+                                        os.remove(filelist_path)
+                                    except OSError:
+                                        pass
                                 continue
 
                             logger.info(f"Session {session_id}: Successfully concatenated blobs to {concatenated_webm_path}")
