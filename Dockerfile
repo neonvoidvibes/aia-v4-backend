@@ -1,41 +1,32 @@
-# Use an official Python runtime as a parent image
+# Use an official Python runtime
 FROM python:3.11-slim
 
-# Set the working directory in the container
+# bust cache so static ffmpeg always re-downloads
+ARG CACHEBUST=1
+
 WORKDIR /app
 
-# Install system dependencies required for PortAudio, build tools, and other potential needs
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
-    portaudio19-dev \
-    libasound2-dev \
-    build-essential \
-    ffmpeg \
-    git \
-    curl \
+      portaudio19-dev \
+      libasound2-dev \
+      build-essential \
+      git \
+      curl \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    \
+    # install ffmpeg 6.x static build
+    && curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+       | tar -xJ --wildcards --strip-components=1 -C /usr/local/bin \
+         '*/ffmpeg' '*/ffprobe'
 
-# Copy the requirements file into the container
 COPY requirements.txt .
-
-# Install any needed packages specified in requirements.txt
-# Use --no-cache-dir to reduce image size
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application's code into the container
 COPY . .
 
-# Make port available to the world outside this container
-# Render will set the PORT env var, Gunicorn will bind to it.
-# This EXPOSE is more for documentation / local Docker runs.
 EXPOSE 10000
 
-# Define environment variable for the Gunicorn port (Render provides $PORT)
-# Gunicorn will use $PORT if set, otherwise default to 8000.
-# No need to explicitly set ENV PORT here as Render injects it.
-
-# Run gunicorn when the container launches
-# The $PORT variable will be injected by Render.
-# Using sh -c to allow environment variable expansion in the CMD.
-CMD ["sh", "-c", "gunicorn --workers ${GUNICORN_WORKERS:-4} --bind 0.0.0.0:${PORT} api_server:app --log-file - --error-logfile - --access-logfile - --log-level info"]
+# print ffmpeg version to logs, then launch WITH 1 WORKER
+CMD ["sh", "-c", "ffmpeg -version && ffprobe -version && exec gunicorn --workers 1 --bind 0.0.0.0:${PORT} api_server:app --log-file - --error-logfile - --access-logfile - --log-level info"]
