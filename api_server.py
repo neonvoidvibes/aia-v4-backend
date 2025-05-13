@@ -406,13 +406,17 @@ def _finalize_session(session_id: str):
                 final_processing_files_to_delete = [final_filelist_path, final_concatenated_webm_path, final_output_wav_path]
                 for f_path in final_processing_files_to_delete:
                     if os.path.exists(f_path):
-                        try: os.remove(f_path)
-                        except OSError: pass
+                        try:
+                            os.remove(f_path)
+                        except OSError:
+                            pass
                 # Clean up the individual blob parts themselves
                 for p_path in remaining_blob_paths: # Use the copied list
                     if os.path.exists(p_path):
-                        try: os.remove(p_path)
-                        except OSError: pass
+                        try:
+                            os.remove(p_path)
+                        except OSError:
+                            pass
         
         ws = session_data.get("websocket_connection")
         if ws:
@@ -649,13 +653,17 @@ def audio_stream_socket(ws, session_id: str):
                             temp_files_to_delete = [filelist_path, concatenated_webm_path, final_output_wav_path] # WAV cleaned by transcribe service
                             for f_path in temp_files_to_delete:
                                 if os.path.exists(f_path):
-                                    try: os.remove(f_path)
-                                    except OSError as e_del: logger.warning(f"Session {session_id}: Error deleting temp file {f_path}: {e_del}")
+                                    try:
+                                        os.remove(f_path)
+                                    except OSError as e_del:
+                                        logger.warning(f"Session {session_id}: Error deleting temp file {f_path}: {e_del}")
                             # Clean up the individual blob parts for this processed segment
                             for p_path in blob_paths_for_segment:
                                 if os.path.exists(p_path):
-                                    try: os.remove(p_path)
-                                    except OSError as e_del: logger.warning(f"Session {session_id}: Error deleting processed blob part {p_path}: {e_del}")
+                                    try:
+                                        os.remove(p_path)
+                                    except OSError as e_del:
+                                        logger.warning(f"Session {session_id}: Error deleting processed blob part {p_path}: {e_del}")
             
             if session_id not in active_sessions: # Re-check before loop continues
                 logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
