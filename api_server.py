@@ -554,9 +554,11 @@ def audio_stream_socket(ws, session_id: str):
                     try:
                         with open(blob_path, "wb") as f_blob:
                             f_blob.write(message)
+                            f_blob.flush() # Ensure buffer is flushed to OS
+                            os.fsync(f_blob.fileno()) # Ensure OS flushes to disk
                         session_data.setdefault("current_segment_blob_paths", []).append(blob_path)
                         session_data["current_segment_blob_count"] = blob_index + 1
-                        logger.debug(f"Session {session_id}: Saved blob {blob_index+1} to {blob_path} ({len(message)} bytes)")
+                        logger.debug(f"Session {session_id}: Saved blob {blob_index+1} to {blob_path} ({len(message)} bytes), flushed and synced.")
                     except Exception as e_save:
                         logger.error(f"Session {session_id}: Error saving blob {blob_path}: {e_save}", exc_info=True)
                         continue

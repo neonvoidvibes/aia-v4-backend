@@ -255,9 +255,10 @@ def process_audio_segment_and_update_s3(
             # Download existing content
             existing_content = ""
             try:
+                logger.debug(f"S3 Update: Attempting to get_object. Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}'")
                 obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
                 existing_content = obj['Body'].read().decode('utf-8')
-                logger.debug(f"Downloaded existing transcript (length {len(existing_content)}) from {s3_transcript_key}")
+                logger.info(f"S3 Update: Downloaded existing transcript (length {len(existing_content)}) from {s3_transcript_key}. Object ETag: {obj.get('ETag')}")
             except s3.exceptions.NoSuchKey:
                 logger.info(f"S3 transcript {s3_transcript_key} not found. Will create new.")
                 # Header should have been created by /start endpoint. If not, add it here or ensure /start does it.
@@ -269,12 +270,14 @@ def process_audio_segment_and_update_s3(
             except Exception as e:
                 logger.error(f"Error downloading existing transcript {s3_transcript_key}: {e}", exc_info=True)
                 return False # Fail if we can't download
-
-            updated_content = existing_content + appended_text
-            
-            # Upload updated content
-            s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
-            logger.info(f"Successfully appended {len(appended_text)} chars to S3 transcript {s3_transcript_key}")
+        
+        logger.debug(f"S3 Update: Length of existing_content: {len(existing_content)}, Length of appended_text: {len(appended_text)}")
+        updated_content = existing_content + appended_text
+        
+        # Upload updated content
+            logger.debug(f"S3 Update: Attempting to put_object. Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}', UpdatedContentLength={len(updated_content)}")
+        logger.debug(f"S3 Update: Attempting to put_object. Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}', UpdatedContentLength={len(updated_content)}")
+            logger.info(f"Successfully appended {len(appended_text)} chars (total {len(updated_content)} chars) to S3 transcript {s3_transcript_key}")
 
             # Update the cumulative processed duration for the session in session_data
             # Use the actual_segment_duration obtained from ffprobe (or its fallback)
