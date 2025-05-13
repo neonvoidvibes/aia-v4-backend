@@ -262,21 +262,22 @@ def process_audio_segment_and_update_s3(
             except s3.exceptions.NoSuchKey:
                 logger.info(f"S3 transcript {s3_transcript_key} not found. Will create new.")
                 # Header should have been created by /start endpoint. If not, add it here or ensure /start does it.
-                if not existing_content.startswith("# Transcript"): # Basic check
+                # This check might be redundant if existing_content is guaranteed to be empty on NoSuchKey.
+                if not existing_content.startswith("# Transcript"):
                      header = f"# Transcript - Session {session_data.get('session_id', 'UNKNOWN_SESSION')}\n"
                      header += f"Agent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\n"
                      header += f"Session Started (UTC): {session_start_time_utc.isoformat()}\n\n"
                      existing_content = header
-            except Exception as e:
-                logger.error(f"Error downloading existing transcript {s3_transcript_key}: {e}", exc_info=True)
+            except Exception as e_get: # More specific exception handling for the get_object call
+                logger.error(f"Error downloading existing transcript {s3_transcript_key}: {e_get}", exc_info=True)
                 return False # Fail if we can't download
-        
-        logger.debug(f"S3 Update: Length of existing_content: {len(existing_content)}, Length of appended_text: {len(appended_text)}")
-        updated_content = existing_content + appended_text
-        
-        # Upload updated content
+
+            logger.debug(f"S3 Update: Length of existing_content: {len(existing_content)}, Length of appended_text: {len(appended_text)}")
+            updated_content = existing_content + appended_text
+            
+            # Upload updated content
             logger.debug(f"S3 Update: Attempting to put_object. Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}', UpdatedContentLength={len(updated_content)}")
-        logger.debug(f"S3 Update: Attempting to put_object. Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}', UpdatedContentLength={len(updated_content)}")
+            s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
             logger.info(f"Successfully appended {len(appended_text)} chars (total {len(updated_content)} chars) to S3 transcript {s3_transcript_key}")
 
             # Update the cumulative processed duration for the session in session_data
@@ -285,8 +286,8 @@ def process_audio_segment_and_update_s3(
             logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s using segment duration {segment_actual_duration:.2f}s")
 
             return True
-        except Exception as e:
-            logger.error(f"Error during S3 transcript update for {s3_transcript_key}: {e}", exc_info=True)
+        except Exception as e_s3_update: # This is the except for the outer try that wraps all S3 operations
+            logger.error(f"Overall error during S3 transcript update for {s3_transcript_key}: {e_s3_update}", exc_info=True)
             return False
         finally:
             logger.debug(f"Released S3 lock for session {session_data.get('session_id')}")
