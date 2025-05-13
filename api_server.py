@@ -410,12 +410,14 @@ def _finalize_session(session_id: str):
         
         ws = session_data.get("websocket_connection")
         if ws:
+            logger.info(f"Attempting to close WebSocket for session {session_id} during finalization.")
             try:
-                logger.info(f"Closing WebSocket for session {session_id}.")
-                if not ws.closed:
-                    ws.close(1000, "Session stopped by server")
-            except Exception as e:
-                logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
+                # simple-websocket's Server object (ws) doesn't have a public .closed attribute.
+                # ws.close() should be idempotent or handle being called on an already closing/closed socket.
+                ws.close(1000, "Session stopped by server (finalize)")
+                logger.info(f"WebSocket for session {session_id} close() called.")
+            except Exception as e: # Catch a broader range of potential errors during close
+                logger.warning(f"Error closing WebSocket for session {session_id} during finalization: {e}", exc_info=True)
     
     temp_session_audio_dir = session_data['temp_audio_session_dir']
     if os.path.exists(temp_session_audio_dir):
@@ -580,67 +582,121 @@ def audio_stream_socket(ws, session_id: str):
                             session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
                             session_data["actual_segment_duration_seconds"] = 0.0
                             continue
-                        else: # No global header and no current fragments
-                            logger.warning(f"Session {session_id}: No global header and no current fragments. Skipping.")
-                            continue
+                        logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment from raw bytes.")
                         
-                        # Reset for next segment accumulation
+                        # Make copies of data needed for the thread
+                        # session_data itself is a reference to the dict in active_sessions,
+                        # so modifications by the thread will be visible. Lock appropriately.
+                        bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
+                        global_header_for_thread = session_data.get("webm_global_header_bytes", b'')
+                        
+                        # Reset for next segment accumulation *before* starting thread
                         session_data["current_segment_raw_bytes"] = bytearray()
                         session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
-                        session_data["actual_segment_duration_seconds"] = 0.0
+                        # actual_segment_duration_seconds will be set by the thread after ffprobe
 
-                        if not all_segment_bytes:
-                            logger.warning(f"Session {session_id}: Raw byte buffer is empty, though duration target met. Skipping.")
+                        if not bytes_to_process: # Should use global_header + bytes_to_process logic below
+                            logger.warning(f"Session {session_id}: Raw byte buffer for current fragments is empty, though duration target met. Skipping processing.")
                             continue
 
-                        temp_processing_dir = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
-                        os.makedirs(temp_processing_dir, exist_ok=True)
+                        # Determine combined bytes for FFmpeg
+                        all_segment_bytes_for_ffmpeg_thread = b''
+                        if not global_header_for_thread and bytes_to_process:
+                            all_segment_bytes_for_ffmpeg_thread = bytes_to_process
+                        elif global_header_for_thread and bytes_to_process:
+                            if bytes_to_process.startswith(global_header_for_thread) and len(global_header_for_thread) > 0:
+                                all_segment_bytes_for_ffmpeg_thread = bytes_to_process
+                            else:
+                                all_segment_bytes_for_ffmpeg_thread = global_header_for_thread + bytes_to_process
+                        elif global_header_for_thread and not bytes_to_process:
+                             logger.warning(f"Session {session_id}: Global header exists but no current fragments to process. Skipping empty segment.")
+                             continue
+                        else: # No global header and no current fragments
+                            logger.warning(f"Session {session_id}: No global header and no current fragments to process. Skipping.")
+                            continue
                         
-                        segment_uuid = uuid.uuid4().hex
-                        final_output_wav_path = os.path.join(temp_processing_dir, f"final_audio_{segment_uuid}.wav")
+                        if not all_segment_bytes_for_ffmpeg_thread:
+                            logger.warning(f"Session {session_id}: Combined bytes for FFmpeg is empty. Skipping.")
+                            continue
 
-                        try:
-                            ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', final_output_wav_path]
-                            logger.info(f"Session {session_id}: Executing ffmpeg direct WAV conversion from pipe: {' '.join(ffmpeg_command)}")
-                            
-                            process = subprocess.Popen(ffmpeg_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                            stdout, stderr = process.communicate(input=all_segment_bytes)
+                        # Prepare paths and other args for the thread
+                        temp_processing_dir_thread = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
+                        os.makedirs(temp_processing_dir_thread, exist_ok=True)
+                        segment_uuid_thread = uuid.uuid4().hex
+                        final_output_wav_path_thread = os.path.join(temp_processing_dir_thread, f"final_audio_{segment_uuid_thread}.wav")
 
-                            if process.returncode != 0:
-                                logger.error(f"Session {session_id}: ffmpeg direct WAV conversion failed. RC: {process.returncode}")
-                                logger.error(f"ffmpeg stderr: {stderr.decode('utf-8', 'ignore')}")
-                                continue
-                            
-                            logger.info(f"Session {session_id}: Successfully converted piped webm stream to {final_output_wav_path}")
-                            
-                            ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', final_output_wav_path]
+                        # Define the target function for the thread
+                        def process_segment_in_thread(
+                            s_id, s_data_ref, lock_ref,
+                            audio_bytes, wav_path, current_offset
+                        ):
                             try:
-                                duration_result = subprocess.run(ffprobe_command, capture_output=True, text=True, check=True)
-                                actual_duration = float(duration_result.stdout.strip())
-                                session_data['actual_segment_duration_seconds'] = actual_duration
-                                logger.info(f"Session {session_id}: Actual duration of WAV segment {final_output_wav_path} is {actual_duration:.2f}s")
-                            except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
-                                logger.error(f"Session {session_id}: ffprobe failed for WAV {final_output_wav_path} or failed to parse duration: {ffprobe_err}. Estimating duration based on byte length.")
-                                # Fallback: Estimate duration based on bytes (16kHz, 16-bit mono = 32000 bytes/sec)
-                                estimated_wav_duration = len(all_segment_bytes) / (16000 * 2 * 0.2) # 0.2 is a guess factor for webm to wav
-                                session_data['actual_segment_duration_seconds'] = estimated_wav_duration
-                                logger.warning(f"Using rough estimated duration: {estimated_wav_duration:.2f}s")
+                                ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', wav_path]
+                                logger.info(f"Thread Session {s_id}: Executing ffmpeg: {' '.join(ffmpeg_command)}")
+                                process = subprocess.Popen(ffmpeg_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                _, stderr_ffmpeg = process.communicate(input=audio_bytes)
+
+                                if process.returncode != 0:
+                                    logger.error(f"Thread Session {s_id}: ffmpeg failed. RC: {process.returncode}, Err: {stderr_ffmpeg.decode('utf-8','ignore')}")
+                                    return # Exit thread on ffmpeg failure
+                                logger.info(f"Thread Session {s_id}: Successfully converted to {wav_path}")
+
+                                ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', wav_path]
+                                actual_segment_dur = 0.0
+                                try:
+                                    duration_result = subprocess.run(ffprobe_command, capture_output=True, text=True, check=True)
+                                    actual_segment_dur = float(duration_result.stdout.strip())
+                                    logger.info(f"Thread Session {s_id}: Actual duration of WAV {wav_path} is {actual_segment_dur:.2f}s")
+                                except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
+                                    logger.error(f"Thread Session {s_id}: ffprobe failed for {wav_path}: {ffprobe_err}. Estimating.")
+                                    estimated_dur = len(audio_bytes) / (16000 * 2 * 0.2) # Very rough
+                                    actual_segment_dur = estimated_dur
+                                    logger.warning(f"Thread Session {s_id}: Using rough estimated duration: {actual_segment_dur:.2f}s")
+                                
+                                # Update session_data with actual duration under lock
+                                with lock_ref:
+                                    if s_id in active_sessions: # Check if session still exists
+                                        active_sessions[s_id]['actual_segment_duration_seconds'] = actual_segment_dur
+                                    else:
+                                        logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration. Transcription might use old offset.")
+                                        # If session_data is gone, we can't reliably pass it to transcription_service
+                                        # However, process_audio_segment_and_update_s3 uses its own copy (s_data_ref).
+                                        # Let's ensure s_data_ref is updated for the call to transcription service.
+                                        s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
 
 
-                            success = process_audio_segment_and_update_s3(final_output_wav_path, session_data, session_locks[session_id])
-                            if not success:
-                                 logger.error(f"Session {session_id}: Transcription or S3 update failed for segment {final_output_wav_path}")
-                            
-                        except Exception as e:
-                            logger.error(f"Session {session_id}: Error during segment processing pipeline (piped): {e}", exc_info=True)
-                        finally:
-                            # Only the final WAV is created in temp_processing_dir per segment now for this path.
-                            # process_audio_segment_and_update_s3 is expected to clean up final_output_wav_path.
-                            pass # No intermediate concat/filelist files to delete for this method.
+                                # Call transcription service
+                                # The lock for s3_lock in process_audio_segment_and_update_s3 is the same session_locks[s_id]
+                                success_transcribe = process_audio_segment_and_update_s3(wav_path, s_data_ref, lock_ref)
+                                if not success_transcribe:
+                                     logger.error(f"Thread Session {s_id}: Transcription or S3 update failed for segment {wav_path}")
+
+                            except Exception as thread_e:
+                                logger.error(f"Thread Session {s_id}: Error during threaded segment processing: {thread_e}", exc_info=True)
+                            finally:
+                                # WAV file is cleaned by transcription_service
+                                pass
+                        
+                        # Create and start the thread
+                        processing_thread = threading.Thread(
+                            target=process_segment_in_thread,
+                            args=(
+                                session_id,
+                                session_data, # Pass the reference to the session's data dict
+                                session_locks[session_id], # Pass the specific lock for this session
+                                all_segment_bytes_for_ffmpeg_thread,
+                                final_output_wav_path_thread,
+                                session_data['current_total_audio_duration_processed_seconds'] # Pass current offset
+                            )
+                        )
+                        processing_thread.start()
+                        logger.info(f"Session {session_id}: Started processing thread for segment {segment_uuid_thread}")
             
             if session_id not in active_sessions:
                 logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
-                if not ws.closed: ws.close(1000, "Session stopped externally")
+                if ws.fileno() != -1: # Check if socket is still valid before closing
+                    try: ws.close(1000, "Session stopped externally")
+                    except Exception as e_close: logger.error(f"Error closing WebSocket for externally stopped session {session_id}: {e_close}")
                 break
 
     except ConnectionResetError:
