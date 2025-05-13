@@ -304,8 +304,8 @@ def start_recording_route(user: SupabaseUser):
         "last_activity_timestamp": time.time(),
         "is_active": True, 
         "audio_buffer_for_current_segment": bytearray(), # Will be deprecated by blob_paths
-        "current_segment_blob_paths": [],
-        "current_segment_blob_count": 0,
+        "current_segment_blob_paths": [], 
+        "current_segment_blob_count": 0, 
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0, # New: To store ffprobe result for the segment just processed
     }
@@ -342,7 +342,7 @@ def _finalize_session(session_id: str):
             return
             
         session_data = active_sessions[session_id]
-        session_data["is_active"] = False
+        session_data["is_active"] = False 
         
         remaining_blob_paths = list(session_data.get("current_segment_blob_paths", [])) # Make a copy
         if remaining_blob_paths:
@@ -415,16 +415,16 @@ def _finalize_session(session_id: str):
                         except OSError: pass
         
         ws = session_data.get("websocket_connection")
-    if ws:
+        if ws:
+            try:
                 logger.info(f"Closing WebSocket for session {session_id}.")
-            logger.info(f"Closing WebSocket for session {session_id}.")
-            if not ws.closed:
-                ws.close(1000, "Session stopped by server")
-        except Exception as e:
-            logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
+                if not ws.closed:
+                    ws.close(1000, "Session stopped by server")
+            except Exception as e:
                 logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
-        
-        temp_session_audio_dir = session_data['temp_audio_session_dir']
+    
+    temp_session_audio_dir = session_data['temp_audio_session_dir']
+    if os.path.exists(temp_session_audio_dir):
         try:
             # More thorough cleanup
             for root_dir, dirs, files in os.walk(temp_session_audio_dir, topdown=False):
@@ -534,37 +534,6 @@ def audio_stream_socket(ws, session_id: str):
                     logger.error(f"WebSocket session {session_id}: Error processing control message '{message}': {e}")
 
             elif isinstance(message, bytes):
-                session_data = active_sessions[session_id]
-                
-                # Save individual blob
-                current_segment_parts_dir = os.path.join(session_data['temp_audio_session_dir'], "current_segment_parts")
-                os.makedirs(current_segment_parts_dir, exist_ok=True)
-                
-                blob_index = session_data.get("current_segment_blob_count", 0)
-                blob_filename = f"blob_{blob_index:04d}.webm"
-                blob_path = os.path.join(current_segment_parts_dir, blob_filename)
-                
-                try:
-                    with open(blob_path, "wb") as f_blob:
-                        f_blob.write(message)
-                    session_data.setdefault("current_segment_blob_paths", []).append(blob_path)
-                    session_data["current_segment_blob_count"] = blob_index + 1
-                    logger.debug(f"Session {session_id}: Saved blob {blob_index+1} to {blob_path} ({len(message)} bytes)")
-                except Exception as e_save:
-                    logger.error(f"Session {session_id}: Error saving blob {blob_path}: {e_save}", exc_info=True)
-                    continue # Skip processing this blob if save fails
-
-                session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 # Approx based on 3000ms timeslice
-
-                if not session_data["is_backend_processing_paused"] and \
-                   session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
-                    
-                    logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s). Processing segment.")
-                    
-                    blob_paths_for_segment = list(session_data["current_segment_blob_paths"]) # Make a copy
-                    
-                    # Reset for next segment accumulation
-                elif isinstance(message, bytes):
                 with session_locks[session_id]: # Protect session_data modifications
                     if session_id not in active_sessions: # Re-check after acquiring lock
                         logger.warning(f"WebSocket {session_id}: Session disappeared after acquiring lock. Aborting message processing.")
@@ -596,7 +565,7 @@ def audio_stream_socket(ws, session_id: str):
                         
                         logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment.")
                         
-                        blob_paths_for_segment = list(session_data["current_segment_blob_paths"])
+                        blob_paths_for_segment = list(session_data["current_segment_blob_paths"]) 
                         
                         # Reset for next segment BEFORE processing current one to avoid race if processing is slow
                         session_data["current_segment_blob_paths"] = []
@@ -658,43 +627,41 @@ def audio_stream_socket(ws, session_id: str):
                                 logger.error(f"Session {session_id}: ffmpeg conversion failed for {concatenated_webm_path}. RC: {convert_result.returncode}")
                                 logger.error(f"ffmpeg convert stderr: {convert_result.stderr}")
                                 continue # Skip transcription if conversion fails
-                    if ws and not ws.closed: # Ensure it's not already closed
-                    logger.info(f"WebSocket session {session_id}: Fallback WS close in finally block.")
-                    try:
-                        ws.close(1000, "Server-side cleanup")
-                    except Exception as e_close:
-                        logger.error(f"WebSocket session {session_id}: Error in fallback WS close: {e_close}")
-                
-                # If the WebSocket connection is being cleaned up, and it was the one registered for the session,
-                # remove it from the session data.
-                if session_id in active_sessions and active_sessions[session_id].get("websocket_connection") == ws:
-                    active_sessions[session_id]["websocket_connection"] = None
-                    logger.info(f"WebSocket for session {session_id} (user {user.id}) deregistered from session data.")
-        
-                # The _finalize_session call will be triggered if the session is still marked active and the loop ends,
-                # or if stop_recording is explicitly called.
-                # No need to call _finalize_session directly here just because the WS disconnected if the session might still be active
-                # (e.g. if backend processing is paused and recording is stopped/restarted via HTTP).
-                # The idle cleanup thread or an explicit /stop call will handle full finalization.
-                # However, if this WS was the *only* thing keeping it "active" in terms of receiving data,
-                # it's reasonable to ensure finalization if it closes and no new WS takes over.
-                # The current logic seems okay: if the loop exits due to error or timeout, _finalize_session is called.
-        
-            except ConnectionResetError:
-                logger.warning(f"WebSocket for session {session_id} (user {user.id}): Connection reset by client.")
-            except Exception as e:
-                logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
-            finally:
-                logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected.")
-                # If this WebSocket was the active one for the session, mark it as None in session_data
-                if session_id in active_sessions and active_sessions[session_id].get("websocket_connection") == ws:
-                    with session_locks[session_id]: # Protect session_data modification
-                         if session_id in active_sessions: # Re-check as it might be cleaned up by another thread
-                            active_sessions[session_id]["websocket_connection"] = None
-                            logger.info(f"WebSocket for session {session_id} (user {user.id}) deregistered in finally block.")
-                
-                # If session is still marked as active (e.g. client closed WS without sending stop_stream)
-                # and no other WebSocket is attached, and this was the one, it's likely an unexpected termination.
+                            
+                            logger.info(f"Session {session_id}: Successfully converted {concatenated_webm_path} to {final_output_wav_path}")
+                            
+                            # The s3_lock is acquired by process_audio_segment_and_update_s3 itself
+                            # We still pass it so it can use it.
+                            transcription_lock = session_locks[session_id] 
+                            success = process_audio_segment_and_update_s3(final_output_wav_path, session_data, transcription_lock)
+                            if not success:
+                                 logger.error(f"Session {session_id}: Transcription or S3 update failed for segment {final_output_wav_path}")
+                            
+                        except Exception as e:
+                            logger.error(f"Session {session_id}: Error during segment processing pipeline: {e}", exc_info=True)
+                        finally:
+                            temp_files_to_delete = [filelist_path, concatenated_webm_path, final_output_wav_path] # WAV cleaned by transcribe service
+                            for f_path in temp_files_to_delete:
+                                if os.path.exists(f_path):
+                                    try: os.remove(f_path)
+                                    except OSError as e_del: logger.warning(f"Session {session_id}: Error deleting temp file {f_path}: {e_del}")
+                            # Clean up the individual blob parts for this processed segment
+                            for p_path in blob_paths_for_segment:
+                                if os.path.exists(p_path):
+                                    try: os.remove(p_path)
+                                    except OSError as e_del: logger.warning(f"Session {session_id}: Error deleting processed blob part {p_path}: {e_del}")
+            
+            if session_id not in active_sessions: # Re-check before loop continues
+                logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
+                if not ws.closed: ws.close(1000, "Session stopped externally")
+                break
+
+    except ConnectionResetError:
+        logger.warning(f"WebSocket for session {session_id} (user {user.id}): Connection reset by client.")
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
+    finally:
+        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected.")
         # If this WebSocket was the active one for the session, mark it as None in session_data
         if session_id in active_sessions and active_sessions[session_id].get("websocket_connection") == ws:
             with session_locks[session_id]: # Protect session_data modification
@@ -709,7 +676,8 @@ def audio_stream_socket(ws, session_id: str):
         # If the session is still 'is_active' and this WS was the one, it means data might stop flowing.
         # The idle_session_cleanup will eventually get it.
         # Or, if 'stop_stream' was received, _finalize_session would have been called already.
-        @app.route('/api/recording/status', methods=['GET'])
+
+@app.route('/api/recording/status', methods=['GET'])
 def get_recording_status_route():
     session_id_param = request.args.get('session_id')
     status_data = _get_current_recording_status_snapshot(session_id_param) 
