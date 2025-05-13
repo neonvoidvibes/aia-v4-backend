@@ -304,10 +304,11 @@ def start_recording_route(user: SupabaseUser):
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True, 
-        "current_segment_raw_bytes": bytearray(), # New: Accumulate raw blob bytes for piping
-        "accumulated_audio_duration_for_current_segment_seconds": 0.0, # Still used for triggering segment processing
+        "current_segment_raw_bytes": bytearray(),
+        "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0,
-        # Removed: audio_buffer_for_current_segment, current_segment_blob_paths, current_segment_blob_count
+        "webm_global_header_bytes": None, # New: To store the first blob's header
+        "is_first_blob_received": False,   # New: Flag to capture the first blob
     }
     logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
@@ -344,11 +345,23 @@ def _finalize_session(session_id: str):
         session_data = active_sessions[session_id]
         session_data["is_active"] = False 
         
-        remaining_raw_bytes = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
-        if remaining_raw_bytes:
-            logger.info(f"Processing {len(remaining_raw_bytes)} remaining raw audio bytes for session {session_id} during finalization.")
+        current_fragment_bytes_final = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
+        global_header_bytes_final = session_data.get("webm_global_header_bytes", b'')
+        
+        all_final_segment_bytes = b''
+        if global_header_bytes_final and current_fragment_bytes_final:
+            if current_fragment_bytes_final.startswith(global_header_bytes_final): # If it's the first segment data
+                all_final_segment_bytes = current_fragment_bytes_final
+            else:
+                all_final_segment_bytes = global_header_bytes_final + current_fragment_bytes_final
+        elif current_fragment_bytes_final: # No global header, but some fragments (should be first segment)
+             all_final_segment_bytes = current_fragment_bytes_final
+
+
+        if all_final_segment_bytes:
+            logger.info(f"Processing {len(all_final_segment_bytes)} remaining combined audio bytes for session {session_id} during finalization.")
             
-            session_data["current_segment_raw_bytes"] = bytearray() # Clear buffer
+            session_data["current_segment_raw_bytes"] = bytearray()
             session_data["actual_segment_duration_seconds"] = 0.0
 
             temp_processing_dir = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
@@ -361,7 +374,7 @@ def _finalize_session(session_id: str):
                 ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', final_output_wav_path]
                 logger.info(f"Session {session_id} Finalize: Executing ffmpeg direct WAV: {' '.join(ffmpeg_command)}")
                 process = subprocess.Popen(ffmpeg_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate(input=remaining_raw_bytes)
+                stdout, stderr = process.communicate(input=all_final_segment_bytes)
 
                 if process.returncode == 0:
                     logger.info(f"Session {session_id} Finalize: Successfully converted final piped stream to WAV: {final_output_wav_path}")
@@ -374,7 +387,9 @@ def _finalize_session(session_id: str):
                         logger.info(f"Session {session_id} Finalize: Actual duration of final WAV segment {final_output_wav_path} is {actual_duration_final:.2f}s")
                     except (subprocess.CalledProcessError, ValueError) as ffprobe_err_final:
                         logger.error(f"Session {session_id} Finalize: ffprobe failed for final WAV {final_output_wav_path}: {ffprobe_err_final}. Estimating duration.")
-                        estimated_duration_final = len(remaining_raw_bytes) / (16000 * 2 * 0.2) # Rough WebM to WAV factor
+                        # Estimate based on all_final_segment_bytes, which includes the header.
+                        # This estimation is very rough.
+                        estimated_duration_final = len(all_final_segment_bytes) / (16000 * 2 * 0.2) # Rough WebM to WAV factor
                         session_data['actual_segment_duration_seconds'] = estimated_duration_final
                         logger.warning(f"Using rough estimated duration for final segment: {estimated_duration_final:.2f}s")
 
@@ -385,7 +400,9 @@ def _finalize_session(session_id: str):
                 logger.error(f"Error processing final audio segment (piped) for session {session_id}: {e}", exc_info=True)
             finally:
                 # process_audio_segment_and_update_s3 is expected to clean its WAV file
-                pass # No other intermediate files like filelist/concat_webm for this piped approach
+                pass
+        else: # No remaining raw bytes to process
+            logger.info(f"Session {session_id} Finalize: No remaining audio bytes to process.")
         
         ws = session_data.get("websocket_connection")
         if ws:
@@ -517,7 +534,16 @@ def audio_stream_socket(ws, session_id: str):
                         break
                     session_data = active_sessions[session_id]
                     
-                    session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                    if not session_data.get("is_first_blob_received", False):
+                        session_data["webm_global_header_bytes"] = bytes(message) # Store the first blob
+                        session_data["is_first_blob_received"] = True
+                        logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
+                        # The first blob is part of the first segment, so also append it to current_segment_raw_bytes
+                        session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                    else:
+                        # For subsequent blobs, just append to current segment bytes
+                        session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                    
                     logger.debug(f"Session {session_id}: Appended {len(message)} bytes to raw_bytes buffer. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
 
                     session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 # Approx based on 3000ms timeslice
@@ -527,7 +553,36 @@ def audio_stream_socket(ws, session_id: str):
                         
                         logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment from raw bytes.")
                         
-                        all_segment_bytes = bytes(session_data["current_segment_raw_bytes"])
+                        current_fragment_bytes = bytes(session_data["current_segment_raw_bytes"])
+                        global_header_bytes = session_data.get("webm_global_header_bytes", b'')
+
+                        if not global_header_bytes and current_fragment_bytes:
+                            logger.warning(f"Session {session_id}: Global header not captured, but processing fragments. This might fail if not the very first segment.")
+                            # This case should ideally not happen if is_first_blob_received logic is correct.
+                            # If it does, the first fragment in current_fragment_bytes *must* be a full header.
+                            all_segment_bytes = current_fragment_bytes
+                        elif global_header_bytes and current_fragment_bytes:
+                            # For segments *after* the first one that contributed its header to global_header_bytes,
+                            # we prepend the global header to the current fragments.
+                            # If current_fragment_bytes *starts* with the global_header (because it's the first segment),
+                            # we don't want to prepend it twice.
+                            if current_fragment_bytes.startswith(global_header_bytes) and len(global_header_bytes) > 0:
+                                # This is likely the first segment's data, which already includes the header.
+                                all_segment_bytes = current_fragment_bytes
+                                logger.debug(f"Session {session_id}: Processing first segment data which includes its own header.")
+                            else:
+                                # This is for subsequent segments.
+                                all_segment_bytes = global_header_bytes + current_fragment_bytes
+                                logger.debug(f"Session {session_id}: Prepended global header ({len(global_header_bytes)} bytes) to current fragments ({len(current_fragment_bytes)} bytes).")
+                        elif global_header_bytes and not current_fragment_bytes:
+                            logger.warning(f"Session {session_id}: Global header exists but no current fragments. Skipping empty segment.")
+                            session_data["current_segment_raw_bytes"] = bytearray() # Clear just in case
+                            session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
+                            session_data["actual_segment_duration_seconds"] = 0.0
+                            continue
+                        else: # No global header and no current fragments
+                            logger.warning(f"Session {session_id}: No global header and no current fragments. Skipping.")
+                            continue
                         
                         # Reset for next segment accumulation
                         session_data["current_segment_raw_bytes"] = bytearray()
