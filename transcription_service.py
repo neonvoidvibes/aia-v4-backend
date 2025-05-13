@@ -212,8 +212,16 @@ def process_audio_segment_and_update_s3(
     # 1. Transcribe the audio segment
     transcription_result = _transcribe_audio_segment_openai(temp_segment_wav_path, openai_api_key, language)
 
-    if not transcription_result or not transcription_result.get('segments'):
-        logger.warning(f"Transcription failed or returned no segments for {temp_segment_wav_path}.")
+    if not transcription_result: # Check if transcription_result itself is None
+        logger.warning(f"Transcription call returned None for {temp_segment_wav_path}.")
+        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
+        logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (transcription call failed)")
+        return True
+    
+    logger.info(f"Transcription result for {temp_segment_wav_path} received. Segments found: {len(transcription_result.get('segments', []))}")
+
+    if not transcription_result.get('segments'): # Check if segments list is empty or missing
+        logger.warning(f"Transcription returned no segments for {temp_segment_wav_path}.")
         # Even if transcription fails, we should update the processed duration based on the actual segment length
         # to prevent this segment from being re-processed or causing an offset error for subsequent segments.
         session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
@@ -223,7 +231,9 @@ def process_audio_segment_and_update_s3(
     # 2. Acquire lock, download current S3 transcript, append new, upload
     new_transcript_lines = []
     
-    for segment in transcription_result.get('segments', []):
+    logger.debug(f"Preparing to process {len(transcription_result.get('segments', []))} transcribed segments for {temp_segment_wav_path}")
+    for segment_idx, segment in enumerate(transcription_result.get('segments', [])):
+        logger.debug(f"Processing segment data {segment_idx+1}/{len(transcription_result.get('segments', []))} for {temp_segment_wav_path}")
         raw_text = segment.get('text', '').strip()
         filtered_text = filter_hallucinations(raw_text)
 
@@ -245,6 +255,7 @@ def process_audio_segment_and_update_s3(
 
     appended_text = "\n".join(new_transcript_lines) + "\n"
 
+    logger.info(f"Finished processing transcribed segments for {temp_segment_wav_path}. Appended text length: {len(appended_text)}. Attempting to acquire S3 lock.")
     with s3_lock:
         session_id_for_log = session_data.get('session_id', 'UNKNOWN_SESSION')
         logger.debug(f"S3_LOCK_ACQUIRED for session {session_id_for_log}, updating {s3_transcript_key}")
