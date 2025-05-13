@@ -28,5 +28,5 @@ COPY . .
 
 EXPOSE 10000
 
-# print ffmpeg version to logs, then launch WITH 1 WORKER
-CMD ["sh", "-c", "ffmpeg -version && ffprobe -version && exec gunicorn --workers 1 --bind 0.0.0.0:${PORT} api_server:app --log-file - --error-logfile - --access-logfile - --log-level info --timeout 120"]
+# print ffmpeg version to logs, then launch WITH 1 WORKER using gthread
+CMD ["sh", "-c", "ffmpeg -version && ffprobe -version && exec gunicorn --worker-class gthread --workers 1 --threads 4 --bind 0.0.0.0:${PORT} api_server:app --log-file - --error-logfile - --access-logfile - --log-level info --timeout 120"]
