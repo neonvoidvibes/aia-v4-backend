@@ -517,9 +517,21 @@ def audio_stream_socket(ws, session_id: str):
                     action = control_msg.get("action")
                     logger.info(f"WebSocket session {session_id}: Received control message: {control_msg}")
                     if action == "set_processing_state": 
-                        active_sessions[session_id]["is_backend_processing_paused"] = control_msg.get("paused", False)
+                        is_paused_by_client = control_msg.get("paused", False)
+                        active_sessions[session_id]["is_backend_processing_paused"] = is_paused_by_client
                         logger.info(f"Session {session_id}: Backend audio processing "
-                                    f"{'paused' if control_msg.get('paused') else 'resumed'} based on client state.")
+                                    f"{'paused' if is_paused_by_client else 'resumed'} based on client state.")
+                        # Logic for pause/resume markers
+                        session_data_ref = active_sessions[session_id]
+                        current_offset = session_data_ref.get('current_total_audio_duration_processed_seconds', 0.0)
+                        if is_paused_by_client:
+                            session_data_ref["pause_marker_to_write"] = "<<REC PAUSED>>"
+                            session_data_ref["pause_event_timestamp_offset"] = current_offset
+                            logger.info(f"Session {session_id}: Queued '<<REC PAUSED>>' marker at offset {current_offset:.2f}s.")
+                        else: # Resumed
+                            session_data_ref["pause_marker_to_write"] = "<<REC RESUMED>>"
+                            session_data_ref["pause_event_timestamp_offset"] = current_offset
+                            logger.info(f"Session {session_id}: Queued '<<REC RESUMED>>' marker at offset {current_offset:.2f}s.")
                     elif action == "stop_stream": 
                         logger.info(f"WebSocket session {session_id}: Received 'stop_stream'. Initiating finalization.")
                         _finalize_session(session_id) 

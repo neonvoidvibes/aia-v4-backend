@@ -181,102 +181,105 @@ def process_audio_segment_and_update_s3(
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
         logger.error("S3 client or bucket not configured. Cannot update transcript.")
+        if os.path.exists(temp_segment_wav_path):
+            try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
+            except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
         return False
     
-    logger.info(f"Processing segment {temp_segment_wav_path} for S3 key {s3_transcript_key}. Segment offset: {segment_offset_seconds:.2f}s")
-
+    # Transcribe audio first (can be outside the S3 lock)
     transcription_result = _transcribe_audio_segment_openai(temp_segment_wav_path, openai_api_key, language)
-
-    if not transcription_result: 
-        logger.warning(f"Transcription call returned None for {temp_segment_wav_path}.")
-        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
-        logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (transcription call failed)")
-        return True
     
-    logger.info(f"Transcription result for {temp_segment_wav_path} received. Segments found: {len(transcription_result.get('segments', []))}")
-
-    new_transcript_lines = [] 
-
-    if transcription_result.get('segments'): 
+    processed_transcript_lines = [] # Stores lines from audio transcription
+    if transcription_result and transcription_result.get('segments'):
         logger.debug(f"Preparing to process {len(transcription_result['segments'])} transcribed segments for {temp_segment_wav_path}")
         for segment_idx, segment in enumerate(transcription_result['segments']):
             raw_text = segment.get('text', '').strip()
-            logger.debug(f"Segment {segment_idx+1} RAW TEXT for {temp_segment_wav_path}: '{raw_text}'")
-
             filtered_text = filter_hallucinations(raw_text)
-            logger.debug(f"Segment {segment_idx+1} FILTERED TEXT for {temp_segment_wav_path}: '{filtered_text}'")
-
             is_valid = is_valid_transcription(filtered_text)
-            logger.debug(f"Segment {segment_idx+1} IS_VALID_TRANSCRIPTION for '{filtered_text}': {is_valid}")
-
             if is_valid:
                 whisper_start_time = segment.get('start', 0.0)
                 whisper_end_time = segment.get('end', 0.0)
                 absolute_start_seconds = segment_offset_seconds + whisper_start_time
                 absolute_end_seconds = segment_offset_seconds + whisper_end_time
                 timestamp_str = format_timestamp_range(absolute_start_seconds, absolute_end_seconds, session_start_time_utc)
-                new_transcript_lines.append(f"{timestamp_str} {filtered_text}")
+                processed_transcript_lines.append(f"{timestamp_str} {filtered_text}")
             else:
-                logger.debug(f"Segment filtered out: '{raw_text}'")
+                logger.debug(f"Audio segment filtered out: '{raw_text}'")
+    elif not transcription_result:
+        logger.warning(f"Transcription call returned None for {temp_segment_wav_path}.")
     else: 
         logger.warning(f"Transcription returned no segments in .get('segments') for {temp_segment_wav_path}.")
-        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
-        logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (transcription had no segments)")
-        return True
 
-    if not new_transcript_lines:
-        logger.info(f"No valid new transcript lines generated for {temp_segment_wav_path} after filtering all segments.")
-        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
-        logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (all segments filtered out)")
-        return True
+    # Critical section: Update S3 with markers and/or transcribed text
+    # This entire block needs to be atomic for a given session's transcript file.
+    with s3_lock:
+        session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION")
+        logger.debug(f"S3_LOCK_ACQUIRED for session {session_id_for_log} in process_audio_segment_and_update_s3")
 
-    session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION") 
-    appended_text = "\n".join(new_transcript_lines) + "\n" if new_transcript_lines else "" 
+        lines_to_append_to_s3 = []
 
-    logger.info(f"S3 ops for {temp_segment_wav_path} (session {session_id_for_log}). Appended text length: {len(appended_text)}. Assuming S3 lock is held by caller.")
-    
-    logger.debug(f"S3_UPDATE_LOGIC: Attempting to get S3 client for session {session_id_for_log}.")
-    s3 = get_s3_client() 
-    logger.debug(f"S3_UPDATE_LOGIC: S3 client obtained for session {session_id_for_log}: {'Exists' if s3 else 'None'}")
-    
-    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-    if not s3 or not aws_s3_bucket:
-        logger.error(f"S3_UPDATE_LOGIC: S3 client or bucket not configured for session {session_id_for_log}. Cannot update transcript.")
-        return False 
-    
-    logger.debug(f"S3_UPDATE_LOGIC: Entering S3 operations try-block for session {session_id_for_log}.")
-    try:
-        existing_content = ""
-        logger.debug(f"S3_GET_ATTEMPT: Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}' for session {session_id_for_log}")
-        try:
-            obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
-            logger.debug(f"S3_GET_SUCCESS: Reading body for session {session_id_for_log}. ContentLength: {obj.get('ContentLength', 'N/A')}")
-            body_bytes = obj['Body'].read()
-            logger.debug(f"S3_GET_READ_BODY_SUCCESS: Read {len(body_bytes)} bytes for session {session_id_for_log}.")
-            existing_content = body_bytes.decode('utf-8')
-            logger.info(f"S3_GET_DECODE_SUCCESS: Downloaded existing transcript (length {len(existing_content)}) from {s3_transcript_key}. ETag: {obj.get('ETag')}")
-        except s3.exceptions.NoSuchKey:
-            logger.info(f"S3_GET_NOSUCHKEY: Transcript {s3_transcript_key} not found for session {session_id_for_log}. Will create new.")
-            if not existing_content.startswith("# Transcript"): 
-                 header = f"# Transcript - Session {session_id_for_log}\n"
-                 header += f"Agent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\n"
-                 header += f"Session Started (UTC): {session_start_time_utc.isoformat()}\n\n"
-                 existing_content = header
-        except Exception as e_get:
-            logger.error(f"S3_GET_FAIL: Error downloading transcript {s3_transcript_key} for session {session_id_for_log}: {e_get}", exc_info=True)
-            return False
+        # Check for and prepare pause/resume marker
+        marker_to_write = session_data.get("pause_marker_to_write")
+        event_offset_for_marker = session_data.get("pause_event_timestamp_offset")
 
-        logger.debug(f"S3_PRE_APPEND: Existing length: {len(existing_content)}, Appended text length: {len(appended_text)} for session {session_id_for_log}")
-        updated_content = existing_content + appended_text
+        if marker_to_write is not None and event_offset_for_marker is not None:
+            session_data["pause_marker_to_write"] = None # Clear under lock
+            session_data["pause_event_timestamp_offset"] = None # Clear under lock
+            logger.info(f"Session {session_id_for_log}: Processing marker '{marker_to_write}' for offset {event_offset_for_marker:.2f}s.")
+            
+            formatted_timestamp_for_marker = _format_time_delta(event_offset_for_marker, session_start_time_utc)
+            marker_line = f"{marker_to_write} [AT: {formatted_timestamp_for_marker} UTC]"
+            lines_to_append_to_s3.append(marker_line)
         
-        logger.debug(f"S3_PUT_ATTEMPT: Bucket='{aws_s3_bucket}', Key='{s3_transcript_key}', NewTotalLength={len(updated_content)} for session {session_id_for_log}")
-        put_response = s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
-        logger.info(f"S3_PUT_SUCCESS: Appended {len(appended_text)} chars (total {len(updated_content)} chars) to {s3_transcript_key}. ETag: {put_response.get('ETag')}")
+        # Add processed audio transcript lines
+        if processed_transcript_lines:
+            lines_to_append_to_s3.extend(processed_transcript_lines)
 
-        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
-        logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s using segment duration {segment_actual_duration:.2f}s")
+        if not lines_to_append_to_s3:
+            logger.info(f"No new content (marker or transcript) to append for session {session_id_for_log}.")
+            # Still update duration as audio segment was processed (even if transcription was empty)
+            session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
+            logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (no new lines to S3)")
+            # Cleanup temp WAV file
+            if os.path.exists(temp_segment_wav_path):
+                try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
+                except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
+            logger.debug(f"S3_LOCK_RELEASED for session {session_id_for_log} (no S3 write)")
+            return True
 
-        return True
-    except Exception as e_s3_update: 
-        logger.error(f"S3_OPERATION_FAIL: Overall error during S3 transcript update for {s3_transcript_key} (session {session_id_for_log}): {e_s3_update}", exc_info=True)
-        return False
+        # If there are lines to append, perform S3 operations
+        try:
+            existing_content = ""
+            try:
+                obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
+                existing_content = obj['Body'].read().decode('utf-8')
+            except s3.exceptions.NoSuchKey:
+                logger.info(f"Transcript {s3_transcript_key} not found. Creating with header.")
+                if not existing_content.startswith("# Transcript"):
+                     header = f"# Transcript - Session {session_id_for_log}\n"
+                     header += f"Agent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\n"
+                     header += f"Session Started (UTC): {session_start_time_utc.isoformat()}\n\n"
+                     existing_content = header
+            
+            appended_text = "\n".join(lines_to_append_to_s3) + "\n"
+            updated_content = existing_content + appended_text
+            
+            s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
+            logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
+
+            # Update duration after successful S3 write
+            session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
+            logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s")
+            
+            success_flag = True
+        except Exception as e_s3_update:
+            logger.error(f"Error during S3 transcript update for {s3_transcript_key}: {e_s3_update}", exc_info=True)
+            success_flag = False
+        finally:
+            # Cleanup temp WAV file regardless of S3 success/failure within this block
+            if os.path.exists(temp_segment_wav_path):
+                try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
+                except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
+            logger.debug(f"S3_LOCK_RELEASED for session {session_id_for_log}")
+        
+        return success_flag
