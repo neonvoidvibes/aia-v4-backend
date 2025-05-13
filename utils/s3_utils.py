@@ -3,44 +3,68 @@
 
 import os
 import boto3
+from botocore.config import Config as BotoConfig # For S3 timeouts
 import logging
 import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
+import threading # For s3_client_lock
 
 # Configure logging for this module
 logger = logging.getLogger(__name__)
 
 # Global S3 client instance (lazy loaded)
-s3_client = None
-# Remove module-level reading of env vars
-# aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-# aws_region = os.getenv('AWS_REGION')
+s3_client_instance = None # Renamed to avoid confusion with boto3.client
+s3_client_lock = threading.Lock()
 
-def get_s3_client() -> Optional[boto3.client]:
-    """Initializes and returns an S3 client, or None on failure.
-       Reads env vars inside the function to ensure they are loaded after load_dotenv().
+
+def get_s3_client(config: Optional[BotoConfig] = None) -> Optional[boto3.client]:
     """
-    global s3_client
-    if s3_client is None:
-        # Read env vars here
-        aws_region = os.getenv('AWS_REGION')
-        aws_s3_bucket = os.getenv('AWS_S3_BUCKET') # Read bucket here too, mainly for logging the check
-
-        if not aws_region or not aws_s3_bucket:
-            logger.error("AWS_REGION or AWS_S3_BUCKET environment variables not found or not set.")
+    Initializes and returns an S3 client, or None on failure.
+    Reads env vars inside the function.
+    If a BotoConfig is provided, it's used for this specific client instance (not cached globally).
+    The global client is initialized without specific config for general use.
+    """
+    global s3_client_instance
+    
+    if config: # If a specific config is requested, create a new client with it
+        aws_region_cfg = os.getenv('AWS_REGION')
+        if not aws_region_cfg:
+            logger.error("AWS_REGION env var not found for S3 client with custom config.")
             return None
         try:
-            s3_client = boto3.client(
-                's3',
-                region_name=aws_region
-                # Credentials assumed to be handled by AWS SDK environment (IAM role, env vars, config file)
-            )
-            logger.info(f"S3 client initialized for region {aws_region}.")
+            logger.debug(f"Creating new S3 client with custom config for region {aws_region_cfg}")
+            return boto3.client('s3', region_name=aws_region_cfg, config=config)
         except Exception as e:
-            logger.error(f"Failed to initialize S3 client: {e}", exc_info=True)
-            s3_client = None # Ensure it stays None on failure
-    return s3_client
+            logger.error(f"Failed to initialize S3 client with custom config: {e}", exc_info=True)
+            return None
+
+    # For global instance (no specific config)
+    with s3_client_lock:
+        if s3_client_instance is None:
+            aws_region_global = os.getenv('AWS_REGION')
+            aws_s3_bucket_global = os.getenv('AWS_S3_BUCKET')
+
+            if not aws_region_global or not aws_s3_bucket_global:
+                logger.error("Global S3 Client: AWS_REGION or AWS_S3_BUCKET env vars not found.")
+                return None
+            try:
+                # Default config for the global client
+                default_boto_config = BotoConfig(
+                    connect_timeout=15, # Increased connect timeout
+                    read_timeout=45,    # Increased read timeout
+                    retries={'max_attempts': 3}
+                )
+                s3_client_instance = boto3.client(
+                    's3',
+                    region_name=aws_region_global,
+                    config=default_boto_config
+                )
+                logger.info(f"Global S3 client initialized for region {aws_region_global} with default timeouts.")
+            except Exception as e:
+                logger.error(f"Failed to initialize global S3 client: {e}", exc_info=True)
+                s3_client_instance = None
+    return s3_client_instance
 
 def read_file_content(file_key: str, description: str) -> Optional[str]:
     """Read content from S3 file, handling potential errors."""
@@ -60,8 +84,10 @@ def read_file_content(file_key: str, description: str) -> Optional[str]:
     except s3.exceptions.NoSuchKey:
         logger.warning(f"{description} file not found at S3 key: {file_key}")
         return None
-    except Exception as e: logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True) # This line seems out of place, should be specific to this func
-    return None # Ensure None is returned on generic exception too
+    except Exception as e: # Generic catch after specific S3 exceptions
+        logger.error(f"Error reading {description} from {file_key}: {e}", exc_info=True)
+        return None
+
 
 def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
     """Lists objects under a given S3 prefix, returning their Key, Size, and LastModified."""
@@ -83,37 +109,20 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
                     object_key = obj['Key']
                     logger.debug(f"S3 LIST [RAW_OBJ]: Key='{object_key}', Size={obj.get('Size', 0)}")
 
-                    # Skip the folder object itself. This handles cases where base_key_prefix is "folder/"
-                    # and S3 lists "folder/" as an object.
                     if object_key == base_key_prefix:
                         logger.debug(f"S3 LIST [SKIP_FOLDER_OBJ]: Skipped object key same as prefix (folder itself): {object_key}")
                         continue
                     
-                    # Calculate path relative to the base_key_prefix.
-                    # This assumes base_key_prefix is a "folder" (e.g., ends with '/').
-                    # If base_key_prefix is "foo/bar/" and object_key is "foo/bar/file.txt", relative_path is "file.txt".
-                    # If object_key is "foo/bar/baz/file.txt", relative_path is "baz/file.txt".
                     relative_path = object_key[len(base_key_prefix):]
                     
-                    # If relative_path contains a '/', it's in a subdirectory. Skip it.
                     if '/' in relative_path:
                         logger.debug(f"S3 LIST [SKIP_SUB_DIR_OBJ]: Skipped object in subdirectory. Key='{object_key}', Relative='{relative_path}', Prefix='{base_key_prefix}'")
                         continue
                     
-                    # If relative_path is empty at this point (e.g. prefix="foo", key="foo/"),
-                    # and it's a 0-byte object (typical for S3 folder markers created by some tools), skip it.
                     if not relative_path and obj.get('Size', 0) == 0 and object_key.endswith('/'):
                          logger.debug(f"S3 LIST [SKIP_EMPTY_RELATIVE_FOLDER_MARKER]: Skipped empty relative path folder marker: {object_key}")
                          continue
                     
-                    # If relative_path is empty but it's not a typical folder marker (e.g. has size, or doesn't end with /)
-                    # this could be an object named exactly as the prefix but without a trailing slash.
-                    # This scenario is less common if prefixes for folders consistently end with '/'.
-                    # For safety, if relative_path is truly empty after all checks, it means object_key matched base_key_prefix,
-                    # which should have been caught by the first `if object_key == base_key_prefix:` check.
-                    # However, if base_key_prefix was "foo" and object_key was "foo", relative_path is "", and it's a file.
-                    # The current logic should include it. If it was "foo" and key "foo/", it's caught by the empty relative_path + size 0 check.
-
                     objects_metadata.append({
                         'Key': object_key,
                         'Size': obj.get('Size', 0),
@@ -122,14 +131,14 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
         logger.info(f"S3 LIST [SUMMARY]: Bucket='{aws_s3_bucket}', Prefix='{base_key_prefix}'. Raw S3 objects found: {raw_object_count}. Filtered objects_metadata count: {len(objects_metadata)}.")
         if raw_object_count > 0 and not objects_metadata:
              logger.warning(f"S3 LIST [WARN]: All {raw_object_count} raw S3 objects were filtered out for prefix '{base_key_prefix}'. Check filtering logic or S3 structure.")
-        elif not objects_metadata: # This means raw_object_count was also 0
+        elif not objects_metadata: 
             logger.warning(f"S3 LIST [WARN]: No objects (raw or filtered) found for bucket '{aws_s3_bucket}' and prefix '{base_key_prefix}'.")
 
         return objects_metadata
     except Exception as e:
         logger.error(f"S3 LIST [ERROR]: Error listing objects in S3 for prefix '{base_key_prefix}': {e}", exc_info=True)
         return []
-        # return None # This was the original line, but the function is typed to return List. Empty list is better.
+
 
 def find_file_any_extension(base_pattern: str, description: str) -> Optional[Tuple[str, str]]:
     """Find the most recent file matching base pattern with any extension in S3."""
@@ -154,9 +163,8 @@ def find_file_any_extension(base_pattern: str, description: str) -> Optional[Tup
             if 'Contents' in page:
                 for obj in page['Contents']:
                     key = obj['Key']
-                    # Ensure we only match files starting exactly with the base_name at the current level
-                    filename_part = key[len(prefix):] # Get path relative to prefix
-                    if '/' in filename_part: continue # Skip files in subdirectories relative to prefix
+                    filename_part = key[len(prefix):] 
+                    if '/' in filename_part: continue 
 
                     name_only, ext = os.path.splitext(filename_part)
 
@@ -238,8 +246,7 @@ def get_latest_context(agent_name: str, event_id: Optional[str] = None) -> Optio
     """Get and combine organization and event contexts from S3"""
     logger.debug(f"Getting context (agent: {agent_name}, event: {event_id})")
     org_context = ""
-    # Corrected pattern assumption: organization context is likely common, not agent-specific
-    org_pattern = f'organizations/river/_config/context_oID-river' # Assume a common org ID or pattern
+    org_pattern = f'organizations/river/_config/context_oID-river' 
     logger.info(f"Attempting org context load using pattern: '{org_pattern}'.")
     org_result = find_file_any_extension(org_pattern, "organization context")
     if org_result: org_context = org_result[1]; logger.info("Loaded organization context.")
@@ -273,10 +280,9 @@ def get_agent_docs(agent_name: str) -> Optional[str]:
              if 'Contents' in page:
                   for obj in page['Contents']:
                       key = obj['Key']
-                      if key == prefix or key.endswith('/'): continue # Skip folder itself
-                      # Check if it's directly under the docs folder
+                      if key == prefix or key.endswith('/'): continue 
                       relative_path = key[len(prefix):]
-                      if '/' in relative_path: continue # Skip files in subdirectories
+                      if '/' in relative_path: continue 
 
                       filename = os.path.basename(key)
                       content = read_file_content(key, f'agent doc ({filename})')
@@ -307,7 +313,7 @@ def save_chat_to_s3(agent_name: str, chat_content: str, event_id: Optional[str],
         if is_saved:
             logger.info(f"Saving chat: Copying from archive '{archive_key}' to saved '{saved_key}'")
             try:
-                 s3.head_object(Bucket=aws_s3_bucket, Key=archive_key) # Check source
+                 s3.head_object(Bucket=aws_s3_bucket, Key=archive_key) 
                  copy_source = {'Bucket': aws_s3_bucket, 'Key': archive_key}
                  s3.copy_object(CopySource=copy_source, Bucket=aws_s3_bucket, Key=saved_key)
                  logger.info(f"Successfully copied chat to saved: {saved_key}")
@@ -342,12 +348,12 @@ def parse_text_chat(chat_content_str: str) -> List[Dict[str, str]]:
     for line in chat_content_str.splitlines():
         line_strip = line.strip(); role_found = None; content_start = 0
         if line_strip.startswith('**User:**'): role_found = 'user'; content_start = len('**User:**')
-        elif line_strip.startswith('**Agent:**') or line_strip.startswith('**Assistant:**'): # Allow Assistant too
+        elif line_strip.startswith('**Agent:**') or line_strip.startswith('**Assistant:**'): 
             role_found = 'assistant'; content_start = len('**Agent:**') if line_strip.startswith('**Agent:**') else len('**Assistant:**')
         if role_found:
             if current_role: messages.append({'role': current_role, 'content': '\n'.join(current_content).strip()})
             current_role = role_found; current_content = [line_strip[content_start:].strip()]
-        elif current_role: current_content.append(line) # Append full line to preserve formatting
+        elif current_role: current_content.append(line) 
     if current_role: messages.append({'role': current_role, 'content': '\n'.join(current_content).strip()})
     return [msg for msg in messages if msg.get('content')]
 
@@ -359,7 +365,7 @@ def load_existing_chats_from_s3(agent_name: str, memory_agents: Optional[List[st
     chat_histories = []; agents_to_load = memory_agents or [agent_name]
     logger.info(f"Loading saved chat history for agents: {agents_to_load}")
     for agent in agents_to_load:
-        prefix = f'organizations/river/agents/{agent}/events/0000/chats/saved/' # Assuming memory uses default event '0000'
+        prefix = f'organizations/river/agents/{agent}/events/0000/chats/saved/' 
         logger.debug(f"Checking for saved chats in: {prefix}")
         try:
             paginator = s3.get_paginator('list_objects_v2'); chat_files = []
@@ -368,13 +374,12 @@ def load_existing_chats_from_s3(agent_name: str, memory_agents: Optional[List[st
             if not chat_files: logger.debug(f"No saved chats for {agent}."); continue
             chat_files.sort(key=lambda obj: obj['LastModified'], reverse=True)
             logger.info(f"Found {len(chat_files)} saved chats for {agent}.")
-            # Limit how many files we load for memory? For now, load all.
             for chat_obj in chat_files:
                 file_key = chat_obj['Key']; logger.debug(f"Reading saved chat: {file_key}")
                 try:
                     content_str = read_file_content(file_key, f"saved chat {file_key}")
                     if not content_str: logger.warning(f"Empty chat file: {file_key}"); continue
-                    messages = parse_text_chat(content_str) # Assume text for now
+                    messages = parse_text_chat(content_str) 
                     if messages: chat_histories.append({'agent': agent, 'file': file_key, 'messages': messages})
                     else: logger.warning(f"No messages extracted from {file_key}")
                 except Exception as read_err: logger.error(f"Error reading/parsing chat {file_key}: {read_err}", exc_info=True)
@@ -390,7 +395,6 @@ def format_chat_history(messages: List[Dict[str, Any]]) -> str:
         if content: chat_content += f"**{role}:**\n{content}\n\n"
     return chat_content.strip()
 
-# --- New Function for Agent Sync ---
 def list_agent_names_from_s3() -> Optional[List[str]]:
     """Lists potential agent names by looking at directories under organizations/river/agents/."""
     s3 = get_s3_client()
@@ -404,19 +408,15 @@ def list_agent_names_from_s3() -> Optional[List[str]]:
 
     try:
         paginator = s3.get_paginator('list_objects_v2')
-        # Use Delimiter='/' to find common prefixes (directories) directly under base_prefix
         result = paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_prefix, Delimiter='/')
 
         for page in result:
-            # CommonPrefixes contains the directory names
             if 'CommonPrefixes' in page:
                 for prefix_data in page['CommonPrefixes']:
-                    # Extract the directory name (agent name) from the prefix
-                    # e.g., 'organizations/river/agents/agent-alpha/' -> 'agent-alpha'
                     full_prefix = prefix_data.get('Prefix', '')
                     if full_prefix.startswith(base_prefix) and full_prefix.endswith('/'):
                         agent_name = full_prefix[len(base_prefix):].strip('/')
-                        if agent_name: # Ensure it's not empty
+                        if agent_name: 
                             agent_names.add(agent_name)
 
         found_agents = list(agent_names)
@@ -426,3 +426,4 @@ def list_agent_names_from_s3() -> Optional[List[str]]:
     except Exception as e:
         logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True)
         return None
+        
