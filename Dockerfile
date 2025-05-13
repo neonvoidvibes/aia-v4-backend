@@ -29,4 +29,4 @@ COPY . .
 EXPOSE 10000
 
 # print ffmpeg version to logs, then launch WITH 1 WORKER
-CMD ["sh", "-c", "ffmpeg -version && ffprobe -version && exec gunicorn --workers 1 --bind 0.0.0.0:${PORT} api_server:app --log-file - --error-logfile - --access-logfile - --log-level info"]
+CMD ["sh", "-c", "ffmpeg -version && ffprobe -version && exec gunicorn --workers 1 --bind 0.0.0.0:${PORT} api_server:app --log-file - --error-logfile - --access-logfile - --log-level info --timeout 120"]

@@ -11,6 +11,7 @@ import openai
 import requests # For OpenAI API call
 from typing import Dict, Any, Optional, List
 import threading # For s3_lock type hint
+import subprocess # For ffprobe fallback
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -169,6 +170,24 @@ def process_audio_segment_and_update_s3(
     if not all([temp_segment_wav_path, s3_transcript_key, isinstance(session_start_time_utc, datetime)]):
         logger.error("Missing critical data for processing segment (path, S3 key, or start time).")
         return False
+    
+    # Duration is now expected to be pre-calculated and stored in session_data
+    segment_actual_duration = session_data.get('actual_segment_duration_seconds', 0.0)
+    if segment_actual_duration <= 0:
+        # This could happen if ffprobe failed in api_server and fallback was also 0.
+        # Or if 'actual_segment_duration_seconds' was not set.
+        # Attempt to get duration from the WAV file itself as a last resort.
+        logger.warning(f"Segment duration from session_data is {segment_actual_duration:.2f}s for {temp_segment_wav_path}. Attempting ffprobe locally.")
+        try:
+            ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', temp_segment_wav_path]
+            duration_result = subprocess.run(ffprobe_command, capture_output=True, text=True, check=True)
+            segment_actual_duration = float(duration_result.stdout.strip())
+            logger.info(f"Local ffprobe successful for {temp_segment_wav_path}: duration {segment_actual_duration:.2f}s")
+        except Exception as e_ffprobe:
+            logger.error(f"Local ffprobe failed for {temp_segment_wav_path}: {e_ffprobe}. Cannot determine segment duration. Skipping S3 duration update for this segment.")
+            # If we can't determine duration, we can still transcribe, but the total processed duration won't be accurate.
+            # Setting to a small placeholder or 0 to avoid massive offset errors if transcription is short.
+            segment_actual_duration = 0.1 # Small placeholder to show *something* was processed if transcription occurs.
 
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
@@ -211,18 +230,22 @@ def process_audio_segment_and_update_s3(
             new_transcript_lines.append(f"{timestamp_str} {filtered_text}")
             
             # Track the end of the last valid segment to update processed duration
-            processed_segment_duration = max(processed_segment_duration, whisper_end_time)
+            # whisper_end_time is relative to the current segment.
+            # The actual duration of the *entire segment file* is what matters for the offset update.
+            # We now use `segment_actual_duration` calculated by ffprobe in api_server.py.
+            # No need to use `processed_segment_duration` based on whisper internal segment times anymore.
+            pass # Placeholder, `segment_actual_duration` is used later
+
         else:
             logger.debug(f"Segment filtered out: '{raw_text}'")
-            # Still consider the duration of filtered segments for moving the offset
-            processed_segment_duration = max(processed_segment_duration, segment.get('end', 0.0))
 
 
     if not new_transcript_lines:
         logger.info(f"No valid new transcript lines generated for {temp_segment_wav_path} after filtering.")
-        # Still update the processed duration to avoid re-processing this audio
-        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + processed_segment_duration
-        return True # Considered success as segment was processed, even if empty after filtering
+        # Update the processed duration using the actual segment duration if available
+        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
+        logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s (empty transcript segment)")
+        return True
 
     appended_text = "\n".join(new_transcript_lines) + "\n"
 
@@ -254,9 +277,9 @@ def process_audio_segment_and_update_s3(
             logger.info(f"Successfully appended {len(appended_text)} chars to S3 transcript {s3_transcript_key}")
 
             # Update the cumulative processed duration for the session in session_data
-            # The caller (api_server) will use this updated value from the passed-in session_data dict
-            session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + processed_segment_duration
-            logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s")
+            # Use the actual_segment_duration obtained from ffprobe (or its fallback)
+            session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
+            logger.info(f"Updated session {session_data.get('session_id')} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s using segment duration {segment_actual_duration:.2f}s")
 
             return True
         except Exception as e:
