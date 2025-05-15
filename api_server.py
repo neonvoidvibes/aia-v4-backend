@@ -24,17 +24,20 @@ from gotrue.types import User as SupabaseUser # Import the User type for type hi
 
 # Import necessary modules from our project
 from utils.retrieval_handler import RetrievalHandler
-from utils.transcript_utils import TranscriptState, read_new_transcript_content
+from utils.transcript_utils import TranscriptState, read_new_transcript_content, get_latest_transcript_file, read_all_transcripts_in_folder # Added get_latest_transcript_file, read_all_transcripts_in_folder
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
-    list_agent_names_from_s3, list_s3_objects_metadata 
+    list_agent_names_from_s3, list_s3_objects_metadata, read_file_content # Added read_file_content
 )
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
+
+# Import for Canvas Analysis Agent
+from canvas_analyzer import analyze_transcript_for_canvas
 
 # Import the new transcription service
 from transcription_service import process_audio_segment_and_update_s3
@@ -55,6 +58,7 @@ def setup_logging(debug=False):
         logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.getLogger('transcription_service').setLevel(logging.DEBUG if debug else logging.INFO)
+    logging.getLogger('canvas_analyzer').setLevel(logging.DEBUG if debug else logging.INFO) # Add logger for new module
     logging.info(f"Logging setup complete. Level: {logging.getLevelName(log_level)}")
     return root_logger
 
@@ -167,7 +171,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
     if not user: 
         return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
     
-    if not agent_name:
+    if not agent_name: # If agent_name is not provided, but user is verified, allow access (for routes not requiring specific agent access)
         logger.debug(f"Authorization check: User {user.id} authenticated. No specific agent access check required for this route.")
         return user, None
 
@@ -216,21 +220,19 @@ def supabase_auth_required(agent_required: bool = True):
             if auth_header and auth_header.startswith("Bearer "): 
                 token = auth_header.split(" ", 1)[1]
             
-            agent_name_from_payload = None
+            # Determine agent_name for verification
+            # For canvas/insights, agent name is in query args. For chat, it's in JSON body.
+            agent_name_to_check = None
             if agent_required:
-                if request.is_json and request.json and 'agent' in request.json:
-                    agent_name_from_payload = request.json.get('agent')
-                elif 'agent' in request.args: # Check query params for GET or if agent is passed in query for POST
-                    agent_name_from_payload = request.args.get('agent')
-                # Example for payload in query for GET (less common for POST-style actions)
-                # elif 'payload' in request.args:
-                #     try:
-                #         payload_dict = json.loads(request.args.get('payload'))
-                #         agent_name_from_payload = payload_dict.get('agent')
-                #     except (json.JSONDecodeError, TypeError):
-                #         pass # Ignore if payload is not valid JSON or not a dict
-
-            user, error_response = verify_user_agent_access(token, agent_name_from_payload if agent_required else None)
+                if 'agent' in request.args: # Primarily for GET requests like /api/canvas/insights
+                    agent_name_to_check = request.args.get('agent')
+                elif request.is_json and request.json and 'agent' in request.json: # For POST requests like /api/chat
+                    agent_name_to_check = request.json.get('agent')
+                
+                if not agent_name_to_check: # If still not found and agent is required
+                    return jsonify({"error": "Agent identifier missing in request"}), 400
+            
+            user, error_response = verify_user_agent_access(token, agent_name_to_check if agent_required else None)
             if error_response: 
                 status_code = error_response.status_code if hasattr(error_response, 'status_code') else 500
                 error_json = error_response.get_json() if hasattr(error_response, 'get_json') else {"error": "Unknown authorization error"}
@@ -868,8 +870,8 @@ def view_s3_document(user: SupabaseUser):
     s3_key = request.args.get('s3Key')
     if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
     try:
-        from utils.s3_utils import read_file_content as s3_read_content 
-        content = s3_read_content(s3_key, f"S3 file for viewing ({s3_key})")
+        # from utils.s3_utils import read_file_content as s3_read_content # Already imported
+        content = read_file_content(s3_key, f"S3 file for viewing ({s3_key})")
         if content is None: return jsonify({"error": "File not found or could not be read"}), 404
         return jsonify({"content": content}), 200
     except Exception as e: logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error viewing S3 object"}), 500
@@ -892,6 +894,86 @@ def download_s3_document(user: SupabaseUser):
         )
     except s3.exceptions.NoSuchKey: logger.warning(f"S3 Download: File not found at key: {s3_key}"); return jsonify({"error": "File not found"}), 404
     except Exception as e: logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error downloading S3 object"}), 500
+
+@app.route('/api/canvas/insights', methods=['GET'])
+@supabase_auth_required(agent_required=True) # Agent name from query param will be checked
+def get_canvas_insights(user: SupabaseUser):
+    agent_name = request.args.get('agent') # Agent name is passed as 'agent'
+    event_id = request.args.get('event_id')
+    time_window_label = request.args.get('time_window_label', 'Whole Meeting') # Default if not provided
+
+    logger.info(f"Canvas insights request for Agent: {agent_name}, Event: {event_id}, Window: {time_window_label} by User: {user.id}")
+
+    if not agent_name:
+        return jsonify({"error": "Missing 'agent' query parameter"}), 400
+    # event_id can be optional or default to '0000' if not critical for canvas context fetching here
+
+    # 1. Fetch relevant transcript slice based on time_window_label
+    # This is a simplified version. A robust implementation needs to parse timestamps.
+    # For "quick win", we'll fetch the whole latest transcript and let the analyzer deal with it,
+    # or pass a hint. The analyzer prompt currently takes the full segment.
+    # TODO: Implement precise transcript slicing based on time_window_label.
+    # For now, fetch the latest full transcript content.
+    
+    # Using TranscriptState to manage reading positions, even if we fetch the whole file for now.
+    # This ensures we are aligned with how other parts of the system might access transcripts.
+    transcript_content = ""
+    # state_key = (agent_name, event_id or '0000') # event_id can be None from query
+    
+    # This part needs careful thought: `read_new_transcript_content` is designed for delta updates.
+    # For canvas, we might need the *entire relevant window*.
+    # Let's use `read_all_transcripts_in_folder` for "Whole Meeting" and a placeholder for others for now.
+    # Or, more simply, just get the latest file's full content.
+    
+    # from utils.transcript_utils import get_latest_transcript_file, read_all_transcripts_in_folder # Already imported
+
+    if time_window_label.lower() == "whole meeting":
+        # This function concatenates all non-rolling transcripts for the event.
+        transcript_content = read_all_transcripts_in_folder(agent_name, event_id or '0000') or ""
+        if not transcript_content:
+            logger.warning(f"Canvas: No transcript content found for 'Whole Meeting' for {agent_name}/{event_id or '0000'}")
+    else:
+        # For other time windows, for now, we'll take the content of the single latest transcript file.
+        # A more advanced version would slice this file by time.
+        latest_transcript_key = get_latest_transcript_file(agent_name, event_id or '0000')
+        if latest_transcript_key:
+            transcript_content = read_file_content(latest_transcript_key, f"latest transcript for canvas ({latest_transcript_key})") or ""
+            if not transcript_content:
+                 logger.warning(f"Canvas: Latest transcript file {latest_transcript_key} was empty for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
+        else:
+            logger.warning(f"Canvas: No latest transcript file found for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
+    
+    # if not transcript_content: # Allow empty transcript to be sent for analysis
+    #     logger.info(f"Canvas: No transcript data to analyze for window '{time_window_label}'. Returning empty insights.")
+    #     return jsonify({"mirror": [], "lens": [], "portal": []}), 200
+
+
+    # 2. Fetch static S3 documents (frameworks, org context)
+    static_docs_parts = []
+    frameworks_content = get_latest_frameworks(agent_name)
+    if frameworks_content:
+        static_docs_parts.append("## Frameworks Base\n" + frameworks_content)
+    
+    org_context_content = get_latest_context(agent_name, event_id) # get_latest_context handles org and event specific
+    if org_context_content:
+        static_docs_parts.append("## Organizational/Event Context\n" + org_context_content)
+    
+    combined_static_docs = "\n\n".join(static_docs_parts) if static_docs_parts else "No static documents available."
+
+    # 3. Call canvas_analyzer
+    try:
+        insights = analyze_transcript_for_canvas(
+            transcript_segment=transcript_content, # Send the determined segment
+            static_docs_content=combined_static_docs,
+            time_window_label=time_window_label,
+            agent_name=agent_name,
+            event_id=event_id
+        )
+        return jsonify(insights), 200
+    except Exception as e:
+        logger.error(f"Error calling canvas_analyzer: {e}", exc_info=True)
+        return jsonify({"error": "Failed to generate canvas insights"}), 500
+
 
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
@@ -940,6 +1022,61 @@ def handle_chat(user: SupabaseUser):
         elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
         else: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block
+
+        # Append Canvas Context if provided by frontend
+        canvas_time_window_label = data.get('current_canvas_time_window_label')
+        active_canvas_insights_json = data.get('active_canvas_insights')
+        pinned_canvas_insights_json = data.get('pinned_canvas_insights')
+
+        appended_canvas_context = ""
+        if canvas_time_window_label or active_canvas_insights_json or pinned_canvas_insights_json:
+            context_parts = [f"[Canvas Context for Time Window: '{canvas_time_window_label or 'N/A'}"]
+            
+            if active_canvas_insights_json:
+                try:
+                    active_insights = json.loads(active_canvas_insights_json)
+                    if active_insights and (active_insights.get("mirror") or active_insights.get("lens") or active_insights.get("portal")): # Check if not empty structure
+                        context_parts.append("Active Highlights (unpinned):")
+                        for insight_cat, items in active_insights.items(): # Assuming structure like {"mirror": [...]}
+                            if items and isinstance(items, list):
+                                context_parts.append(f"  {insight_cat.capitalize()}:")
+                                for item in items:
+                                    if isinstance(item, dict):
+                                        context_parts.append(f"    - {item.get('highlight', 'N/A')} (Explanation: {item.get('explanation', 'N/A')})")
+                    else:
+                         context_parts.append("Active Highlights (unpinned): None")
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse active_canvas_insights JSON from frontend.")
+                    context_parts.append("Active Highlights (unpinned): Error parsing data.")
+            else:
+                context_parts.append("Active Highlights (unpinned): Not provided.")
+
+            if pinned_canvas_insights_json:
+                try:
+                    pinned_insights = json.loads(pinned_canvas_insights_json)
+                    if pinned_insights and isinstance(pinned_insights, list) and len(pinned_insights) > 0: 
+                        context_parts.append("Pinned Highlights (always relevant):")
+                        for item in pinned_insights:
+                             if isinstance(item, dict):
+                                 context_parts.append(f"  - {item.get('highlight', 'N/A')} (Explanation: {item.get('explanation', 'N/A')})")
+                    else:
+                         context_parts.append("Pinned Highlights (always relevant): None")
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse pinned_canvas_insights JSON from frontend.")
+                    context_parts.append("Pinned Highlights (always relevant): Error parsing data.")
+            else:
+                context_parts.append("Pinned Highlights (always relevant): Not provided.")
+            
+            context_parts.append("Use this to understand current focus. Do not respond to this block directly unless asked about the canvas.]")
+            appended_canvas_context = "\n" + "\n".join(context_parts)
+            logger.info(f"Appending canvas context to user message (length: {len(appended_canvas_context)} chars).")
+
+            # Append to the last user message in llm_messages
+            if llm_messages and llm_messages[-1]['role'] == 'user':
+                llm_messages[-1]['content'] += appended_canvas_context
+            else:
+                # This case should ideally not happen if there's always a user message
+                llm_messages.append({'role': 'user', 'content': appended_canvas_context})
         
         transcript_content_to_add = ""; state_key = (agent_name, event_id)
         with transcript_state_lock:
