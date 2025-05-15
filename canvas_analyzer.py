@@ -36,31 +36,32 @@ def initialize_openai_client(api_key: Optional[str] = None) -> Optional[OpenAI]:
 
 # System prompt for the Canvas Analysis Agent
 CANVAS_SYSTEM_PROMPT_TEMPLATE = """
-You are an analytical AI. Your task is to analyze the provided meeting transcript segment and any accompanying static documents (like frameworks or organizational context) through three distinct perspectives: Mirror, Lens, and Portal.
+You are an analytical AI. Your primary task is to analyze the provided **Transcript Segment** through three distinct perspectives: Mirror, Lens, and Portal.
+Use the **Static Documents** only as supplementary background or reference if directly relevant to understanding the transcript content. The core of your analysis should stem from the live conversation in the transcript.
 
-Use "we" language (e.g., "we are discussing", "our focus seems to be") to reflect a sense of collective intelligence emerging from the conversation.
+When formulating highlights, aim for a tone that reflects collective intelligence (e.g., using "we" or phrasing that implies shared understanding or discussion points where appropriate and natural), but avoid rigidly prefixing every highlight with "we are...". The language should be adaptive and sound natural.
 
-For each perspective, identify 3-5 key highlights. Each highlight should be a descriptive short sentence or phrase. Also, provide a concise 'explanation' (1-2 sentences) elaborating slightly on each highlight.
+For each perspective (Mirror, Lens, Portal), identify 3-5 key highlights. Each highlight must be a descriptive short sentence or phrase. Also, provide a concise 'explanation' (1-2 sentences) elaborating slightly on each highlight.
 
-Consolidate similar insights within each category. The goal is to surface salient, actionable, or thought-provoking points.
+Consolidate similar insights within each category. The goal is to surface salient, actionable, or thought-provoking points directly from the transcript.
 
 The current analysis is focused on the time window: {time_window_label}.
 
-Static documents provided for broader context:
-<static_documents>
-{static_docs_content}
-</static_documents>
-
-Transcript segment for analysis:
+**Primary Source for Analysis:**
 <transcript_segment>
 {transcript_segment}
 </transcript_segment>
 
+**Supplementary Static Documents (Use only for context if needed to understand the transcript):**
+<static_documents>
+{static_docs_content}
+</static_documents>
+
 Output *only* a single, valid JSON object with three top-level keys: "mirror", "lens", and "portal".
-Each key should map to an array of objects. Each object in these arrays must have two string keys: "highlight" and "explanation".
+Each key should map to an array of objects. Each object in these arrays must have two string keys: "highlight" (the descriptive sentence/phrase) and "explanation".
 
 Example of a single highlight object:
-{{"highlight": "We are exploring new marketing strategies.", "explanation": "This refers to the discussion points around diversifying our marketing efforts to reach new audiences."}}
+{{"highlight": "Exploring new marketing strategies is a current focus.", "explanation": "This refers to the discussion points around diversifying marketing efforts to reach new audiences, as heard in the transcript."}}
 
 Ensure your entire response is a single JSON object.
 """
@@ -100,24 +101,18 @@ def analyze_transcript_for_canvas(
     logger.info(f"CanvasAnalyzer: Sending analysis request to OpenAI for agent '{agent_name}', event '{event_id}', window '{time_window_label}'. Prompt length (approx): {len(prompt_content)} chars.")
     
     try:
-        # Use a model alias that is likely available, like gpt-4-turbo-preview or gpt-4o-mini when available.
-        # For now, let's use gpt-4-turbo-preview as it's a common powerful model.
-        # Replace "gpt-4.1-mini" if it's not a recognized model identifier by the OpenAI library/API.
-        # The error message indicates "gpt-4.1-mini" is not a valid model name for the API.
-        # Let's use "gpt-4-turbo-preview" which is a common identifier or "gpt-4o-mini" if it's available.
-        # Given the context, "gpt-4-0125-preview" was in the file before, let's stick to that or a newer turbo.
-        # Using "gpt-4-turbo" is a more general alias for the latest turbo model.
-        model_to_use = os.getenv("CANVAS_ANALYSIS_MODEL", "gpt-4-turbo") # Fallback to gpt-4-turbo
+        # Using "gpt-4.1-mini" as requested. This model ID is valid and accessible via API endpoint.
+        model_to_use = os.getenv("CANVAS_ANALYSIS_MODEL", "gpt-4.1-mini") 
         logger.info(f"CanvasAnalyzer: Using model: {model_to_use}")
 
         completion = client.chat.completions.create(
             model=model_to_use, 
             messages=[
-                {"role": "system", "content": "You are an AI assistant specialized in analyzing meeting transcripts and extracting insights based on provided perspectives. Your output must be a single, valid JSON object as per the user's detailed instructions."},
+                {"role": "system", "content": "You are an AI assistant specialized in analyzing meeting transcripts and extracting insights based on provided perspectives. Your output must be a single, valid JSON object as per the user's detailed instructions. Focus analysis on the transcript_segment."},
                 {"role": "user", "content": prompt_content}
             ],
             temperature=0.3,
-            response_format={"type": "json_object"} # Request JSON mode if supported
+            response_format={"type": "json_object"} # Request JSON mode
         )
 
         response_text = completion.choices[0].message.content
