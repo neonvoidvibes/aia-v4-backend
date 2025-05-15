@@ -2,18 +2,37 @@ import os
 import json
 import logging
 from typing import Dict, List, Optional, Any
-from openai import OpenAI
+from openai import OpenAI, OpenAIError # Import OpenAIError for specific exception handling
+from dotenv import load_dotenv # Add dotenv for standalone testing
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client
-# Ensure OPENAI_API_KEY is set in the environment
-try:
-    openai_client = OpenAI() # API key is read from OPENAI_API_KEY env var
-    logger.info("CanvasAnalyzer: OpenAI client initialized.")
-except Exception as e:
-    logger.error(f"CanvasAnalyzer: Failed to initialize OpenAI client: {e}", exc_info=True)
-    openai_client = None
+# Global variable for the client, initialized later
+openai_client: Optional[OpenAI] = None
+
+def initialize_openai_client(api_key: Optional[str] = None) -> Optional[OpenAI]:
+    """Initializes and returns the OpenAI client."""
+    global openai_client
+    if openai_client:
+        return openai_client
+
+    try:
+        key_to_use = api_key or os.getenv("OPENAI_API_KEY")
+        if not key_to_use:
+            logger.error("CanvasAnalyzer: OPENAI_API_KEY not found in environment and not provided directly.")
+            raise OpenAIError("OPENAI_API_KEY is not set.")
+        
+        openai_client = OpenAI(api_key=key_to_use)
+        logger.info("CanvasAnalyzer: OpenAI client initialized successfully.")
+        return openai_client
+    except OpenAIError as e: # Catch specific OpenAIError first
+        logger.error(f"CanvasAnalyzer: OpenAI API Error during client initialization: {e}")
+        openai_client = None
+        return None
+    except Exception as e:
+        logger.error(f"CanvasAnalyzer: Generic error during OpenAI client initialization: {e}", exc_info=True)
+        openai_client = None
+        return None
 
 # System prompt for the Canvas Analysis Agent
 CANVAS_SYSTEM_PROMPT_TEMPLATE = """
@@ -50,46 +69,27 @@ def analyze_transcript_for_canvas(
     transcript_segment: str,
     static_docs_content: str,
     time_window_label: str,
-    agent_name: str, # Added for potential future use or more specific logging
-    event_id: Optional[str] # Added for potential future use or more specific logging
+    agent_name: str, 
+    event_id: Optional[str] 
 ) -> Dict[str, List[Dict[str, str]]]:
     """
     Analyzes transcript segment and static documents using GPT-4.1-mini.
-
-    Args:
-        transcript_segment: The segment of the transcript to analyze.
-        static_docs_content: Combined content of static documents (frameworks, org context).
-        time_window_label: User-friendly label for the time window being analyzed.
-        agent_name: Name of the agent for context/logging.
-        event_id: ID of the event for context/logging.
-
-    Returns:
-        A dictionary structured as:
-        {
-            "mirror": [{"highlight": "...", "explanation": "..."}],
-            "lens": [{"highlight": "...", "explanation": "..."}],
-            "portal": [{"highlight": "...", "explanation": "..."}]
-        }
-        Returns an empty structure on failure.
     """
-    if not openai_client:
-        logger.error("CanvasAnalyzer: OpenAI client not available. Cannot perform analysis.")
+    client = initialize_openai_client() # Ensure client is initialized
+    if not client:
+        logger.error("CanvasAnalyzer: OpenAI client not available for analysis.")
         return {"mirror": [], "lens": [], "portal": []}
 
-    # Truncate inputs if they are excessively long to prevent very large prompts,
-    # though GPT-4.1-mini has a large context window. This is a basic safeguard.
-    # A more sophisticated approach would involve token counting.
-    max_transcript_len = 30000  # Approx characters
-    max_static_docs_len = 15000 # Approx characters
+    max_transcript_len = 30000  
+    max_static_docs_len = 15000 
 
     if len(transcript_segment) > max_transcript_len:
         logger.warning(f"CanvasAnalyzer: Transcript segment length ({len(transcript_segment)}) exceeds max ({max_transcript_len}). Truncating.")
-        transcript_segment = transcript_segment[-max_transcript_len:] # Keep the most recent part
+        transcript_segment = transcript_segment[-max_transcript_len:] 
     
     if len(static_docs_content) > max_static_docs_len:
         logger.warning(f"CanvasAnalyzer: Static docs content length ({len(static_docs_content)}) exceeds max ({max_static_docs_len}). Truncating.")
         static_docs_content = static_docs_content[:max_static_docs_len]
-
 
     prompt_content = CANVAS_SYSTEM_PROMPT_TEMPLATE.format(
         time_window_label=time_window_label,
@@ -97,45 +97,42 @@ def analyze_transcript_for_canvas(
         transcript_segment=transcript_segment if transcript_segment else "No transcript segment provided for this analysis."
     )
 
-    logger.info(f"CanvasAnalyzer: Sending analysis request to GPT-4.1-mini for agent '{agent_name}', event '{event_id}', window '{time_window_label}'. Prompt length (approx): {len(prompt_content)} chars.")
+    logger.info(f"CanvasAnalyzer: Sending analysis request to OpenAI for agent '{agent_name}', event '{event_id}', window '{time_window_label}'. Prompt length (approx): {len(prompt_content)} chars.")
     
     try:
-        completion = openai_client.chat.completions.create(
-            model="gpt-4-0125-preview", # Using a placeholder, assuming gpt-4.1-mini is aliased or will be updated. For testing, use a known model. "gpt-4-turbo-preview" is good.
-            # model="gpt-4-turbo-preview", # More common alias, or use the specific one if available like "gpt-4-vision-preview" if multimodal is intended later, or "gpt-4-1106-preview"
+        # Use a model alias that is likely available, like gpt-4-turbo-preview or gpt-4o-mini when available.
+        # For now, let's use gpt-4-turbo-preview as it's a common powerful model.
+        # Replace "gpt-4.1-mini" if it's not a recognized model identifier by the OpenAI library/API.
+        # The error message indicates "gpt-4.1-mini" is not a valid model name for the API.
+        # Let's use "gpt-4-turbo-preview" which is a common identifier or "gpt-4o-mini" if it's available.
+        # Given the context, "gpt-4-0125-preview" was in the file before, let's stick to that or a newer turbo.
+        # Using "gpt-4-turbo" is a more general alias for the latest turbo model.
+        model_to_use = os.getenv("CANVAS_ANALYSIS_MODEL", "gpt-4-turbo") # Fallback to gpt-4-turbo
+        logger.info(f"CanvasAnalyzer: Using model: {model_to_use}")
+
+        completion = client.chat.completions.create(
+            model=model_to_use, 
             messages=[
                 {"role": "system", "content": "You are an AI assistant specialized in analyzing meeting transcripts and extracting insights based on provided perspectives. Your output must be a single, valid JSON object as per the user's detailed instructions."},
                 {"role": "user", "content": prompt_content}
             ],
-            temperature=0.3, # Lower temperature for more factual extraction
-            # Ensure response_format is used correctly if available for the model version
-            # For newer models, you might use: response_format={"type": "json_object"}
+            temperature=0.3,
+            response_format={"type": "json_object"} # Request JSON mode if supported
         )
 
         response_text = completion.choices[0].message.content
-        logger.debug(f"CanvasAnalyzer: Raw response from GPT-4.1-mini: {response_text[:500]}...") # Log beginning of response
+        logger.debug(f"CanvasAnalyzer: Raw response from OpenAI: {response_text[:500]}...")
 
         if not response_text:
-            logger.error("CanvasAnalyzer: Received empty response from GPT-4.1-mini.")
+            logger.error("CanvasAnalyzer: Received empty response from OpenAI.")
             return {"mirror": [], "lens": [], "portal": []}
-
-        # Attempt to parse the JSON
-        # The LLM might sometimes include markdown ```json ... ``` around the JSON.
-        cleaned_response_text = response_text.strip()
-        if cleaned_response_text.startswith("```json"):
-            cleaned_response_text = cleaned_response_text[len("```json"):]
-        if cleaned_response_text.endswith("```"):
-            cleaned_response_text = cleaned_response_text[:-len("```")]
-        cleaned_response_text = cleaned_response_text.strip()
         
-        insights = json.loads(cleaned_response_text)
+        insights = json.loads(response_text) # No need to strip ```json anymore with response_format
 
-        # Validate basic structure
         if not all(key in insights for key in ["mirror", "lens", "portal"]):
-            logger.error(f"CanvasAnalyzer: GPT-4.1-mini response missing one or more_required keys (mirror, lens, portal). Response: {insights}")
+            logger.error(f"CanvasAnalyzer: OpenAI response missing one or more required keys (mirror, lens, portal). Response: {insights}")
             return {"mirror": [], "lens": [], "portal": []}
         
-        # Further ensure each category is a list of dicts with 'highlight' and 'explanation'
         for category in ["mirror", "lens", "portal"]:
             if not isinstance(insights[category], list):
                 insights[category] = []
@@ -148,41 +145,49 @@ def analyze_transcript_for_canvas(
         return insights
 
     except json.JSONDecodeError as e:
-        logger.error(f"CanvasAnalyzer: Failed to decode JSON response from GPT-4.1-mini: {e}. Response was: {response_text[:1000]}...", exc_info=True)
+        logger.error(f"CanvasAnalyzer: Failed to decode JSON response from OpenAI: {e}. Response was: {response_text[:1000] if 'response_text' in locals() else 'N/A'}", exc_info=True)
+        return {"mirror": [], "lens": [], "portal": []}
+    except OpenAIError as e: # Catch specific OpenAI errors
+        logger.error(f"CanvasAnalyzer: OpenAI API Error: {e}", exc_info=True)
         return {"mirror": [], "lens": [], "portal": []}
     except Exception as e:
-        logger.error(f"CanvasAnalyzer: Error during GPT-4.1-mini API call or processing: {e}", exc_info=True)
+        logger.error(f"CanvasAnalyzer: Error during OpenAI API call or processing: {e}", exc_info=True)
         return {"mirror": [], "lens": [], "portal": []}
 
 if __name__ == '__main__':
-    # Basic test (requires OPENAI_API_KEY to be set)
-    logger.setLevel(logging.DEBUG)
-    # Create a console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
+    load_dotenv() # Load .env for standalone testing
+    # Basic logging setup for standalone testing
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
 
-    sample_transcript = """
-    [10:00:00 - 10:00:15 UTC] Alice: Good morning, everyone. Let's kick off the Q4 budget discussion.
-    [10:00:15 - 10:00:30 UTC] Bob: Morning. My main concern is our current team bandwidth. We're stretched thin.
-    [10:00:30 - 10:00:45 UTC] Carol: I agree with Bob. While new projects are exciting, we need to ensure operational stability.
-    [10:00:45 - 10:01:00 UTC] Alice: Valid points. We need to balance innovation with our capacity. Perhaps AI could help automate some of our manual reporting?
-    [10:01:00 - 10:01:15 UTC] Bob: That's an interesting idea. Could free up significant time if feasible.
-    """
-    sample_static_docs = """
-    Framework: Project Prioritization
-    1. Strategic Alignment
-    2. Resource Availability
-    3. Potential ROI
-
-    Org Context: We are currently in a phase of rapid growth and exploring new market segments.
-    """
+    logger.info("Canvas Analyzer Standalone Test Started")
     
-    if not openai_client:
-        print("OpenAI client not initialized. Ensure OPENAI_API_KEY is set.")
+    # Attempt to initialize client immediately for test
+    client_for_test = initialize_openai_client()
+    if not client_for_test:
+        logger.critical("Failed to initialize OpenAI client for standalone test. Ensure OPENAI_API_KEY is set in .env")
     else:
+        sample_transcript = """
+        [10:00:00 - 10:00:15 UTC] Alice: Good morning, everyone. Let's kick off the Q4 budget discussion.
+        [10:00:15 - 10:00:30 UTC] Bob: Morning. My main concern is our current team bandwidth. We're stretched thin.
+        [10:00:30 - 10:00:45 UTC] Carol: I agree with Bob. While new projects are exciting, we need to ensure operational stability.
+        [10:00:45 - 10:01:00 UTC] Alice: Valid points. We need to balance innovation with our capacity. Perhaps AI could help automate some of our manual reporting?
+        [10:01:00 - 10:01:15 UTC] Bob: That's an interesting idea. Could free up significant time if feasible.
+        """
+        sample_static_docs = """
+        Framework: Project Prioritization
+        1. Strategic Alignment
+        2. Resource Availability
+        3. Potential ROI
+
+        Org Context: We are currently in a phase of rapid growth and exploring new market segments.
+        """
+        
         test_insights = analyze_transcript_for_canvas(
             transcript_segment=sample_transcript,
             static_docs_content=sample_static_docs,
@@ -194,5 +199,6 @@ if __name__ == '__main__':
         print(json.dumps(test_insights, indent=2))
         print("--- End Test Output ---")
 
-        if not any(test_insights.values()):
-            print("\nWARNING: Test output was empty. Check logs for errors and ensure your API key is valid and has quota.")
+        if not any(cat_insights for cat_insights in test_insights.values() if isinstance(cat_insights, list) and len(cat_insights) > 0):
+            print("\nWARNING: Test output was empty or malformed. Check logs for errors and ensure your API key is valid and has quota.")
+    logger.info("Canvas Analyzer Standalone Test Finished")
