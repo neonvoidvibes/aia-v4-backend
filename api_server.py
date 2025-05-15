@@ -895,75 +895,53 @@ def download_s3_document(user: SupabaseUser):
     except s3.exceptions.NoSuchKey: logger.warning(f"S3 Download: File not found at key: {s3_key}"); return jsonify({"error": "File not found"}), 404
     except Exception as e: logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error downloading S3 object"}), 500
 
-@app.route('/api/canvas/insights', methods=['GET'])
-@supabase_auth_required(agent_required=True) # Agent name from query param will be checked
-def get_canvas_insights(user: SupabaseUser):
-    agent_name = request.args.get('agent') # Agent name is passed as 'agent'
+# This Flask route will now serve as an internal endpoint called by the Next.js proxy
+@app.route('/internal_api/canvas_insights', methods=['GET']) 
+@supabase_auth_required(agent_required=True) # Auth is still good practice for internal APIs
+def get_internal_canvas_insights(user: SupabaseUser):
+    # Agent name is already verified by the decorator if it's passed in query/body.
+    # The Next.js proxy will pass these as query parameters.
+    agent_name = request.args.get('agent')
     event_id = request.args.get('event_id')
-    time_window_label = request.args.get('time_window_label', 'Whole Meeting') # Default if not provided
+    time_window_label = request.args.get('time_window_label', 'Whole Meeting')
 
-    logger.info(f"Canvas insights request for Agent: {agent_name}, Event: {event_id}, Window: {time_window_label} by User: {user.id}")
+    logger.info(f"[Flask Internal API /internal_api/canvas_insights] Request for Agent: {agent_name}, Event: {event_id}, Window: {time_window_label} by User: {user.id}")
 
-    if not agent_name:
-        return jsonify({"error": "Missing 'agent' query parameter"}), 400
-    # event_id can be optional or default to '0000' if not critical for canvas context fetching here
-
-    # 1. Fetch relevant transcript slice based on time_window_label
-    # This is a simplified version. A robust implementation needs to parse timestamps.
-    # For "quick win", we'll fetch the whole latest transcript and let the analyzer deal with it,
-    # or pass a hint. The analyzer prompt currently takes the full segment.
-    # TODO: Implement precise transcript slicing based on time_window_label.
-    # For now, fetch the latest full transcript content.
+    if not agent_name: # Should be caught by decorator if agent_required=True, but double check
+        return jsonify({"error": "Missing 'agent' query parameter for internal canvas insights"}), 400
     
-    # Using TranscriptState to manage reading positions, even if we fetch the whole file for now.
-    # This ensures we are aligned with how other parts of the system might access transcripts.
     transcript_content = ""
-    # state_key = (agent_name, event_id or '0000') # event_id can be None from query
     
-    # This part needs careful thought: `read_new_transcript_content` is designed for delta updates.
-    # For canvas, we might need the *entire relevant window*.
-    # Let's use `read_all_transcripts_in_folder` for "Whole Meeting" and a placeholder for others for now.
-    # Or, more simply, just get the latest file's full content.
-    
-    # from utils.transcript_utils import get_latest_transcript_file, read_all_transcripts_in_folder # Already imported
-
     if time_window_label.lower() == "whole meeting":
-        # This function concatenates all non-rolling transcripts for the event.
         transcript_content = read_all_transcripts_in_folder(agent_name, event_id or '0000') or ""
         if not transcript_content:
-            logger.warning(f"Canvas: No transcript content found for 'Whole Meeting' for {agent_name}/{event_id or '0000'}")
+            logger.warning(f"[Flask Canvas] No transcript content for 'Whole Meeting' for {agent_name}/{event_id or '0000'}")
     else:
-        # For other time windows, for now, we'll take the content of the single latest transcript file.
-        # A more advanced version would slice this file by time.
         latest_transcript_key = get_latest_transcript_file(agent_name, event_id or '0000')
         if latest_transcript_key:
-            transcript_content = read_file_content(latest_transcript_key, f"latest transcript for canvas ({latest_transcript_key})") or ""
+            # TODO: Implement precise transcript slicing based on time_window_label (e.g., "Last 5min")
+            # For now, using full content of the latest file for any non-"Whole Meeting" window.
+            # This means the canvas_analyzer will get more data than strictly needed for smaller windows.
+            transcript_content = read_file_content(latest_transcript_key, f"latest transcript for canvas ({latest_transcript_key}) for window '{time_window_label}'") or ""
             if not transcript_content:
-                 logger.warning(f"Canvas: Latest transcript file {latest_transcript_key} was empty for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
+                 logger.warning(f"[Flask Canvas] Latest transcript file {latest_transcript_key} was empty for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
         else:
-            logger.warning(f"Canvas: No latest transcript file found for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
+            logger.warning(f"[Flask Canvas] No latest transcript file found for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
     
-    # if not transcript_content: # Allow empty transcript to be sent for analysis
-    #     logger.info(f"Canvas: No transcript data to analyze for window '{time_window_label}'. Returning empty insights.")
-    #     return jsonify({"mirror": [], "lens": [], "portal": []}), 200
-
-
-    # 2. Fetch static S3 documents (frameworks, org context)
     static_docs_parts = []
     frameworks_content = get_latest_frameworks(agent_name)
     if frameworks_content:
         static_docs_parts.append("## Frameworks Base\n" + frameworks_content)
     
-    org_context_content = get_latest_context(agent_name, event_id) # get_latest_context handles org and event specific
+    org_context_content = get_latest_context(agent_name, event_id)
     if org_context_content:
         static_docs_parts.append("## Organizational/Event Context\n" + org_context_content)
     
     combined_static_docs = "\n\n".join(static_docs_parts) if static_docs_parts else "No static documents available."
 
-    # 3. Call canvas_analyzer
     try:
         insights = analyze_transcript_for_canvas(
-            transcript_segment=transcript_content, # Send the determined segment
+            transcript_segment=transcript_content,
             static_docs_content=combined_static_docs,
             time_window_label=time_window_label,
             agent_name=agent_name,
@@ -971,8 +949,8 @@ def get_canvas_insights(user: SupabaseUser):
         )
         return jsonify(insights), 200
     except Exception as e:
-        logger.error(f"Error calling canvas_analyzer: {e}", exc_info=True)
-        return jsonify({"error": "Failed to generate canvas insights"}), 500
+        logger.error(f"[Flask Canvas] Error calling canvas_analyzer: {e}", exc_info=True)
+        return jsonify({"error": "Failed to generate canvas insights internally"}), 500
 
 
 @app.route('/api/chat', methods=['POST'])
