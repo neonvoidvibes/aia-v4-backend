@@ -229,7 +229,21 @@ def supabase_auth_required(agent_required: bool = True):
 @retry_strategy
 def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
     if not anthropic_client: raise RuntimeError("Anthropic client not initialized.")
-    logger.debug(f"Anthropic API: Model={model}, MaxTokens={max_tokens}, SystemPromptLen={len(system)}, NumMessages={len(messages)}")
+    # Enhanced logging for API call payload
+    logger.info("="*15 + " ANTHROPIC API CALL (STREAM) " + "="*15)
+    logger.info(f"Model: {model}, MaxTokens: {max_tokens}")
+    logger.info(f"System Prompt Length: {len(system)}")
+    if logger.isEnabledFor(logging.DEBUG): # Only log full system prompt in debug
+        logger.debug(f"System Prompt (snippet): {system[:500]}...")
+    
+    logger.info(f"Number of Messages for API: {len(messages)}")
+    for i, msg in enumerate(messages):
+        role = msg.get("role")
+        content_len = len(msg.get("content", ""))
+        content_snippet = msg.get("content", "")[:150] # Log first 150 chars of content
+        logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
+    logger.info("="*15 + " END ANTHROPIC API CALL " + "="*15)
+    
     return anthropic_client.messages.stream(model=model, max_tokens=max_tokens, system=system, messages=messages)
 
 @app.route('/api/health', methods=['GET'])
@@ -881,7 +895,7 @@ def handle_chat(user: SupabaseUser):
             "4.  **Source Attribution:** When referencing information from any transcript segment (initial or delta), cite the (Source File: ...) provided within that segment if possible, or generally mention it's from the meeting transcript."
         )
         
-        final_system_prompt = base_system_prompt + source_instr + transcript_handling_instructions # Add new transcript instructions
+        final_system_prompt = base_system_prompt + source_instr + transcript_handling_instructions
         
         if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
         if event_context: final_system_prompt += "\n\n## Context\n" + event_context
@@ -908,7 +922,7 @@ def handle_chat(user: SupabaseUser):
             except Exception as e: logger.error(f"Unexpected RAG error: {e}", exc_info=True); rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents]\n=== END RETRIEVED CONTEXT ==="
         elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
         else: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable.]\n=== END RETRIEVED CONTEXT ==="
-        final_system_prompt += rag_context_block # Add RAG context to system prompt
+        final_system_prompt += rag_context_block 
         
         state_key = (agent_name, event_id)
         with transcript_state_lock:
@@ -931,21 +945,21 @@ def handle_chat(user: SupabaseUser):
                     )
                     llm_messages.insert(0, {'role': 'user', 'content': initial_transcript_message_content})
                     logger.info(f"Prepended initial full transcript (length {len(new_transcript_data)}) as first user message context.")
-                else: # Delta update
+                else: 
                     label = "[Meeting Transcript Update (from S3)]" 
                     transcript_content_to_add = f"{label}\n{new_transcript_data}"
                     
                     insert_index = len(llm_messages) 
                     for i in range(len(llm_messages) - 1, -1, -1):
-                        msg_content = llm_messages[i]['content']
-                        is_initial_load_msg = msg_content.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
-                        is_delta_update_msg = msg_content.startswith("[Meeting Transcript Update (from S3)]")
+                        msg_content_iter = llm_messages[i]['content']
+                        is_initial_load_msg_iter = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
+                        is_delta_update_msg_iter = msg_content_iter.startswith("[Meeting Transcript Update (from S3)]")
                         
-                        if llm_messages[i]['role'] == 'user' and not is_initial_load_msg and not is_delta_update_msg:
+                        if llm_messages[i]['role'] == 'user' and not is_initial_load_msg_iter and not is_delta_update_msg_iter:
                             insert_index = i 
                             break
                     if insert_index == len(llm_messages) and llm_messages and llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:"):
-                        insert_index = 1 
+                         insert_index = 1 # Should insert after the initial full transcript if it's the only other message
 
                     llm_messages.insert(insert_index, {'role': 'user', 'content': transcript_content_to_add})
                     logger.info(f"Added transcript DELTA (length {len(new_transcript_data)}) to LLM messages at index {insert_index}.")
@@ -959,9 +973,30 @@ def handle_chat(user: SupabaseUser):
             logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
 
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
-        final_system_prompt += f"\nCurrent Time Context: {time_str}" # Add time context last
+        final_system_prompt += f"\nCurrent Time Context: {time_str}" 
         llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-3-5-sonnet-20240620"); llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
         
+        # === START CRITICAL LOGGING BLOCK ===
+        logger.info("="*30 + " FINAL PAYLOAD TO LLM " + "="*30)
+        logger.info(f"System Prompt Length: {len(final_system_prompt)}")
+        # For debugging, log a snippet of the system prompt if it's very long
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Final System Prompt (first 500 chars): {final_system_prompt[:500]}...")
+            logger.debug(f"Final System Prompt (last 500 chars): ...{final_system_prompt[-500:]}")
+
+        logger.info(f"Number of LLM Messages: {len(llm_messages)}")
+        for i, msg in enumerate(llm_messages):
+            role = msg.get("role")
+            content_len = len(msg.get("content", ""))
+            # Log more for the potentially large initial transcript message
+            if msg.get("content", "").startswith("IMPORTANT CONTEXT: The following is the full meeting transcript"):
+                content_snippet = msg.get("content", "")[:300] + " ... [TRUNCATED INITIAL TRANSCRIPT] ... " + msg.get("content", "")[-300:]
+            else:
+                content_snippet = msg.get("content", "")[:200] # Shorter snippet for other messages
+            logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
+        logger.info("="*30 + " END FINAL PAYLOAD TO LLM " + "="*30)
+        # === END CRITICAL LOGGING BLOCK ===
+
         def generate_stream():
             response_content = ""; stream_error = None
             try:
