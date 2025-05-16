@@ -1,4 +1,3 @@
-# api_server.py
 import os
 import sys
 import logging
@@ -888,7 +887,7 @@ def handle_chat(user: SupabaseUser):
         else: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block
         
-        transcript_content_to_add = ""; state_key = (agent_name, event_id)
+        state_key = (agent_name, event_id)
         with transcript_state_lock:
             if state_key not in transcript_state_cache: 
                 transcript_state_cache[state_key] = TranscriptState()
@@ -896,18 +895,27 @@ def handle_chat(user: SupabaseUser):
             current_transcript_state = transcript_state_cache[state_key]
         
         try:
-            new_transcript_data = read_new_transcript_content(current_transcript_state, agent_name, event_id)
+            new_transcript_data, was_initial_load = read_new_transcript_content(current_transcript_state, agent_name, event_id)
+            
             if new_transcript_data:
-                label = "[Meeting Transcript Update (from S3)]" 
-                transcript_content_to_add = f"{label}\n{new_transcript_data}"
-                insert_index = len(llm_messages)
-                if llm_messages and llm_messages[-1]['role'] == 'user':
-                    insert_index = len(llm_messages) -1
-                
-                llm_messages.insert(insert_index, {'role': 'user', 'content': transcript_content_to_add})
-                logger.info(f"Added transcript data (length {len(new_transcript_data)}) to LLM messages at index {insert_index}.")
+                if was_initial_load:
+                    logger.info(f"Initial full transcript load (length {len(new_transcript_data)}) being added to SYSTEM prompt.")
+                    final_system_prompt += f"\n\n=== FULL MEETING TRANSCRIPT (Initial Load) ===\n{new_transcript_data}\n=== END FULL MEETING TRANSCRIPT ==="
+                else: # Delta update
+                    label = "[Meeting Transcript Update (from S3)]" 
+                    transcript_content_to_add = f"{label}\n{new_transcript_data}"
+                    # Determine insert_index: before the last user message or at the end if no user message.
+                    insert_index = len(llm_messages)
+                    if llm_messages and llm_messages[-1]['role'] == 'user':
+                        insert_index = len(llm_messages) -1 
+                    
+                    llm_messages.insert(insert_index, {'role': 'user', 'content': transcript_content_to_add})
+                    logger.info(f"Added transcript DELTA (length {len(new_transcript_data)}) to LLM messages at index {insert_index}.")
             else:
-                logger.info(f"No new transcript data to add for {agent_name}/{event_id}.")
+                if was_initial_load:
+                    logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data (or only marker set).")
+                else:
+                    logger.info(f"No new transcript delta to add for {agent_name}/{event_id}.")
 
         except Exception as e: 
             logger.error(f"Error reading transcript updates from S3: {e}", exc_info=True)
