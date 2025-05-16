@@ -3,7 +3,7 @@ import sys
 import logging
 from flask import Flask, jsonify, request, Response, stream_with_context
 from dotenv import load_dotenv
-import threading
+import threading # Keep for general threading, RLock is now used specifically
 import time
 import json
 from datetime import datetime, timezone, timedelta
@@ -24,20 +24,17 @@ from gotrue.types import User as SupabaseUser # Import the User type for type hi
 
 # Import necessary modules from our project
 from utils.retrieval_handler import RetrievalHandler
-from utils.transcript_utils import TranscriptState, read_new_transcript_content, get_latest_transcript_file, read_all_transcripts_in_folder # Added get_latest_transcript_file, read_all_transcripts_in_folder
+from utils.transcript_utils import TranscriptState, read_new_transcript_content
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
-    list_agent_names_from_s3, list_s3_objects_metadata, read_file_content # Added read_file_content
+    list_agent_names_from_s3, list_s3_objects_metadata 
 )
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
-
-# Import for Canvas Analysis Agent
-from canvas_analyzer import analyze_transcript_for_canvas
 
 # Import the new transcription service
 from transcription_service import process_audio_segment_and_update_s3
@@ -58,7 +55,6 @@ def setup_logging(debug=False):
         logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.getLogger('transcription_service').setLevel(logging.DEBUG if debug else logging.INFO)
-    logging.getLogger('canvas_analyzer').setLevel(logging.DEBUG if debug else logging.INFO) # Add logger for new module
     logging.info(f"Logging setup complete. Level: {logging.getLevelName(log_level)}")
     return root_logger
 
@@ -133,7 +129,7 @@ def log_retry_error(retry_state):
 retry_strategy = retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry_error_callback=log_retry_error, retry=(retry_if_exception_type(APIStatusError)))
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
-session_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock) 
+session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock) 
 
 def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: # Return type changed to SupabaseUser
     """Verifies the JWT and returns the Supabase User object or None."""
@@ -171,7 +167,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
     if not user: 
         return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
     
-    if not agent_name: # If agent_name is not provided, but user is verified, allow access (for routes not requiring specific agent access)
+    if not agent_name:
         logger.debug(f"Authorization check: User {user.id} authenticated. No specific agent access check required for this route.")
         return user, None
 
@@ -220,19 +216,21 @@ def supabase_auth_required(agent_required: bool = True):
             if auth_header and auth_header.startswith("Bearer "): 
                 token = auth_header.split(" ", 1)[1]
             
-            # Determine agent_name for verification
-            # For canvas/insights, agent name is in query args. For chat, it's in JSON body.
-            agent_name_to_check = None
+            agent_name_from_payload = None
             if agent_required:
-                if 'agent' in request.args: # Primarily for GET requests like /api/canvas/insights
-                    agent_name_to_check = request.args.get('agent')
-                elif request.is_json and request.json and 'agent' in request.json: # For POST requests like /api/chat
-                    agent_name_to_check = request.json.get('agent')
-                
-                if not agent_name_to_check: # If still not found and agent is required
-                    return jsonify({"error": "Agent identifier missing in request"}), 400
-            
-            user, error_response = verify_user_agent_access(token, agent_name_to_check if agent_required else None)
+                if request.is_json and request.json and 'agent' in request.json:
+                    agent_name_from_payload = request.json.get('agent')
+                elif 'agent' in request.args: # Check query params for GET or if agent is passed in query for POST
+                    agent_name_from_payload = request.args.get('agent')
+                # Example for payload in query for GET (less common for POST-style actions)
+                # elif 'payload' in request.args:
+                #     try:
+                #         payload_dict = json.loads(request.args.get('payload'))
+                #         agent_name_from_payload = payload_dict.get('agent')
+                #     except (json.JSONDecodeError, TypeError):
+                #         pass # Ignore if payload is not valid JSON or not a dict
+
+            user, error_response = verify_user_agent_access(token, agent_name_from_payload if agent_required else None)
             if error_response: 
                 status_code = error_response.status_code if hasattr(error_response, 'status_code') else 500
                 error_json = error_response.get_json() if hasattr(error_response, 'get_json') else {"error": "Unknown authorization error"}
@@ -306,6 +304,7 @@ def start_recording_route(user: SupabaseUser):
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True, 
+        "is_finalizing": False, # New flag for idempotency
         "current_segment_raw_bytes": bytearray(),
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0,
@@ -334,18 +333,21 @@ def start_recording_route(user: SupabaseUser):
     })
 
 def _finalize_session(session_id: str):
-    if session_id not in active_sessions:
-        logger.warning(f"Finalize: Session {session_id} not found or already cleaned up.")
-        return
-
-    logger.info(f"Finalizing session {session_id}...")
-    with session_locks[session_id]:
+    logger.info(f"Attempting to finalize session {session_id}...")
+    with session_locks[session_id]: # Acquire re-entrant lock
         if session_id not in active_sessions:
-            logger.warning(f"Finalize: Session {session_id} not found or already cleaned up after lock. Aborting.")
+            logger.warning(f"Finalize: Session {session_id} not found or already cleaned up (checked after lock). Aborting.")
+            return
+
+        session_data = active_sessions[session_id]
+        
+        if session_data.get("is_finalizing", False):
+            logger.warning(f"Finalize: Session {session_id} is already being finalized. Aborting redundant call.")
             return
             
-        session_data = active_sessions[session_id]
-        session_data["is_active"] = False 
+        session_data["is_finalizing"] = True # Mark as finalizing
+        session_data["is_active"] = False # Mark as no longer active for new data
+        logger.info(f"Finalizing session {session_id} (marked is_finalizing=True, is_active=False).")
         
         current_fragment_bytes_final = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
         global_header_bytes_final = session_data.get("webm_global_header_bytes", b'')
@@ -408,42 +410,42 @@ def _finalize_session(session_id: str):
         
         ws = session_data.get("websocket_connection")
         if ws:
-                            pass
-        
-        ws = session_data.get("websocket_connection")
-        if ws:
             logger.info(f"Attempting to close WebSocket for session {session_id} during finalization.")
             try:
-                # simple-websocket's Server object (ws) doesn't have a public .closed attribute.
-                # ws.close() should be idempotent or handle being called on an already closing/closed socket.
                 ws.close(1000, "Session stopped by server (finalize)")
                 logger.info(f"WebSocket for session {session_id} close() called.")
-            except Exception as e: # Catch a broader range of potential errors during close
+            except Exception as e: 
                 logger.warning(f"Error closing WebSocket for session {session_id} during finalization: {e}", exc_info=True)
     
-    temp_session_audio_dir = session_data['temp_audio_session_dir']
-    if os.path.exists(temp_session_audio_dir):
-        try:
-            # More thorough cleanup
-            for root_dir, dirs, files in os.walk(temp_session_audio_dir, topdown=False):
-                for name in files:
-                    try: os.remove(os.path.join(root_dir, name))
-                    except OSError as e_file: logger.warning(f"Error deleting file {os.path.join(root_dir, name)}: {e_file}")
-                for name in dirs:
-                    try: os.rmdir(os.path.join(root_dir, name))
-                    except OSError as e_dir: logger.warning(f"Error deleting dir {os.path.join(root_dir, name)}: {e_dir}")
-            try: os.rmdir(temp_session_audio_dir) # Remove the main session directory itself
-            except OSError as e_main_dir: logger.warning(f"Error deleting main session dir {temp_session_audio_dir}: {e_main_dir}")
-            
-            logger.info(f"Cleaned up temporary directory: {temp_session_audio_dir}")
-        except Exception as e:
-            logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
+    # Cleanup outside the primary lock scope for this session_data, but ensure session_id is still valid
+    # The data from active_sessions was copied to session_data, so it's safe to use session_data['temp_audio_session_dir']
+    if session_id in active_sessions: # Check if session_data for this session_id still exists before deleting.
+                                      # This is a double check. The main logic happens under the lock.
+        temp_session_audio_dir = session_data['temp_audio_session_dir']
+        if os.path.exists(temp_session_audio_dir):
+            try:
+                for root_dir, dirs, files in os.walk(temp_session_audio_dir, topdown=False):
+                    for name in files:
+                        try: os.remove(os.path.join(root_dir, name))
+                        except OSError as e_file: logger.warning(f"Error deleting file {os.path.join(root_dir, name)}: {e_file}")
+                    for name in dirs:
+                        try: os.rmdir(os.path.join(root_dir, name))
+                        except OSError as e_dir: logger.warning(f"Error deleting dir {os.path.join(root_dir, name)}: {e_dir}")
+                try: os.rmdir(temp_session_audio_dir) 
+                except OSError as e_main_dir: logger.warning(f"Error deleting main session dir {temp_session_audio_dir}: {e_main_dir}")
+                logger.info(f"Cleaned up temporary directory: {temp_session_audio_dir}")
+            except Exception as e:
+                logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
 
-    if session_id in active_sessions: 
-        del active_sessions[session_id]
-    if session_id in session_locks: 
-        del session_locks[session_id]
-    logger.info(f"Session {session_id} finalized and removed from active sessions.")
+        # Remove from active_sessions and session_locks only after all processing and cleanup attempts
+        if session_id in active_sessions: 
+            del active_sessions[session_id]
+        if session_id in session_locks: 
+            del session_locks[session_id] # Remove the lock itself
+        logger.info(f"Session {session_id} finalized and removed from active sessions.")
+    else:
+        logger.warning(f"Session {session_id} was already removed from active_sessions before final cleanup phase.")
+
 
 @app.route('/api/recording/stop', methods=['POST'])
 @supabase_auth_required(agent_required=False) 
@@ -455,8 +457,10 @@ def stop_recording_route(user: SupabaseUser):
 
     logger.info(f"Stop recording request for session {session_id} by user {user.id}") 
     
+    # Check if session exists before attempting to finalize.
+    # The _finalize_session function itself will also check.
     if session_id not in active_sessions:
-        logger.warning(f"Stop request for session {session_id}, but session not found in active_sessions. It might have already been finalized.")
+        logger.warning(f"Stop request for session {session_id}, but session not found in active_sessions. It might have already been finalized or never started.")
         return jsonify({"status": "success", "message": "Session already stopped or not found", "session_id": session_id}), 200 
     
     _finalize_session(session_id)
@@ -574,46 +578,32 @@ def audio_stream_socket(ws, session_id: str):
 
                         if not global_header_bytes and current_fragment_bytes:
                             logger.warning(f"Session {session_id}: Global header not captured, but processing fragments. This might fail if not the very first segment.")
-                            # This case should ideally not happen if is_first_blob_received logic is correct.
-                            # If it does, the first fragment in current_fragment_bytes *must* be a full header.
                             all_segment_bytes = current_fragment_bytes
                         elif global_header_bytes and current_fragment_bytes:
-                            # For segments *after* the first one that contributed its header to global_header_bytes,
-                            # we prepend the global header to the current fragments.
-                            # If current_fragment_bytes *starts* with the global_header (because it's the first segment),
-                            # we don't want to prepend it twice.
                             if current_fragment_bytes.startswith(global_header_bytes) and len(global_header_bytes) > 0:
-                                # This is likely the first segment's data, which already includes the header.
                                 all_segment_bytes = current_fragment_bytes
                                 logger.debug(f"Session {session_id}: Processing first segment data which includes its own header.")
                             else:
-                                # This is for subsequent segments.
                                 all_segment_bytes = global_header_bytes + current_fragment_bytes
                                 logger.debug(f"Session {session_id}: Prepended global header ({len(global_header_bytes)} bytes) to current fragments ({len(current_fragment_bytes)} bytes).")
                         elif global_header_bytes and not current_fragment_bytes:
                             logger.warning(f"Session {session_id}: Global header exists but no current fragments. Skipping empty segment.")
-                            session_data["current_segment_raw_bytes"] = bytearray() # Clear just in case
+                            session_data["current_segment_raw_bytes"] = bytearray() 
                             session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
                             session_data["actual_segment_duration_seconds"] = 0.0
                             continue
                         logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment from raw bytes.")
                         
-                        # Make copies of data needed for the thread
-                        # session_data itself is a reference to the dict in active_sessions,
-                        # so modifications by the thread will be visible. Lock appropriately.
                         bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
                         global_header_for_thread = session_data.get("webm_global_header_bytes", b'')
                         
-                        # Reset for next segment accumulation *before* starting thread
                         session_data["current_segment_raw_bytes"] = bytearray()
                         session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
-                        # actual_segment_duration_seconds will be set by the thread after ffprobe
-
-                        if not bytes_to_process: # Should use global_header + bytes_to_process logic below
+                        
+                        if not bytes_to_process: 
                             logger.warning(f"Session {session_id}: Raw byte buffer for current fragments is empty, though duration target met. Skipping processing.")
                             continue
 
-                        # Determine combined bytes for FFmpeg
                         all_segment_bytes_for_ffmpeg_thread = b''
                         if not global_header_for_thread and bytes_to_process:
                             all_segment_bytes_for_ffmpeg_thread = bytes_to_process
@@ -625,7 +615,7 @@ def audio_stream_socket(ws, session_id: str):
                         elif global_header_for_thread and not bytes_to_process:
                              logger.warning(f"Session {session_id}: Global header exists but no current fragments to process. Skipping empty segment.")
                              continue
-                        else: # No global header and no current fragments
+                        else: 
                             logger.warning(f"Session {session_id}: No global header and no current fragments to process. Skipping.")
                             continue
                         
@@ -633,13 +623,11 @@ def audio_stream_socket(ws, session_id: str):
                             logger.warning(f"Session {session_id}: Combined bytes for FFmpeg is empty. Skipping.")
                             continue
 
-                        # Prepare paths and other args for the thread
                         temp_processing_dir_thread = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
                         os.makedirs(temp_processing_dir_thread, exist_ok=True)
                         segment_uuid_thread = uuid.uuid4().hex
                         final_output_wav_path_thread = os.path.join(temp_processing_dir_thread, f"final_audio_{segment_uuid_thread}.wav")
 
-                        # Define the target function for the thread
                         def process_segment_in_thread(
                             s_id, s_data_ref, lock_ref,
                             audio_bytes, wav_path, current_offset
@@ -652,7 +640,7 @@ def audio_stream_socket(ws, session_id: str):
 
                                 if process.returncode != 0:
                                     logger.error(f"Thread Session {s_id}: ffmpeg failed. RC: {process.returncode}, Err: {stderr_ffmpeg.decode('utf-8','ignore')}")
-                                    return # Exit thread on ffmpeg failure
+                                    return 
                                 logger.info(f"Thread Session {s_id}: Successfully converted to {wav_path}")
 
                                 ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', wav_path]
@@ -663,24 +651,17 @@ def audio_stream_socket(ws, session_id: str):
                                     logger.info(f"Thread Session {s_id}: Actual duration of WAV {wav_path} is {actual_segment_dur:.2f}s")
                                 except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
                                     logger.error(f"Thread Session {s_id}: ffprobe failed for {wav_path}: {ffprobe_err}. Estimating.")
-                                    estimated_dur = len(audio_bytes) / (16000 * 2 * 0.2) # Very rough
+                                    estimated_dur = len(audio_bytes) / (16000 * 2 * 0.2) 
                                     actual_segment_dur = estimated_dur
                                     logger.warning(f"Thread Session {s_id}: Using rough estimated duration: {actual_segment_dur:.2f}s")
                                 
-                                # Update session_data with actual duration under lock
                                 with lock_ref:
-                                    if s_id in active_sessions: # Check if session still exists
+                                    if s_id in active_sessions: 
                                         active_sessions[s_id]['actual_segment_duration_seconds'] = actual_segment_dur
                                     else:
                                         logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration. Transcription might use old offset.")
-                                        # If session_data is gone, we can't reliably pass it to transcription_service
-                                        # However, process_audio_segment_and_update_s3 uses its own copy (s_data_ref).
-                                        # Let's ensure s_data_ref is updated for the call to transcription service.
                                         s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
 
-
-                                # Call transcription service
-                                # The lock for s3_lock in process_audio_segment_and_update_s3 is the same session_locks[s_id]
                                 success_transcribe = process_audio_segment_and_update_s3(wav_path, s_data_ref, lock_ref)
                                 if not success_transcribe:
                                      logger.error(f"Thread Session {s_id}: Transcription or S3 update failed for segment {wav_path}")
@@ -688,19 +669,17 @@ def audio_stream_socket(ws, session_id: str):
                             except Exception as thread_e:
                                 logger.error(f"Thread Session {s_id}: Error during threaded segment processing: {thread_e}", exc_info=True)
                             finally:
-                                # WAV file is cleaned by transcription_service
                                 pass
                         
-                        # Create and start the thread
                         processing_thread = threading.Thread(
                             target=process_segment_in_thread,
                             args=(
                                 session_id,
-                                session_data, # Pass the reference to the session's data dict
-                                session_locks[session_id], # Pass the specific lock for this session
+                                session_data, 
+                                session_locks[session_id], 
                                 all_segment_bytes_for_ffmpeg_thread,
                                 final_output_wav_path_thread,
-                                session_data['current_total_audio_duration_processed_seconds'] # Pass current offset
+                                session_data['current_total_audio_duration_processed_seconds'] 
                             )
                         )
                         processing_thread.start()
@@ -708,7 +687,7 @@ def audio_stream_socket(ws, session_id: str):
             
             if session_id not in active_sessions:
                 logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
-                if ws.fileno() != -1: # Check if socket is still valid before closing
+                if ws.fileno() != -1: 
                     try: ws.close(1000, "Session stopped externally")
                     except Exception as e_close: logger.error(f"Error closing WebSocket for externally stopped session {session_id}: {e_close}")
                 break
@@ -719,20 +698,12 @@ def audio_stream_socket(ws, session_id: str):
         logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
     finally:
         logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected.")
-        # If this WebSocket was the active one for the session, mark it as None in session_data
         if session_id in active_sessions and active_sessions[session_id].get("websocket_connection") == ws:
-            with session_locks[session_id]: # Protect session_data modification
-                 if session_id in active_sessions: # Re-check as it might be cleaned up by another thread
+            with session_locks[session_id]: 
+                 if session_id in active_sessions: 
                     active_sessions[session_id]["websocket_connection"] = None
                     logger.info(f"WebSocket for session {session_id} (user {user.id}) deregistered in finally block.")
         
-        # If session is still marked as active (e.g. client closed WS without sending stop_stream)
-        # and no other WebSocket is attached, and this was the one, it's likely an unexpected termination.
-        # The idle cleanup or an explicit /stop call should handle full finalization.
-        # Forcing finalize here might be too aggressive if client intends to reconnect to the same session_id (not current design).
-        # If the session is still 'is_active' and this WS was the one, it means data might stop flowing.
-        # The idle_session_cleanup will eventually get it.
-        # Or, if 'stop_stream' was received, _finalize_session would have been called already.
 
 @app.route('/api/recording/status', methods=['GET'])
 def get_recording_status_route():
@@ -870,8 +841,8 @@ def view_s3_document(user: SupabaseUser):
     s3_key = request.args.get('s3Key')
     if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
     try:
-        # from utils.s3_utils import read_file_content as s3_read_content # Already imported
-        content = read_file_content(s3_key, f"S3 file for viewing ({s3_key})")
+        from utils.s3_utils import read_file_content as s3_read_content 
+        content = s3_read_content(s3_key, f"S3 file for viewing ({s3_key})")
         if content is None: return jsonify({"error": "File not found or could not be read"}), 404
         return jsonify({"content": content}), 200
     except Exception as e: logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error viewing S3 object"}), 500
@@ -894,64 +865,6 @@ def download_s3_document(user: SupabaseUser):
         )
     except s3.exceptions.NoSuchKey: logger.warning(f"S3 Download: File not found at key: {s3_key}"); return jsonify({"error": "File not found"}), 404
     except Exception as e: logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error downloading S3 object"}), 500
-
-# This Flask route will now serve as an internal endpoint called by the Next.js proxy
-@app.route('/internal_api/canvas_insights', methods=['GET']) 
-@supabase_auth_required(agent_required=True) # Auth is still good practice for internal APIs
-def get_internal_canvas_insights(user: SupabaseUser):
-    # Agent name is already verified by the decorator if it's passed in query/body.
-    # The Next.js proxy will pass these as query parameters.
-    agent_name = request.args.get('agent')
-    event_id = request.args.get('event_id')
-    time_window_label = request.args.get('time_window_label', 'Whole Meeting')
-
-    logger.info(f"[Flask Internal API /internal_api/canvas_insights] Request for Agent: {agent_name}, Event: {event_id}, Window: {time_window_label} by User: {user.id}")
-
-    if not agent_name: # Should be caught by decorator if agent_required=True, but double check
-        return jsonify({"error": "Missing 'agent' query parameter for internal canvas insights"}), 400
-    
-    transcript_content = ""
-    
-    if time_window_label.lower() == "whole meeting":
-        transcript_content = read_all_transcripts_in_folder(agent_name, event_id or '0000') or ""
-        if not transcript_content:
-            logger.warning(f"[Flask Canvas] No transcript content for 'Whole Meeting' for {agent_name}/{event_id or '0000'}")
-    else:
-        latest_transcript_key = get_latest_transcript_file(agent_name, event_id or '0000')
-        if latest_transcript_key:
-            # TODO: Implement precise transcript slicing based on time_window_label (e.g., "Last 5min")
-            # For now, using full content of the latest file for any non-"Whole Meeting" window.
-            # This means the canvas_analyzer will get more data than strictly needed for smaller windows.
-            transcript_content = read_file_content(latest_transcript_key, f"latest transcript for canvas ({latest_transcript_key}) for window '{time_window_label}'") or ""
-            if not transcript_content:
-                 logger.warning(f"[Flask Canvas] Latest transcript file {latest_transcript_key} was empty for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
-        else:
-            logger.warning(f"[Flask Canvas] No latest transcript file found for {agent_name}/{event_id or '0000'} with window '{time_window_label}'.")
-    
-    static_docs_parts = []
-    frameworks_content = get_latest_frameworks(agent_name)
-    if frameworks_content:
-        static_docs_parts.append("## Frameworks Base\n" + frameworks_content)
-    
-    org_context_content = get_latest_context(agent_name, event_id)
-    if org_context_content:
-        static_docs_parts.append("## Organizational/Event Context\n" + org_context_content)
-    
-    combined_static_docs = "\n\n".join(static_docs_parts) if static_docs_parts else "No static documents available."
-
-    try:
-        insights = analyze_transcript_for_canvas(
-            transcript_segment=transcript_content,
-            static_docs_content=combined_static_docs,
-            time_window_label=time_window_label,
-            agent_name=agent_name,
-            event_id=event_id
-        )
-        return jsonify(insights), 200
-    except Exception as e:
-        logger.error(f"[Flask Canvas] Error calling canvas_analyzer: {e}", exc_info=True)
-        return jsonify({"error": "Failed to generate canvas insights internally"}), 500
-
 
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
@@ -1000,61 +913,6 @@ def handle_chat(user: SupabaseUser):
         elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
         else: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block
-
-        # Append Canvas Context if provided by frontend
-        canvas_time_window_label = data.get('current_canvas_time_window_label')
-        active_canvas_insights_json = data.get('active_canvas_insights')
-        pinned_canvas_insights_json = data.get('pinned_canvas_insights')
-
-        appended_canvas_context = ""
-        if canvas_time_window_label or active_canvas_insights_json or pinned_canvas_insights_json:
-            context_parts = [f"[Canvas Context for Time Window: '{canvas_time_window_label or 'N/A'}"]
-            
-            if active_canvas_insights_json:
-                try:
-                    active_insights = json.loads(active_canvas_insights_json)
-                    if active_insights and (active_insights.get("mirror") or active_insights.get("lens") or active_insights.get("portal")): # Check if not empty structure
-                        context_parts.append("Active Highlights (unpinned):")
-                        for insight_cat, items in active_insights.items(): # Assuming structure like {"mirror": [...]}
-                            if items and isinstance(items, list):
-                                context_parts.append(f"  {insight_cat.capitalize()}:")
-                                for item in items:
-                                    if isinstance(item, dict):
-                                        context_parts.append(f"    - {item.get('highlight', 'N/A')} (Explanation: {item.get('explanation', 'N/A')})")
-                    else:
-                         context_parts.append("Active Highlights (unpinned): None")
-                except json.JSONDecodeError:
-                    logger.warning("Failed to parse active_canvas_insights JSON from frontend.")
-                    context_parts.append("Active Highlights (unpinned): Error parsing data.")
-            else:
-                context_parts.append("Active Highlights (unpinned): Not provided.")
-
-            if pinned_canvas_insights_json:
-                try:
-                    pinned_insights = json.loads(pinned_canvas_insights_json)
-                    if pinned_insights and isinstance(pinned_insights, list) and len(pinned_insights) > 0: 
-                        context_parts.append("Pinned Highlights (always relevant):")
-                        for item in pinned_insights:
-                             if isinstance(item, dict):
-                                 context_parts.append(f"  - {item.get('highlight', 'N/A')} (Explanation: {item.get('explanation', 'N/A')})")
-                    else:
-                         context_parts.append("Pinned Highlights (always relevant): None")
-                except json.JSONDecodeError:
-                    logger.warning("Failed to parse pinned_canvas_insights JSON from frontend.")
-                    context_parts.append("Pinned Highlights (always relevant): Error parsing data.")
-            else:
-                context_parts.append("Pinned Highlights (always relevant): Not provided.")
-            
-            context_parts.append("Use this to understand current focus. Do not respond to this block directly unless asked about the canvas.]")
-            appended_canvas_context = "\n" + "\n".join(context_parts)
-            logger.info(f"Appending canvas context to user message (length: {len(appended_canvas_context)} chars).")
-
-            # Append to the last user message in llm_messages
-            if llm_messages and llm_messages[-1]['role'] == 'user':
-                llm_messages[-1]['content'] += appended_canvas_context
-            else:
-                # This case should ideally not happen if there's always a user message
-                llm_messages.append({'role': 'user', 'content': appended_canvas_context})
         
         transcript_content_to_add = ""; state_key = (agent_name, event_id)
         with transcript_state_lock:
@@ -1113,7 +971,7 @@ def cleanup_idle_sessions():
         now = time.time()
         sessions_to_cleanup = []
         for session_id, session_data in list(active_sessions.items()): # Iterate over a copy
-            if not session_data.get("is_active", False): 
+            if not session_data.get("is_active", False) and not session_data.get("is_finalizing", False): # Also check is_finalizing
                  if now - session_data.get("last_activity_timestamp", 0) > (15 * 60): 
                       logger.warning(f"Found stale inactive session {session_id}. Adding to cleanup queue.")
                       sessions_to_cleanup.append(session_id)
@@ -1144,14 +1002,7 @@ if __name__ == '__main__':
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
     use_reloader_env = os.getenv('FLASK_USE_RELOADER', 'False').lower() == 'true'
     
-    # For Gunicorn, it handles workers. For local `python api_server.py`, Flask's reloader is used if debug_mode.
-    # However, with background threads, reloader can cause issues (e.g. duplicate threads).
-    # It's often better to explicitly control reloader for stability during development with threads.
-    # If GUNICORN_CMD env var is set (like in Render's Dockerfile), Gunicorn is managing the app.
     if not os.getenv("GUNICORN_CMD"): 
-        # When running directly with `python api_server.py`:
-        # If debug_mode is True, Flask's default is use_reloader=True.
-        # We set use_reloader based on FLASK_USE_RELOADER or keep it False if not specified to avoid thread issues.
         effective_reloader = use_reloader_env if debug_mode else False
         logger.info(f"Running with Flask dev server. Debug: {debug_mode}, Reloader: {effective_reloader}")
         app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=effective_reloader)
