@@ -129,45 +129,38 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
 
         combined_content_parts = []
         actual_latest_file_key_from_all: Optional[str] = None
-        actual_latest_mod_time: Optional[datetime] = None # Ensure it's timezone-aware if comparing
+        actual_latest_mod_time: Optional[datetime] = None 
 
         for s3_obj in all_transcript_objects_metadata:
             key = s3_obj['Key']
-            s3_size = s3_obj['ContentLength']
-            s3_mod_time_utc = s3_obj['LastModified'] # S3 LastModified is already timezone-aware (UTC)
+            # Use .get('Size', 0) for objects from list_objects_v2
+            s3_size = s3_obj.get('Size', 0) 
+            s3_mod_time_utc = s3_obj['LastModified'] 
 
             try:
                 logger.debug(f"Initial load: Reading full content of {key} (Size: {s3_size}, Modified: {s3_mod_time_utc})")
                 response = s3.get_object(Bucket=aws_s3_bucket, Key=key)
                 file_content_bytes = response['Body'].read()
-                file_content_str = file_content_bytes.decode('utf-8', errors='replace') # Use replace for robustness
+                file_content_str = file_content_bytes.decode('utf-8', errors='replace') 
                 
                 filename = os.path.basename(key)
                 labeled_content = f"(Source File: {filename})\n{file_content_str}"
                 combined_content_parts.append(labeled_content)
 
-                # Update state for this specific file
                 state.file_positions[key] = s3_size
                 state.last_modified[key] = s3_mod_time_utc
 
-                # Track the truly latest file among those processed in this initial batch
                 if actual_latest_mod_time is None or s3_mod_time_utc > actual_latest_mod_time:
                     actual_latest_mod_time = s3_mod_time_utc
                     actual_latest_file_key_from_all = key
                 
             except Exception as e:
                 logger.error(f"Initial load: Error reading or processing file {key}: {e}", exc_info=True)
-                # Optionally, decide if one failed read should abort the whole initial load.
-                # For now, log and continue to give as much context as possible.
-                # If critical, could `return None` here.
 
-        state.current_latest_key = actual_latest_file_key_from_all # Set after processing all
+        state.current_latest_key = actual_latest_file_key_from_all 
         
         if not combined_content_parts:
             logger.info(f"Initial load: No content aggregated from files for agent '{agent_name}', event '{event_id}'.")
-            # This path might be hit if all files read were empty or errored out.
-            # state.current_latest_key might be None or set from the loop. If set, it's fine.
-            # If None, the next delta check will re-evaluate.
             return None
         
         final_content = "\n\n".join(combined_content_parts)
@@ -175,7 +168,6 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
         return final_content
 
     # --- Delta Load Logic ---
-    # This part executes if `state.file_positions` was not empty or `state.current_latest_key` was not None (i.e., not a fresh state).
     latest_key_on_s3 = get_latest_transcript_file(agent_name, event_id, s3)
     
     if not latest_key_on_s3:
@@ -185,7 +177,7 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
     try:
         s3_metadata = s3.head_object(Bucket=aws_s3_bucket, Key=latest_key_on_s3)
         current_s3_size = s3_metadata['ContentLength']
-        current_s3_modified = s3_metadata['LastModified'] # Already timezone-aware
+        current_s3_modified = s3_metadata['LastModified'] 
 
         last_known_pos_for_this_file = state.file_positions.get(latest_key_on_s3, 0)
         last_known_mod_for_this_file = state.last_modified.get(latest_key_on_s3)
@@ -219,7 +211,7 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
                                f"Assuming potential replacement/overwrite, reading from start.")
                 start_read_pos = 0
                 read_this_file = True
-            else: # Should not be reached if file_has_new_data is true based on current logic
+            else: 
                 logger.debug(f"Delta: File {latest_key_on_s3} met 'file_has_new_data' but no specific read condition. No read needed.")
                 read_this_file = False
         else:
@@ -227,12 +219,10 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
             read_this_file = False
 
         if not read_this_file:
-            # Update mod time for the current latest key if it was checked and no read was needed
             if latest_key_on_s3 == state.current_latest_key:
                 state.last_modified[latest_key_on_s3] = current_s3_modified
             return None
 
-        # Pre-read check: ensure start_read_pos is not beyond the current file size
         if start_read_pos >= current_s3_size and current_s3_size > 0:
              logger.warning(f"Delta: Calculated start_read_pos ({start_read_pos}) is >= S3 size ({current_s3_size}) for {latest_key_on_s3}. Skipping read.")
              state.file_positions[latest_key_on_s3] = current_s3_size 
@@ -241,7 +231,7 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
              return None
         
         new_content_str = ""; bytes_read = 0
-        if current_s3_size > start_read_pos: # Only read if there are potential new bytes
+        if current_s3_size > start_read_pos: 
             read_range = f"bytes={start_read_pos}-"
             try:
                 logger.debug(f"Delta: S3 GET Key={latest_key_on_s3}, Range={read_range}")
@@ -253,38 +243,34 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
                     logger.info(f"Delta: Read {bytes_read} bytes, decoded {len(new_content_str)} chars from {latest_key_on_s3}.")
                 else:
                     logger.info(f"Delta: Read 0 new bytes from {latest_key_on_s3} (Range: {read_range}). Current S3 size {current_s3_size}, start_read_pos {start_read_pos}.")
-            except s3.exceptions.InvalidRange: # Check specific exception for S3
+            except s3.exceptions.InvalidRange: 
                 logger.warning(f"Delta: S3 InvalidRange for {latest_key_on_s3} at {start_read_pos} (S3 size {current_s3_size}). Resetting pos for this file.")
                 state.file_positions[latest_key_on_s3] = 0 
                 state.last_modified[latest_key_on_s3] = current_s3_modified
-                # current_latest_key should be updated if this was a new file
                 if is_different_file_than_tracked_latest: state.current_latest_key = latest_key_on_s3
-                return None # No content this time
+                return None 
             except Exception as get_e:
                 logger.error(f"Delta: Error reading {latest_key_on_s3} (range {read_range}): {get_e}", exc_info=True)
-                return None # Error during read
+                return None 
         elif current_s3_size == 0 and start_read_pos == 0:
              logger.info(f"Delta: File {latest_key_on_s3} is empty. No content to read.")
-        else: # start_read_pos >= current_s3_size (and not the specific warning case above)
+        else: 
             logger.debug(f"Delta: No new bytes to read from {latest_key_on_s3} as S3_size ({current_s3_size}) <= start_pos ({start_read_pos}).")
 
-        # Update state for the file that was processed (latest_key_on_s3)
         state.file_positions[latest_key_on_s3] = start_read_pos + bytes_read
         state.last_modified[latest_key_on_s3] = current_s3_modified
-        state.current_latest_key = latest_key_on_s3 # Ensure this points to the file we just processed
+        state.current_latest_key = latest_key_on_s3 
 
         logger.info(f"Delta: State for {latest_key_on_s3} updated. NewPos={state.file_positions[latest_key_on_s3]}, Mod={state.last_modified[latest_key_on_s3]}. CurrentLatestKey is now {state.current_latest_key}.")
 
         if new_content_str:
             filename = os.path.basename(latest_key_on_s3)
-            # For deltas, consider if the label is always needed or only if it's a new file.
-            # For now, always label for clarity, especially if the latest file changes.
             labeled_content = f"(Source File: {filename})\n{new_content_str}"
             return labeled_content
         else:
-            return None # No new content decoded
+            return None 
 
-    except Exception as e: # Catch-all for the delta path
+    except Exception as e: 
         logger.error(f"Delta: Unhandled error for {latest_key_on_s3 if latest_key_on_s3 else 'N/A'}: {e}", exc_info=True)
         return None
 

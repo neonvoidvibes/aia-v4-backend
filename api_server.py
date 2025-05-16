@@ -862,7 +862,7 @@ def handle_chat(user: SupabaseUser):
             logger.debug("Loaded prompts/context/docs from S3.")
         except Exception as e: logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True); base_system_prompt = "Error: Could not load config."; frameworks = event_context = agent_docs = None
         source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes like `[^1]`. \n2. Place footnote directly after sentence/paragraph. \n3. List all cited sources at end under `### Sources` as `[^1]: source_file_name.ext`."
-        realtime_instr = "\n\nIMPORTANT: Prioritize [Meeting Transcript Update (from S3)] content for 'current' or 'latest' state queries." # Updated Label
+        realtime_instr = "\n\nIMPORTANT: Prioritize [Meeting Transcript Update (from S3)] content for 'current' or 'latest' state queries." 
         final_system_prompt = base_system_prompt + source_instr + realtime_instr
         if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
         if event_context: final_system_prompt += "\n\n## Context\n" + event_context
