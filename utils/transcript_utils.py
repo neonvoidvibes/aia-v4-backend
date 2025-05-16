@@ -1,3 +1,4 @@
+# utils/transcript_utils.py
 import logging
 import boto3
 import os
@@ -89,6 +90,7 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
         return None, False
 
     # --- Initial Full Load Logic ---
+    # Trigger initial load if file_positions is empty AND current_latest_key is None (truly fresh state)
     if not state.file_positions and state.current_latest_key is None:
         logger.info(f"Performing initial full transcript load for agent '{agent_name}', event '{event_id}'...")
         

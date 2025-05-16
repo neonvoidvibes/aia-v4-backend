@@ -1,3 +1,4 @@
+# api_server.py
 import os
 import sys
 import logging
@@ -852,26 +853,43 @@ def handle_chat(user: SupabaseUser):
         event_id = data.get('event', '0000')
         chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) 
         logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id} by User: {user.id}")
+        
         incoming_messages = data['messages']
-        llm_messages = [{"role": msg["role"], "content": msg["content"]} for msg in incoming_messages if msg.get("role") in ["user", "assistant"]]
+        # Filter out any prior system messages from the history, as we'll build our own.
+        # Keep user and assistant messages for the LLM context.
+        llm_messages = [{"role": msg["role"], "content": msg["content"]} 
+                        for msg in incoming_messages 
+                        if msg.get("role") in ["user", "assistant"]]
+        
         if not llm_messages: return jsonify({"error": "No valid user/assistant messages"}), 400
+
+        # Construct the system prompt first
         try:
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
-            frameworks = get_latest_frameworks(agent_name); event_context = get_latest_context(agent_name, event_id); agent_docs = get_agent_docs(agent_name)
+            frameworks = get_latest_frameworks(agent_name); 
+            event_context = get_latest_context(agent_name, event_id); 
+            agent_docs = get_agent_docs(agent_name)
             logger.debug("Loaded prompts/context/docs from S3.")
-        except Exception as e: logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True); base_system_prompt = "Error: Could not load config."; frameworks = event_context = agent_docs = None
+        except Exception as e: 
+            logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True); 
+            base_system_prompt = "Error: Could not load config."; frameworks = event_context = agent_docs = None
+        
         source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes like `[^1]`. \n2. Place footnote directly after sentence/paragraph. \n3. List all cited sources at end under `### Sources` as `[^1]: source_file_name.ext`."
-        realtime_instr = "\n\nIMPORTANT: Prioritize [Meeting Transcript Update (from S3)] content for 'current' or 'latest' state queries." 
+        realtime_instr = "\n\nIMPORTANT: Prioritize [Meeting Transcript Update (from S3)] content for 'current' or 'latest' state queries. Also use the [FULL MEETING TRANSCRIPT (Initial Load)] if provided in the first user message for complete context." 
+        
         final_system_prompt = base_system_prompt + source_instr + realtime_instr
         if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
         if event_context: final_system_prompt += "\n\n## Context\n" + event_context
         if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
+        
         rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n3. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n4. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n5. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
         final_system_prompt += rag_usage_instructions
+        
         rag_context_block = ""; last_user_message_content = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
         normalized_query = "";
         if last_user_message_content: normalized_query = last_user_message_content.strip().lower().rstrip('.!?')
         is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
+        
         if not is_simple_query and last_user_message_content:
             logger.info(f"Complex query ('{normalized_query[:50]}...'), RAG.")
             try: 
@@ -899,26 +917,40 @@ def handle_chat(user: SupabaseUser):
             
             if new_transcript_data:
                 if was_initial_load:
-                    logger.info(f"Initial full transcript load (length {len(new_transcript_data)}) being added to SYSTEM prompt.")
-                    final_system_prompt += f"\n\n=== FULL MEETING TRANSCRIPT (Initial Load) ===\n{new_transcript_data}\n=== END FULL MEETING TRANSCRIPT ==="
+                    # Prepend the full transcript as the first "user" message.
+                    # This makes it part of the conversational context for the LLM.
+                    initial_transcript_message_content = (
+                        f"Here is the full transcript of the meeting up to this point. "
+                        f"Please use this as the primary context for our conversation.\n\n"
+                        f"=== FULL MEETING TRANSCRIPT (Initial Load) ===\n"
+                        f"{new_transcript_data}\n"
+                        f"=== END FULL MEETING TRANSCRIPT ==="
+                    )
+                    llm_messages.insert(0, {'role': 'user', 'content': initial_transcript_message_content})
+                    logger.info(f"Prepended initial full transcript (length {len(new_transcript_data)}) as first user message context.")
                 else: # Delta update
                     label = "[Meeting Transcript Update (from S3)]" 
                     transcript_content_to_add = f"{label}\n{new_transcript_data}"
                     # Determine insert_index: before the last user message or at the end if no user message.
                     insert_index = len(llm_messages)
-                    if llm_messages and llm_messages[-1]['role'] == 'user':
-                        insert_index = len(llm_messages) -1 
+                    # Iterate backwards to find the last actual user message to insert before it
+                    for i in range(len(llm_messages) - 1, -1, -1):
+                        if llm_messages[i]['role'] == 'user':
+                            # Check if this user message is NOT the initial transcript load message
+                            if not llm_messages[i]['content'].startswith("Here is the full transcript"):
+                                insert_index = i
+                                break
                     
                     llm_messages.insert(insert_index, {'role': 'user', 'content': transcript_content_to_add})
                     logger.info(f"Added transcript DELTA (length {len(new_transcript_data)}) to LLM messages at index {insert_index}.")
-            else:
+            else: # No new_transcript_data
                 if was_initial_load:
                     logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data (or only marker set).")
                 else:
                     logger.info(f"No new transcript delta to add for {agent_name}/{event_id}.")
 
         except Exception as e: 
-            logger.error(f"Error reading transcript updates from S3: {e}", exc_info=True)
+            logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
 
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
         final_system_prompt += f"\nCurrent Time Context: {time_str}"
