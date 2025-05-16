@@ -234,13 +234,18 @@ def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
     logger.info(f"Model: {model}, MaxTokens: {max_tokens}")
     logger.info(f"System Prompt Length: {len(system)}")
     if logger.isEnabledFor(logging.DEBUG): # Only log full system prompt in debug
-        logger.debug(f"System Prompt (snippet): {system[:500]}...")
+        logger.debug(f"System Prompt (first 500 chars): {system[:500]}...")
+        logger.debug(f"System Prompt (last 500 chars): ...{system[-500:]}")
     
     logger.info(f"Number of Messages for API: {len(messages)}")
     for i, msg in enumerate(messages):
         role = msg.get("role")
         content_len = len(msg.get("content", ""))
-        content_snippet = msg.get("content", "")[:150] # Log first 150 chars of content
+        # Log more for the potentially large initial transcript message
+        if msg.get("content", "").startswith("IMPORTANT CONTEXT: The following is the full meeting transcript"):
+            content_snippet = msg.get("content", "")[:300] + " ... [TRUNCATED INITIAL TRANSCRIPT] ... " + msg.get("content", "")[-300:]
+        else:
+            content_snippet = msg.get("content", "")[:150] # Shorter snippet for other messages
         logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
     logger.info("="*15 + " END ANTHROPIC API CALL " + "="*15)
     
@@ -869,21 +874,31 @@ def handle_chat(user: SupabaseUser):
         logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id} by User: {user.id}")
         
         incoming_messages = data['messages']
-        llm_messages = [{"role": msg["role"], "content": msg["content"]} 
-                        for msg in incoming_messages 
-                        if msg.get("role") in ["user", "assistant"]]
+        llm_messages_from_client = [{"role": msg["role"], "content": msg["content"]} 
+                                    for msg in incoming_messages 
+                                    if msg.get("role") in ["user", "assistant"]]
         
-        if not llm_messages: return jsonify({"error": "No valid user/assistant messages"}), 400
+        if not llm_messages_from_client: 
+            logger.warning("Received chat request with no user/assistant messages from client.")
+            # This case should ideally be handled by frontend, but as a fallback:
+            # If this is truly the first interaction and only a system message would be formed,
+            # an error or a default greeting might be appropriate.
+            # For now, we proceed, assuming system prompt + transcript might be enough for a first turn.
+            # If not, Anthropic will likely error on empty messages list if final_llm_messages is empty.
 
+        # Initialize final_llm_messages list for this request
+        final_llm_messages: List[Dict[str, str]] = []
+
+        # --- System Prompt Construction ---
         try:
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
             frameworks = get_latest_frameworks(agent_name); 
             event_context = get_latest_context(agent_name, event_id); 
             agent_docs = get_agent_docs(agent_name)
-            logger.debug("Loaded prompts/context/docs from S3.")
+            logger.debug("Loaded base system prompt, frameworks, context, docs from S3.")
         except Exception as e: 
             logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True); 
-            base_system_prompt = "Error: Could not load config."; frameworks = event_context = agent_docs = None
+            base_system_prompt = "Error: Could not load system configuration."; frameworks = event_context = agent_docs = None
         
         source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes like `[^1]`. \n2. Place footnote directly after sentence/paragraph. \n3. List all cited sources at end under `### Sources` as `[^1]: source_file_name.ext`."
         
@@ -904,26 +919,31 @@ def handle_chat(user: SupabaseUser):
         rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n3. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n4. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n5. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
         final_system_prompt += rag_usage_instructions
         
-        rag_context_block = ""; last_user_message_content = next((msg['content'] for msg in reversed(llm_messages) if msg['role'] == 'user'), None)
-        normalized_query = "";
-        if last_user_message_content: normalized_query = last_user_message_content.strip().lower().rstrip('.!?')
-        is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
-        
-        if not is_simple_query and last_user_message_content:
-            logger.info(f"Complex query ('{normalized_query[:50]}...'), RAG.")
-            try: 
-                retriever = RetrievalHandler(index_name=agent_name, agent_name=agent_name, session_id=chat_session_id_log, event_id=event_id, anthropic_client=anthropic_client)
-                retrieved_docs = retriever.get_relevant_context(query=last_user_message_content, top_k=5)
-                if retrieved_docs:
-                    items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
-                    rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
-                else: rag_context_block = "\n\n[Note: No relevant documents found for this query.]"
-            except RuntimeError as e: logger.warning(f"RAG skipped: {e}"); rag_context_block = f"\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval failed for index '{agent_name}']\n=== END RETRIEVED CONTEXT ==="
-            except Exception as e: logger.error(f"Unexpected RAG error: {e}", exc_info=True); rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents]\n=== END RETRIEVED CONTEXT ==="
-        elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
-        else: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable.]\n=== END RETRIEVED CONTEXT ==="
+        # --- RAG Context (if applicable) ---
+        rag_context_block = ""; 
+        # Use the last message from llm_messages_from_client for RAG query, if it exists and is from user
+        last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
+
+        if last_actual_user_message_for_rag:
+            normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
+            is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
+            if not is_simple_query:
+                logger.info(f"Complex query ('{normalized_query[:50]}...'), attempting RAG.")
+                try: 
+                    retriever = RetrievalHandler(index_name=agent_name, agent_name=agent_name, session_id=chat_session_id_log, event_id=event_id, anthropic_client=anthropic_client)
+                    retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=5)
+                    if retrieved_docs:
+                        items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
+                        rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
+                    else: rag_context_block = "\n\n[Note: No relevant documents found for this query via RAG.]"
+                except RuntimeError as e: logger.warning(f"RAG skipped: {e}"); rag_context_block = f"\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval failed for index '{agent_name}']\n=== END RETRIEVED CONTEXT ==="
+                except Exception as e: logger.error(f"Unexpected RAG error: {e}", exc_info=True); rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
+            elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
+        else: # No last actual user message, e.g. first turn after initial transcript load
+            rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable for this turn.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block 
         
+        # --- Transcript Handling ---
         state_key = (agent_name, event_id)
         with transcript_state_lock:
             if state_key not in transcript_state_cache: 
@@ -932,42 +952,63 @@ def handle_chat(user: SupabaseUser):
             current_transcript_state = transcript_state_cache[state_key]
         
         try:
-            new_transcript_data, was_initial_load = read_new_transcript_content(current_transcript_state, agent_name, event_id)
+            # `read_new_transcript_content` returns (content, was_initial_load_attempt)
+            # If was_initial_load_attempt is True and content is not None, it's the full initial transcript.
+            # If was_initial_load_attempt is False and content is not None, it's a delta.
+            transcript_data_from_s3, was_initial_load_attempt = read_new_transcript_content(
+                current_transcript_state, agent_name, event_id
+            )
             
-            if new_transcript_data:
-                if was_initial_load:
-                    initial_transcript_message_content = (
-                        f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
-                        f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
-                        f"=== BEGIN FULL MEETING TRANSCRIPT ===\n"
-                        f"{new_transcript_data}\n"
-                        f"=== END FULL MEETING TRANSCRIPT ==="
-                    )
-                    llm_messages.insert(0, {'role': 'user', 'content': initial_transcript_message_content})
-                    logger.info(f"Prepended initial full transcript (length {len(new_transcript_data)}) as first user message context.")
-                else: 
-                    label = "[Meeting Transcript Update (from S3)]" 
-                    transcript_content_to_add = f"{label}\n{new_transcript_data}"
-                    
-                    insert_index = len(llm_messages) 
-                    for i in range(len(llm_messages) - 1, -1, -1):
-                        msg_content_iter = llm_messages[i]['content']
-                        is_initial_load_msg_iter = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
-                        is_delta_update_msg_iter = msg_content_iter.startswith("[Meeting Transcript Update (from S3)]")
-                        
-                        if llm_messages[i]['role'] == 'user' and not is_initial_load_msg_iter and not is_delta_update_msg_iter:
-                            insert_index = i 
-                            break
-                    if insert_index == len(llm_messages) and llm_messages and llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:"):
-                         insert_index = 1 # Should insert after the initial full transcript if it's the only other message
+            if was_initial_load_attempt and transcript_data_from_s3:
+                # This was an initial load, store it in the state object
+                current_transcript_state.initial_full_transcript_content = transcript_data_from_s3
+                logger.info(f"Stored initial full transcript (length {len(transcript_data_from_s3)}) in state for {agent_name}/{event_id}.")
+            
+            # 1. Prepend stored initial full transcript if it exists in state
+            if current_transcript_state.initial_full_transcript_content and \
+               not current_transcript_state.initial_full_transcript_content.startswith("__LOAD_ATTEMPTED"): # Avoid adding markers
+                initial_transcript_message_content = (
+                    f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
+                    f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
+                    f"=== BEGIN FULL MEETING TRANSCRIPT ===\n"
+                    f"{current_transcript_state.initial_full_transcript_content}\n"
+                    f"=== END FULL MEETING TRANSCRIPT ==="
+                )
+                final_llm_messages.append({'role': 'user', 'content': initial_transcript_message_content})
+                logger.info(f"Prepended stored initial full transcript (length {len(current_transcript_state.initial_full_transcript_content)}) to current API call's messages.")
 
-                    llm_messages.insert(insert_index, {'role': 'user', 'content': transcript_content_to_add})
-                    logger.info(f"Added transcript DELTA (length {len(new_transcript_data)}) to LLM messages at index {insert_index}.")
-            else: 
-                if was_initial_load:
-                    logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data (or only marker set).")
+            # 2. Add the actual conversational turns from the client
+            final_llm_messages.extend(llm_messages_from_client)
+
+            # 3. Handle current delta (if it's not the initial load data itself that was just fetched)
+            if transcript_data_from_s3 and not was_initial_load_attempt: 
+                label = "[Meeting Transcript Update (from S3)]" 
+                transcript_delta_to_add = f"{label}\n{transcript_data_from_s3}"
+                
+                insert_idx_for_delta = len(final_llm_messages) 
+                for i in range(len(final_llm_messages) - 1, -1, -1):
+                    msg_content_iter = final_llm_messages[i]['content']
+                    is_prog_initial_load_msg = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
+                    is_prog_delta_update_msg = msg_content_iter.startswith("[Meeting Transcript Update (from S3)]")
+                    
+                    if final_llm_messages[i]['role'] == 'user' and not is_prog_initial_load_msg and not is_prog_delta_update_msg:
+                        insert_idx_for_delta = i
+                        break
+                
+                # If no actual user message was found (e.g. first turn, final_llm_messages only has initial transcript)
+                # ensure delta is placed after initial transcript.
+                if insert_idx_for_delta == len(final_llm_messages) and final_llm_messages and \
+                   final_llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:"):
+                    insert_idx_for_delta = 1
+
+                final_llm_messages.insert(insert_idx_for_delta, {'role': 'user', 'content': transcript_delta_to_add})
+                logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at effective index {insert_idx_for_delta}.")
+            
+            elif not transcript_data_from_s3:
+                if was_initial_load_attempt:
+                    logger.info(f"Initial transcript load attempt for {agent_name}/{event_id} resulted in no data.")
                 else:
-                    logger.info(f"No new transcript delta to add for {agent_name}/{event_id}.")
+                    logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn.")
 
         except Exception as e: 
             logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
@@ -976,31 +1017,14 @@ def handle_chat(user: SupabaseUser):
         final_system_prompt += f"\nCurrent Time Context: {time_str}" 
         llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-3-5-sonnet-20240620"); llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
         
-        # === START CRITICAL LOGGING BLOCK ===
-        logger.info("="*30 + " FINAL PAYLOAD TO LLM " + "="*30)
-        logger.info(f"System Prompt Length: {len(final_system_prompt)}")
-        # For debugging, log a snippet of the system prompt if it's very long
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Final System Prompt (first 500 chars): {final_system_prompt[:500]}...")
-            logger.debug(f"Final System Prompt (last 500 chars): ...{final_system_prompt[-500:]}")
-
-        logger.info(f"Number of LLM Messages: {len(llm_messages)}")
-        for i, msg in enumerate(llm_messages):
-            role = msg.get("role")
-            content_len = len(msg.get("content", ""))
-            # Log more for the potentially large initial transcript message
-            if msg.get("content", "").startswith("IMPORTANT CONTEXT: The following is the full meeting transcript"):
-                content_snippet = msg.get("content", "")[:300] + " ... [TRUNCATED INITIAL TRANSCRIPT] ... " + msg.get("content", "")[-300:]
-            else:
-                content_snippet = msg.get("content", "")[:200] # Shorter snippet for other messages
-            logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
-        logger.info("="*30 + " END FINAL PAYLOAD TO LLM " + "="*30)
-        # === END CRITICAL LOGGING BLOCK ===
+        if not final_llm_messages: # Should only happen if client sends empty message list AND no initial transcript
+            logger.error("No messages to send to LLM after all processing. Aborting call.")
+            return jsonify({"error": "No content to process for LLM."}), 400
 
         def generate_stream():
             response_content = ""; stream_error = None
             try:
-                with _call_anthropic_stream_with_retry(model=llm_model_name, max_tokens=llm_max_tokens, system=final_system_prompt, messages=llm_messages) as stream:
+                with _call_anthropic_stream_with_retry(model=llm_model_name, max_tokens=llm_max_tokens, system=final_system_prompt, messages=final_llm_messages) as stream:
                     for text in stream.text_stream: response_content += text; sse_data = json.dumps({'delta': text}); yield f"data: {sse_data}\n\n"
             except RetryError as e: stream_error = "Assistant unavailable after retries."
             except APIStatusError as e: stream_error = f"API Error: {e.message}" if hasattr(e, 'message') else str(e);
