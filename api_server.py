@@ -855,15 +855,12 @@ def handle_chat(user: SupabaseUser):
         logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id} by User: {user.id}")
         
         incoming_messages = data['messages']
-        # Filter out any prior system messages from the history, as we'll build our own.
-        # Keep user and assistant messages for the LLM context.
         llm_messages = [{"role": msg["role"], "content": msg["content"]} 
                         for msg in incoming_messages 
                         if msg.get("role") in ["user", "assistant"]]
         
         if not llm_messages: return jsonify({"error": "No valid user/assistant messages"}), 400
 
-        # Construct the system prompt first
         try:
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
             frameworks = get_latest_frameworks(agent_name); 
@@ -875,9 +872,17 @@ def handle_chat(user: SupabaseUser):
             base_system_prompt = "Error: Could not load config."; frameworks = event_context = agent_docs = None
         
         source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes like `[^1]`. \n2. Place footnote directly after sentence/paragraph. \n3. List all cited sources at end under `### Sources` as `[^1]: source_file_name.ext`."
-        realtime_instr = "\n\nIMPORTANT: Prioritize [Meeting Transcript Update (from S3)] content for 'current' or 'latest' state queries. Also use the [FULL MEETING TRANSCRIPT (Initial Load)] if provided in the first user message for complete context." 
         
-        final_system_prompt = base_system_prompt + source_instr + realtime_instr
+        transcript_handling_instructions = (
+            "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
+            "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting.\n"
+            "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These updates are chronological and should be considered the most current information.\n"
+            "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. Do not only refer to the latest delta.\n"
+            "4.  **Source Attribution:** When referencing information from any transcript segment (initial or delta), cite the (Source File: ...) provided within that segment if possible, or generally mention it's from the meeting transcript."
+        )
+        
+        final_system_prompt = base_system_prompt + source_instr + transcript_handling_instructions # Add new transcript instructions
+        
         if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
         if event_context: final_system_prompt += "\n\n## Context\n" + event_context
         if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
@@ -903,7 +908,7 @@ def handle_chat(user: SupabaseUser):
             except Exception as e: logger.error(f"Unexpected RAG error: {e}", exc_info=True); rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents]\n=== END RETRIEVED CONTEXT ==="
         elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
         else: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable.]\n=== END RETRIEVED CONTEXT ==="
-        final_system_prompt += rag_context_block
+        final_system_prompt += rag_context_block # Add RAG context to system prompt
         
         state_key = (agent_name, event_id)
         with transcript_state_lock:
@@ -917,12 +922,10 @@ def handle_chat(user: SupabaseUser):
             
             if new_transcript_data:
                 if was_initial_load:
-                    # Prepend the full transcript as the first "user" message.
-                    # This makes it part of the conversational context for the LLM.
                     initial_transcript_message_content = (
-                        f"Here is the full transcript of the meeting up to this point. "
-                        f"Please use this as the primary context for our conversation.\n\n"
-                        f"=== FULL MEETING TRANSCRIPT (Initial Load) ===\n"
+                        f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
+                        f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
+                        f"=== BEGIN FULL MEETING TRANSCRIPT ===\n"
                         f"{new_transcript_data}\n"
                         f"=== END FULL MEETING TRANSCRIPT ==="
                     )
@@ -931,19 +934,22 @@ def handle_chat(user: SupabaseUser):
                 else: # Delta update
                     label = "[Meeting Transcript Update (from S3)]" 
                     transcript_content_to_add = f"{label}\n{new_transcript_data}"
-                    # Determine insert_index: before the last user message or at the end if no user message.
-                    insert_index = len(llm_messages)
-                    # Iterate backwards to find the last actual user message to insert before it
-                    for i in range(len(llm_messages) - 1, -1, -1):
-                        if llm_messages[i]['role'] == 'user':
-                            # Check if this user message is NOT the initial transcript load message
-                            if not llm_messages[i]['content'].startswith("Here is the full transcript"):
-                                insert_index = i
-                                break
                     
+                    insert_index = len(llm_messages) 
+                    for i in range(len(llm_messages) - 1, -1, -1):
+                        msg_content = llm_messages[i]['content']
+                        is_initial_load_msg = msg_content.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
+                        is_delta_update_msg = msg_content.startswith("[Meeting Transcript Update (from S3)]")
+                        
+                        if llm_messages[i]['role'] == 'user' and not is_initial_load_msg and not is_delta_update_msg:
+                            insert_index = i 
+                            break
+                    if insert_index == len(llm_messages) and llm_messages and llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:"):
+                        insert_index = 1 
+
                     llm_messages.insert(insert_index, {'role': 'user', 'content': transcript_content_to_add})
                     logger.info(f"Added transcript DELTA (length {len(new_transcript_data)}) to LLM messages at index {insert_index}.")
-            else: # No new_transcript_data
+            else: 
                 if was_initial_load:
                     logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data (or only marker set).")
                 else:
@@ -953,7 +959,7 @@ def handle_chat(user: SupabaseUser):
             logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
 
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
-        final_system_prompt += f"\nCurrent Time Context: {time_str}"
+        final_system_prompt += f"\nCurrent Time Context: {time_str}" # Add time context last
         llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-3-5-sonnet-20240620"); llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
         
         def generate_stream():
