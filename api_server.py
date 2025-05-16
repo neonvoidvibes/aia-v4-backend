@@ -1,30 +1,28 @@
+# api_server.py
 import os
 import sys
 import logging
 from flask import Flask, jsonify, request, Response, stream_with_context
 from dotenv import load_dotenv
-import threading # Keep for general threading, RLock is now used specifically
+import threading 
 import time
 import json
 from datetime import datetime, timezone, timedelta
 import urllib.parse 
-from functools import wraps # For decorator
+from functools import wraps 
 from typing import Optional, List, Dict, Any, Tuple, Union 
 import uuid 
 from collections import defaultdict
-import subprocess # For ffmpeg
+import subprocess 
 
-# WebSocket library
 from flask_sock import Sock 
 
-# Supabase Imports
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError
-from gotrue.types import User as SupabaseUser # Import the User type for type hinting
+from gotrue.types import User as SupabaseUser 
 
-# Import necessary modules from our project
 from utils.retrieval_handler import RetrievalHandler
-from utils.transcript_utils import TranscriptState, read_new_transcript_content
+from utils.transcript_utils import TranscriptState, read_new_transcript_content 
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
@@ -36,7 +34,6 @@ from anthropic import Anthropic, APIStatusError, AnthropicError
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
 
-# Import the new transcription service
 from transcription_service import process_audio_segment_and_update_s3
 
 load_dotenv()
@@ -131,8 +128,7 @@ retry_strategy = retry(stop=stop_after_attempt(3), wait=wait_exponential(multipl
 active_sessions: Dict[str, Dict[str, Any]] = {}
 session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock) 
 
-def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: # Return type changed to SupabaseUser
-    """Verifies the JWT and returns the Supabase User object or None."""
+def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: 
     if not supabase:
         logger.error("Auth check failed: Supabase client not initialized.")
         return None
@@ -143,7 +139,6 @@ def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: # Return type c
 
     try:
         user_resp = supabase.auth.get_user(token)
-        # The user object is directly on user_resp.user
         if user_resp and user_resp.user:
             logger.debug(f"Token verified for user ID: {user_resp.user.id}")
             return user_resp.user 
@@ -157,8 +152,7 @@ def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: # Return type c
         logger.error(f"Unexpected error during token verification: {e}", exc_info=True)
         return None
 
-def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]: # User object type changed
-    """Verifies JWT, checks user access to the agent by name, returns (user_object_or_None, Flask_Response_Object_or_None)."""
+def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]: 
     if not supabase:
         logger.error("Auth check failed: Supabase client not initialized.")
         return None, jsonify({"error": "Auth service unavailable"}, 503)
@@ -220,15 +214,8 @@ def supabase_auth_required(agent_required: bool = True):
             if agent_required:
                 if request.is_json and request.json and 'agent' in request.json:
                     agent_name_from_payload = request.json.get('agent')
-                elif 'agent' in request.args: # Check query params for GET or if agent is passed in query for POST
+                elif 'agent' in request.args: 
                     agent_name_from_payload = request.args.get('agent')
-                # Example for payload in query for GET (less common for POST-style actions)
-                # elif 'payload' in request.args:
-                #     try:
-                #         payload_dict = json.loads(request.args.get('payload'))
-                #         agent_name_from_payload = payload_dict.get('agent')
-                #     except (json.JSONDecodeError, TypeError):
-                #         pass # Ignore if payload is not valid JSON or not a dict
 
             user, error_response = verify_user_agent_access(token, agent_name_from_payload if agent_required else None)
             if error_response: 
@@ -304,12 +291,12 @@ def start_recording_route(user: SupabaseUser):
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True, 
-        "is_finalizing": False, # New flag for idempotency
+        "is_finalizing": False, 
         "current_segment_raw_bytes": bytearray(),
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0,
-        "webm_global_header_bytes": None, # New: To store the first blob's header
-        "is_first_blob_received": False,   # New: Flag to capture the first blob
+        "webm_global_header_bytes": None, 
+        "is_first_blob_received": False,   
     }
     logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
@@ -334,7 +321,7 @@ def start_recording_route(user: SupabaseUser):
 
 def _finalize_session(session_id: str):
     logger.info(f"Attempting to finalize session {session_id}...")
-    with session_locks[session_id]: # Acquire re-entrant lock
+    with session_locks[session_id]: 
         if session_id not in active_sessions:
             logger.warning(f"Finalize: Session {session_id} not found or already cleaned up (checked after lock). Aborting.")
             return
@@ -345,8 +332,8 @@ def _finalize_session(session_id: str):
             logger.warning(f"Finalize: Session {session_id} is already being finalized. Aborting redundant call.")
             return
             
-        session_data["is_finalizing"] = True # Mark as finalizing
-        session_data["is_active"] = False # Mark as no longer active for new data
+        session_data["is_finalizing"] = True 
+        session_data["is_active"] = False 
         logger.info(f"Finalizing session {session_id} (marked is_finalizing=True, is_active=False).")
         
         current_fragment_bytes_final = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
@@ -354,13 +341,12 @@ def _finalize_session(session_id: str):
         
         all_final_segment_bytes = b''
         if global_header_bytes_final and current_fragment_bytes_final:
-            if current_fragment_bytes_final.startswith(global_header_bytes_final): # If it's the first segment data
+            if current_fragment_bytes_final.startswith(global_header_bytes_final): 
                 all_final_segment_bytes = current_fragment_bytes_final
             else:
                 all_final_segment_bytes = global_header_bytes_final + current_fragment_bytes_final
-        elif current_fragment_bytes_final: # No global header, but some fragments (should be first segment)
+        elif current_fragment_bytes_final: 
              all_final_segment_bytes = current_fragment_bytes_final
-
 
         if all_final_segment_bytes:
             logger.info(f"Processing {len(all_final_segment_bytes)} remaining combined audio bytes for session {session_id} during finalization.")
@@ -391,9 +377,7 @@ def _finalize_session(session_id: str):
                         logger.info(f"Session {session_id} Finalize: Actual duration of final WAV segment {final_output_wav_path} is {actual_duration_final:.2f}s")
                     except (subprocess.CalledProcessError, ValueError) as ffprobe_err_final:
                         logger.error(f"Session {session_id} Finalize: ffprobe failed for final WAV {final_output_wav_path}: {ffprobe_err_final}. Estimating duration.")
-                        # Estimate based on all_final_segment_bytes, which includes the header.
-                        # This estimation is very rough.
-                        estimated_duration_final = len(all_final_segment_bytes) / (16000 * 2 * 0.2) # Rough WebM to WAV factor
+                        estimated_duration_final = len(all_final_segment_bytes) / (16000 * 2 * 0.2) 
                         session_data['actual_segment_duration_seconds'] = estimated_duration_final
                         logger.warning(f"Using rough estimated duration for final segment: {estimated_duration_final:.2f}s")
 
@@ -403,9 +387,8 @@ def _finalize_session(session_id: str):
             except Exception as e:
                 logger.error(f"Error processing final audio segment (piped) for session {session_id}: {e}", exc_info=True)
             finally:
-                # process_audio_segment_and_update_s3 is expected to clean its WAV file
                 pass
-        else: # No remaining raw bytes to process
+        else: 
             logger.info(f"Session {session_id} Finalize: No remaining audio bytes to process.")
         
         ws = session_data.get("websocket_connection")
@@ -417,10 +400,7 @@ def _finalize_session(session_id: str):
             except Exception as e: 
                 logger.warning(f"Error closing WebSocket for session {session_id} during finalization: {e}", exc_info=True)
     
-    # Cleanup outside the primary lock scope for this session_data, but ensure session_id is still valid
-    # The data from active_sessions was copied to session_data, so it's safe to use session_data['temp_audio_session_dir']
-    if session_id in active_sessions: # Check if session_data for this session_id still exists before deleting.
-                                      # This is a double check. The main logic happens under the lock.
+    if session_id in active_sessions: 
         temp_session_audio_dir = session_data['temp_audio_session_dir']
         if os.path.exists(temp_session_audio_dir):
             try:
@@ -437,11 +417,10 @@ def _finalize_session(session_id: str):
             except Exception as e:
                 logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
 
-        # Remove from active_sessions and session_locks only after all processing and cleanup attempts
         if session_id in active_sessions: 
             del active_sessions[session_id]
         if session_id in session_locks: 
-            del session_locks[session_id] # Remove the lock itself
+            del session_locks[session_id] 
         logger.info(f"Session {session_id} finalized and removed from active sessions.")
     else:
         logger.warning(f"Session {session_id} was already removed from active_sessions before final cleanup phase.")
@@ -457,8 +436,6 @@ def stop_recording_route(user: SupabaseUser):
 
     logger.info(f"Stop recording request for session {session_id} by user {user.id}") 
     
-    # Check if session exists before attempting to finalize.
-    # The _finalize_session function itself will also check.
     if session_id not in active_sessions:
         logger.warning(f"Stop request for session {session_id}, but session not found in active_sessions. It might have already been finalized or never started.")
         return jsonify({"status": "success", "message": "Session already stopped or not found", "session_id": session_id}), 200 
@@ -527,14 +504,13 @@ def audio_stream_socket(ws, session_id: str):
                         active_sessions[session_id]["is_backend_processing_paused"] = is_paused_by_client
                         logger.info(f"Session {session_id}: Backend audio processing "
                                     f"{'paused' if is_paused_by_client else 'resumed'} based on client state.")
-                        # Logic for pause/resume markers
                         session_data_ref = active_sessions[session_id]
                         current_offset = session_data_ref.get('current_total_audio_duration_processed_seconds', 0.0)
                         if is_paused_by_client:
                             session_data_ref["pause_marker_to_write"] = "<<REC PAUSED>>"
                             session_data_ref["pause_event_timestamp_offset"] = current_offset
                             logger.info(f"Session {session_id}: Queued '<<REC PAUSED>>' marker at offset {current_offset:.2f}s.")
-                        else: # Resumed
+                        else: 
                             session_data_ref["pause_marker_to_write"] = "<<REC RESUMED>>"
                             session_data_ref["pause_event_timestamp_offset"] = current_offset
                             logger.info(f"Session {session_id}: Queued '<<REC RESUMED>>' marker at offset {current_offset:.2f}s.")
@@ -548,25 +524,23 @@ def audio_stream_socket(ws, session_id: str):
                     logger.error(f"WebSocket session {session_id}: Error processing control message '{message}': {e}")
 
             elif isinstance(message, bytes):
-                with session_locks[session_id]: # Protect session_data modifications
-                    if session_id not in active_sessions: # Re-check after acquiring lock
+                with session_locks[session_id]: 
+                    if session_id not in active_sessions: 
                         logger.warning(f"WebSocket {session_id}: Session disappeared after acquiring lock. Aborting message processing.")
                         break
                     session_data = active_sessions[session_id]
                     
                     if not session_data.get("is_first_blob_received", False):
-                        session_data["webm_global_header_bytes"] = bytes(message) # Store the first blob
+                        session_data["webm_global_header_bytes"] = bytes(message) 
                         session_data["is_first_blob_received"] = True
                         logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
-                        # The first blob is part of the first segment, so also append it to current_segment_raw_bytes
                         session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
                     else:
-                        # For subsequent blobs, just append to current segment bytes
                         session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
                     
                     logger.debug(f"Session {session_id}: Appended {len(message)} bytes to raw_bytes buffer. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
 
-                    session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 # Approx based on 3000ms timeslice
+                    session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 
 
                     if not session_data["is_backend_processing_paused"] and \
                        session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
@@ -888,7 +862,7 @@ def handle_chat(user: SupabaseUser):
             logger.debug("Loaded prompts/context/docs from S3.")
         except Exception as e: logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True); base_system_prompt = "Error: Could not load config."; frameworks = event_context = agent_docs = None
         source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes like `[^1]`. \n2. Place footnote directly after sentence/paragraph. \n3. List all cited sources at end under `### Sources` as `[^1]: source_file_name.ext`."
-        realtime_instr = "\n\nIMPORTANT: Prioritize [REAL-TIME Meeting Transcript Update] content for 'current' or 'latest' state queries."
+        realtime_instr = "\n\nIMPORTANT: Prioritize [Meeting Transcript Update (from S3)] content for 'current' or 'latest' state queries." # Updated Label
         final_system_prompt = base_system_prompt + source_instr + realtime_instr
         if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
         if event_context: final_system_prompt += "\n\n## Context\n" + event_context
@@ -916,12 +890,27 @@ def handle_chat(user: SupabaseUser):
         
         transcript_content_to_add = ""; state_key = (agent_name, event_id)
         with transcript_state_lock:
-            if state_key not in transcript_state_cache: transcript_state_cache[state_key] = TranscriptState(); logger.info(f"New TranscriptState for {agent_name}/{event_id}")
+            if state_key not in transcript_state_cache: 
+                transcript_state_cache[state_key] = TranscriptState()
+                logger.info(f"New TranscriptState created for {agent_name}/{event_id}")
             current_transcript_state = transcript_state_cache[state_key]
+        
         try:
-            new_transcript = read_new_transcript_content(current_transcript_state, agent_name, event_id)
-            if new_transcript: label = "[Meeting Transcript Update (from S3 polling)]"; transcript_content_to_add = f"{label}\n{new_transcript}"; llm_messages.insert(-1, {'role': 'user', 'content': transcript_content_to_add})
-        except Exception as e: logger.error(f"Error reading tx updates from S3: {e}", exc_info=True)
+            new_transcript_data = read_new_transcript_content(current_transcript_state, agent_name, event_id)
+            if new_transcript_data:
+                label = "[Meeting Transcript Update (from S3)]" 
+                transcript_content_to_add = f"{label}\n{new_transcript_data}"
+                insert_index = len(llm_messages)
+                if llm_messages and llm_messages[-1]['role'] == 'user':
+                    insert_index = len(llm_messages) -1
+                
+                llm_messages.insert(insert_index, {'role': 'user', 'content': transcript_content_to_add})
+                logger.info(f"Added transcript data (length {len(new_transcript_data)}) to LLM messages at index {insert_index}.")
+            else:
+                logger.info(f"No new transcript data to add for {agent_name}/{event_id}.")
+
+        except Exception as e: 
+            logger.error(f"Error reading transcript updates from S3: {e}", exc_info=True)
 
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
         final_system_prompt += f"\nCurrent Time Context: {time_str}"
@@ -970,8 +959,8 @@ def cleanup_idle_sessions():
         time.sleep(5 * 60) 
         now = time.time()
         sessions_to_cleanup = []
-        for session_id, session_data in list(active_sessions.items()): # Iterate over a copy
-            if not session_data.get("is_active", False) and not session_data.get("is_finalizing", False): # Also check is_finalizing
+        for session_id, session_data in list(active_sessions.items()): 
+            if not session_data.get("is_active", False) and not session_data.get("is_finalizing", False): 
                  if now - session_data.get("last_activity_timestamp", 0) > (15 * 60): 
                       logger.warning(f"Found stale inactive session {session_id}. Adding to cleanup queue.")
                       sessions_to_cleanup.append(session_id)
