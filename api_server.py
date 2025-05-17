@@ -1,4 +1,3 @@
-# api_server.py
 import os
 import sys
 import logging
@@ -1026,14 +1025,38 @@ def handle_chat(user: SupabaseUser):
             try:
                 with _call_anthropic_stream_with_retry(model=llm_model_name, max_tokens=llm_max_tokens, system=final_system_prompt, messages=final_llm_messages) as stream:
                     for text in stream.text_stream: response_content += text; sse_data = json.dumps({'delta': text}); yield f"data: {sse_data}\n\n"
-            except RetryError as e: stream_error = "Assistant unavailable after retries."
-            except APIStatusError as e: stream_error = f"API Error: {e.message}" if hasattr(e, 'message') else str(e);
-            except AnthropicError as e: stream_error = f"Anthropic Error: {str(e)}"
-            except Exception as e: stream_error = f"Unexpected error: {str(e)}"
-            if stream_error: sse_error_data = json.dumps({'error': stream_error}); yield f"data: {sse_error_data}\n\n"
-            sse_done_data = json.dumps({'done': True}); yield f"data: {sse_done_data}\n\n"
+            except RetryError as e: 
+                stream_error = "Assistant unavailable after retries."
+                logger.error(f"RetryError during Anthropic stream: {e}")
+            except APIStatusError as e:
+                error_body_str = "Unknown API error structure"
+                try:
+                    error_detail_json = e.response.json()
+                    error_body_str = json.dumps(error_detail_json) 
+                except json.JSONDecodeError:
+                    error_body_str = e.response.text if hasattr(e.response, 'text') else "Non-JSON error response"
+                except Exception:
+                    pass 
+                stream_error = f"API Error: Status {e.status_code} - {error_body_str}"
+                logger.error(f"APIStatusError during Anthropic stream: Status {e.status_code}, Body: {error_body_str}", exc_info=True)
+            except AnthropicError as e: # Catch other Anthropic errors
+                stream_error = f"Anthropic Error: {str(e)}"
+                logger.error(f"AnthropicError during Anthropic stream: {e}", exc_info=True)
+            except Exception as e: 
+                stream_error = f"Unexpected error during stream: {str(e)}"
+                logger.error(f"Generic Exception during Anthropic stream: {e}", exc_info=True)
+            
+            if stream_error: 
+                sse_error_data = json.dumps({'error': stream_error}); 
+                yield f"data: {sse_error_data}\n\n"
+            
+            sse_done_data = json.dumps({'done': True}); 
+            yield f"data: {sse_done_data}\n\n"
+            
         return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
-    except Exception as e: logger.error(f"Error in /api/chat: {e}", exc_info=True); return jsonify({"error": "Internal server error"}), 500
+    except Exception as e: 
+        logger.error(f"Error in /api/chat: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
 
 def sync_agents_from_s3_to_supabase():
     if not supabase: logger.warning("Agent Sync: Supabase client not initialized. Skipping."); return
