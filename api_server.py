@@ -949,21 +949,24 @@ def handle_chat(user: SupabaseUser):
                 transcript_state_cache[state_key] = TranscriptState()
                 logger.info(f"New TranscriptState created for {agent_name}/{event_id}")
             current_transcript_state = transcript_state_cache[state_key]
+            
+            # Force re-evaluation of initial transcript state on each call for this agent/event
+            # This makes the backend behave as if "UI reloaded" for transcript base.
+            logger.debug(f"Resetting cached initial_full_transcript_content and current_latest_key for {agent_name}/{event_id} before S3 read.")
+            current_transcript_state.initial_full_transcript_content = None
+            current_transcript_state.current_latest_key = None # Also reset this to ensure delta logic re-evaluates latest S3 file correctly
         
         try:
             # `read_new_transcript_content` returns (content, was_initial_load_attempt)
-            # If was_initial_load_attempt is True and content is not None, it's the full initial transcript.
-            # If was_initial_load_attempt is False and content is not None, it's a delta.
+            # Now, was_initial_load_attempt should be True on every /api/chat call.
             transcript_data_from_s3, was_initial_load_attempt = read_new_transcript_content(
                 current_transcript_state, agent_name, event_id
             )
             
-            if was_initial_load_attempt and transcript_data_from_s3:
-                # This was an initial load, store it in the state object
-                current_transcript_state.initial_full_transcript_content = transcript_data_from_s3
-                logger.info(f"Stored initial full transcript (length {len(transcript_data_from_s3)}) in state for {agent_name}/{event_id}.")
+            # The `initial_full_transcript_content` is now freshly loaded from S3 by read_new_transcript_content
+            # and stored in current_transcript_state.initial_full_transcript_content for this call.
             
-            # 1. Prepend stored initial full transcript if it exists in state
+            # 1. Prepend the freshly loaded full transcript if it exists
             if current_transcript_state.initial_full_transcript_content and \
                not current_transcript_state.initial_full_transcript_content.startswith("__LOAD_ATTEMPTED"): # Avoid adding markers
                 initial_transcript_message_content = (
@@ -974,12 +977,16 @@ def handle_chat(user: SupabaseUser):
                     f"=== END FULL MEETING TRANSCRIPT ==="
                 )
                 final_llm_messages.append({'role': 'user', 'content': initial_transcript_message_content})
-                logger.info(f"Prepended stored initial full transcript (length {len(current_transcript_state.initial_full_transcript_content)}) to current API call's messages.")
+                logger.info(f"Prepended freshly loaded full transcript (length {len(current_transcript_state.initial_full_transcript_content)}) to current API call's messages.")
 
             # 2. Add the actual conversational turns from the client
             final_llm_messages.extend(llm_messages_from_client)
 
             # 3. Handle current delta (if it's not the initial load data itself that was just fetched)
+            # Since was_initial_load_attempt will now be true, this delta block for transcript_data_from_s3
+            # should typically not run, as the data would have been part of the initial_full_transcript_content.
+            # However, if read_new_transcript_content has further internal delta logic based on file_positions,
+            # it might still return a small delta if a file grew *during* the processing of this API call.
             if transcript_data_from_s3 and not was_initial_load_attempt: 
                 label = "[Meeting Transcript Update (from S3)]" 
                 transcript_delta_to_add = f"{label}\n{transcript_data_from_s3}"
@@ -994,20 +1001,18 @@ def handle_chat(user: SupabaseUser):
                         insert_idx_for_delta = i
                         break
                 
-                # If no actual user message was found (e.g. first turn, final_llm_messages only has initial transcript)
-                # ensure delta is placed after initial transcript.
                 if insert_idx_for_delta == len(final_llm_messages) and final_llm_messages and \
                    final_llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:"):
                     insert_idx_for_delta = 1
 
                 final_llm_messages.insert(insert_idx_for_delta, {'role': 'user', 'content': transcript_delta_to_add})
-                logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at effective index {insert_idx_for_delta}.")
+                logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at effective index {insert_idx_for_delta} (this indicates growth during API call processing).")
             
-            elif not transcript_data_from_s3:
-                if was_initial_load_attempt:
-                    logger.info(f"Initial transcript load attempt for {agent_name}/{event_id} resulted in no data.")
-                else:
-                    logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn.")
+            elif not transcript_data_from_s3 and was_initial_load_attempt:
+                 logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data, or was already processed as initial.")
+            elif not transcript_data_from_s3 and not was_initial_load_attempt:
+                 logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn (after initial load).")
+
 
         except Exception as e: 
             logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
