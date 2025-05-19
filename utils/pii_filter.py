@@ -45,15 +45,19 @@ def anonymize_transcript_chunk(
     prompt = f"""Your sole task is to identify and redact specific Personally Identifiable Information (PII) from the provided text chunk. The text is primarily in {language_hint}.
 
 PII Categories for Redaction:
-1.  **Personal Names:** Replace clear instances of full names or first names used in a way that identifies a specific person with "[PERSON_REDACTED]". Be conservative: do NOT redact common nouns, verbs, or adjectives, even if they could coincidentally be names (e.g., "System", "Hope", "Mark"). Only redact if the context strongly suggests it's a person's name.
-2.  **Email Addresses:** Replace with "[EMAIL_REDACTED_BY_AI]". (Primary regex should catch most of these).
-3.  **Phone Numbers:** Replace with "[PHONE_REDACTED_BY_AI]". (Primary regex should catch most of these).
-4.  **Physical Addresses:** Replace specific street addresses, cities if uniquely identifiable and not generic, etc., with "[ADDRESS_REDACTED]".
+1.  **Personal Names:** Replace clear instances of full names or first names used in a way that identifies a specific person with "[PERSON_REDACTED]".
+    **Crucially, be conservative with names:**
+    *   Do NOT redact common nouns, verbs, adjectives, or common words (e.g., "System", "Hope", "Mark", "Test", "Order", "Meeting").
+    *   Do NOT redact pronouns (e.g., "I", "me", "my", "mine", "you", "your", "he", "him", "his", "she", "her", "hers", "we", "us", "our", "they", "them", "their", and their equivalents in other languages like "jag", "mig", "min", "vår", "du", "din", "han", "hon", "vi", "oss", "ni", "er", "de", "dem", "deras").
+    *   Only redact if the word is very likely a person's name given the context.
+2.  **Email Addresses:** Replace with "[EMAIL_REDACTED_BY_AI]". (This is a fallback; primary regex should catch most).
+3.  **Phone Numbers:** Replace with "[PHONE_REDACTED_BY_AI]". (This is a fallback; primary regex should catch most).
+4.  **Physical Addresses:** Replace specific street addresses, or cities if uniquely identifiable and not generic terms, with "[ADDRESS_REDACTED]".
 
 Output Requirements:
 -   **You MUST return ONLY the processed text.**
--   Do NOT include any conversational introduction, explanation, apologies, or summaries.
--   Do NOT include the "Text to process:" or "---" markers from this prompt in your output.
+-   Do NOT include any conversational introduction, explanation, apologies, summaries, or any text other than the modified input text.
+-   Do NOT include any "Text to process:", "Redacted text:", or "---" markers from this prompt in your output.
 -   Preserve original line breaks and general formatting of the input text.
 -   If no PII from the categories above is found, return the original text chunk unmodified.
 
