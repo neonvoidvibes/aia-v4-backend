@@ -243,27 +243,48 @@ def get_latest_frameworks(agent_name: Optional[str] = None) -> Optional[str]:
     return frameworks if frameworks else None
 
 def get_latest_context(agent_name: str, event_id: Optional[str] = None) -> Optional[str]:
-    """Get and combine organization and event contexts from S3"""
+    """Get and combine agent-specific and event-specific contexts from S3."""
     logger.debug(f"Getting context (agent: {agent_name}, event: {event_id})")
-    org_context = ""
-    org_pattern = f'organizations/river/_config/context_oID-river' 
-    logger.info(f"Attempting org context load using pattern: '{org_pattern}'.")
-    org_result = find_file_any_extension(org_pattern, "organization context")
-    if org_result: org_context = org_result[1]; logger.info("Loaded organization context.")
-    else: logger.warning(f"No organization context found using pattern '{org_pattern}'.")
+    
+    agent_primary_context = ""
+    # Load agent-specific context from the agent's _config folder
+    # Pattern: organizations/river/agents/{agent_name}/_config/context_aID-{agent_name}.[txt|json|md]
+    agent_context_pattern = f'organizations/river/agents/{agent_name}/_config/context_aID-{agent_name}'
+    logger.info(f"Attempting agent-specific context load using pattern: '{agent_context_pattern}'.")
+    agent_context_result = find_file_any_extension(agent_context_pattern, "agent primary context")
+    if agent_context_result:
+        agent_primary_context = agent_context_result[1]
+        logger.info(f"Loaded agent-specific primary context for agent '{agent_name}'. Length: {len(agent_primary_context)}")
+    else:
+        logger.warning(f"No agent-specific primary context found for agent '{agent_name}' using pattern '{agent_context_pattern}'.")
 
     event_context = ""
     if event_id and event_id != '0000':
+        # Event-specific context path already includes agent_name and event_id.
+        # This pattern remains consistent with the original code for event context.
         event_pattern = f'organizations/river/agents/{agent_name}/events/{event_id}/_config/context_aID-{agent_name}_eID-{event_id}'
+        logger.info(f"Attempting event-specific context load using pattern: '{event_pattern}'.")
         event_result = find_file_any_extension(event_pattern, "event context")
-        if event_result: event_context = event_result[1]; logger.info(f"Loaded event context '{event_id}'.")
-        else: logger.warning(f"No event context found using pattern '{event_pattern}'.")
+        if event_result:
+            event_context = event_result[1]
+            logger.info(f"Loaded event-specific context for event '{event_id}'. Length: {len(event_context)}")
+        else:
+            logger.warning(f"No event-specific context found for event '{event_id}' using pattern '{event_pattern}'.")
 
-    context = org_context
-    if event_context: context += ("\n\n" + event_context) if context else event_context
-    if context: logger.info(f"Loaded context, total length: {len(context)}")
-    else: logger.warning("No organization or event context found.")
-    return context if context else None
+    # Combine agent primary context and event context
+    final_context = agent_primary_context
+    if event_context:
+        if final_context: # If agent_primary_context was found, append event_context
+            final_context += "\n\n" + event_context
+        else: # If no agent_primary_context, event_context becomes the final_context
+            final_context = event_context
+            
+    if final_context:
+        logger.info(f"Final combined context loaded. Total length: {len(final_context)}")
+    else:
+        logger.warning(f"No agent primary or event-specific context found for agent '{agent_name}', event '{event_id}'.")
+        
+    return final_context if final_context else None
 
 def get_agent_docs(agent_name: str) -> Optional[str]:
     """Get documentation files for the specified agent."""
