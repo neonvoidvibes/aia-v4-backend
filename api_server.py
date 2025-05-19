@@ -118,7 +118,7 @@ try:
     logger.info("Anthropic client initialized.")
 except Exception as e: 
     logger.critical(f"Failed Anthropic client init: {e}", exc_info=True)
-    anthropic_client = None
+    anthropic_client = None # Keep it None on failure so other parts can check
 
 def log_retry_error(retry_state): 
     logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
@@ -1122,6 +1122,12 @@ if __name__ == '__main__':
 
     port = int(os.getenv('PORT', 5001)); debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
+    
+    # Log PII-related configurations
+    logger.info(f"PII Filtering Enabled for Transcripts: {os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false')}")
+    logger.info(f"PII Redaction LLM Model: {os.getenv('PII_REDACTION_MODEL_NAME', 'claude-3-haiku-20240307')}")
+    logger.info(f"PII Redaction Fallback Behavior: {os.getenv('PII_REDACTION_FALLBACK_BEHAVIOR', 'regex_only')}")
+
     use_reloader_env = os.getenv('FLASK_USE_RELOADER', 'False').lower() == 'true'
     
     if not os.getenv("GUNICORN_CMD"): 

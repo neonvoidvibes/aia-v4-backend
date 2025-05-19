@@ -185,6 +185,24 @@ def process_audio_segment_and_update_s3(
             try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
             except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
         return False
+
+    # Attempt to get the Anthropic client for PII filtering
+    # This assumes anthropic_client is importable from api_server or initialized/passed here.
+    pii_llm_client_for_service = None
+    try:
+        from api_server import anthropic_client as global_anthropic_client # Try importing from api_server
+        if global_anthropic_client:
+            pii_llm_client_for_service = global_anthropic_client
+            logger.debug("PII Filter: Using global Anthropic client from api_server.")
+        else:
+            logger.warning("PII Filter: Global Anthropic client from api_server is None. LLM PII redaction might be skipped.")
+    except ImportError:
+        logger.warning("PII Filter: Could not import anthropic_client from api_server. LLM PII redaction likely skipped unless initialized locally.")
+    except Exception as e:
+        logger.error(f"PII Filter: Error accessing Anthropic client: {e}. LLM PII redaction may be skipped.")
+
+    # Import PII filter utility
+    from utils.pii_filter import anonymize_transcript_chunk
     
     # Transcribe audio first (can be outside the S3 lock)
     transcription_result = _transcribe_audio_segment_openai(temp_segment_wav_path, openai_api_key, language)
@@ -194,21 +212,66 @@ def process_audio_segment_and_update_s3(
         logger.debug(f"Preparing to process {len(transcription_result['segments'])} transcribed segments for {temp_segment_wav_path}")
         for segment_idx, segment in enumerate(transcription_result['segments']):
             raw_text = segment.get('text', '').strip()
-            filtered_text = filter_hallucinations(raw_text)
-            is_valid = is_valid_transcription(filtered_text)
-            if is_valid:
+            filtered_text_stage1 = filter_hallucinations(raw_text) # Basic hallucination filter
+            is_valid_stage1 = is_valid_transcription(filtered_text_stage1)
+
+            final_text_for_s3 = filtered_text_stage1
+
+            if is_valid_stage1 and os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
+                logger.debug(f"Attempting PII filtering for chunk: '{filtered_text_stage1[:100]}...'")
+                language_hint_for_pii = session_data.get('language', language_hint_fallback) # Use 'language' from session_data if available
+                pii_model_name_config = os.getenv("PII_REDACTION_MODEL_NAME", "claude-3-haiku-20240307")
+                
+                if pii_llm_client_for_service:
+                    try:
+                        anonymized_chunk = anonymize_transcript_chunk(
+                            filtered_text_stage1,
+                            pii_llm_client_for_service,
+                            pii_model_name_config,
+                            language_hint=language_hint_for_pii
+                        )
+                        if anonymized_chunk != filtered_text_stage1:
+                             logger.info(f"PII filter applied changes. Original len: {len(filtered_text_stage1)}, New len: {len(anonymized_chunk)}")
+                        else:
+                             logger.debug("PII filter made no LLM changes to the chunk.")
+                        final_text_for_s3 = anonymized_chunk
+                    except Exception as pii_ex:
+                        logger.error(f"Error during PII anonymization call: {pii_ex}. Using regex-filtered/original text.", exc_info=True)
+                        # Fallback: final_text_for_s3 remains filtered_text_stage1 (which might have had regex applied by anonymize_transcript_chunk)
+                else:
+                    logger.warning("PII LLM client instance not available in transcription_service. Attempting regex-only PII filtering.")
+                    # Call anonymize_transcript_chunk with None client, it will do regex only
+                    final_text_for_s3 = anonymize_transcript_chunk(
+                        filtered_text_stage1, 
+                        None, # Pass None for client
+                        pii_model_name_config, # Model name not used if client is None
+                        language_hint=language_hint_for_pii
+                    )
+
+
+            # Re-check validity if PII filter could alter it fundamentally (e.g., make it too short)
+            # For now, assume PII filter doesn't invalidate a previously valid chunk.
+            is_valid_final = is_valid_transcription(final_text_for_s3)
+
+            if is_valid_final:
                 whisper_start_time = segment.get('start', 0.0)
                 whisper_end_time = segment.get('end', 0.0)
                 absolute_start_seconds = segment_offset_seconds + whisper_start_time
                 absolute_end_seconds = segment_offset_seconds + whisper_end_time
                 timestamp_str = format_timestamp_range(absolute_start_seconds, absolute_end_seconds, session_start_time_utc)
-                processed_transcript_lines.append(f"{timestamp_str} {filtered_text}")
-            else:
-                logger.debug(f"Audio segment filtered out: '{raw_text}'")
+                processed_transcript_lines.append(f"{timestamp_str} {final_text_for_s3}")
+            elif is_valid_stage1 and not is_valid_final: # Was valid, PII filter made it invalid
+                logger.warning(f"Chunk became invalid after PII filtering. Original: '{raw_text}', Post-PII: '{final_text_for_s3}'")
+            else: # Was not valid initially or still not valid
+                 logger.debug(f"Audio segment content not valid or filtered out completely. Original: '{raw_text}', Final for S3 attempt: '{final_text_for_s3}'")
+
     elif not transcription_result:
         logger.warning(f"Transcription call returned None for {temp_segment_wav_path}.")
     else: 
         logger.warning(f"Transcription returned no segments in .get('segments') for {temp_segment_wav_path}.")
+
+    # Added language_hint_fallback default for PII filter call
+    language_hint_fallback = 'sv' # Default language hint if not in session_data
 
     # Critical section: Update S3 with markers and/or transcribed text
     # This entire block needs to be atomic for a given session's transcript file.
