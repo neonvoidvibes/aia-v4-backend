@@ -155,6 +155,9 @@ def process_audio_segment_and_update_s3(
     session_start_time_utc = session_data.get('session_start_time_utc')
     segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0) 
     language = session_data.get('language') 
+    
+    # Define language_hint_fallback at the beginning of the function
+    language_hint_fallback = 'sv' # Default language hint if not in session_data
 
     if not all([temp_segment_wav_path, s3_transcript_key, isinstance(session_start_time_utc, datetime)]):
         logger.error("Missing critical data for processing segment (path, S3 key, or start time).")
@@ -269,9 +272,6 @@ def process_audio_segment_and_update_s3(
         logger.warning(f"Transcription call returned None for {temp_segment_wav_path}.")
     else: 
         logger.warning(f"Transcription returned no segments in .get('segments') for {temp_segment_wav_path}.")
-
-    # Added language_hint_fallback default for PII filter call
-    language_hint_fallback = 'sv' # Default language hint if not in session_data
 
     # Critical section: Update S3 with markers and/or transcribed text
     # This entire block needs to be atomic for a given session's transcript file.

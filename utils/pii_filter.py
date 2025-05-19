@@ -42,34 +42,31 @@ def anonymize_transcript_chunk(
     # Construct the prompt for the LLM
     # IMPORTANT: This prompt needs to be carefully crafted and tested.
     # It instructs the LLM to only output the redacted text.
-    prompt = f"""You are an advanced PII (Personally Identifiable Information) redaction tool. Your task is to process the following text chunk, which is primarily in {language_hint}, and replace specific types of PII with predefined placeholders.
+    prompt = f"""Your sole task is to identify and redact specific Personally Identifiable Information (PII) from the provided text chunk. The text is primarily in {language_hint}.
 
-The PII types to redact are:
-- Personal Names: Replace with [PERSON_REDACTED]
-- Email Addresses (if any were missed by previous regex filtering): Replace with [EMAIL_REDACTED_BY_AI]
-- Phone Numbers (if any were missed by previous regex filtering): Replace with [PHONE_REDACTED_BY_AI]
-- Physical Addresses: Replace with [ADDRESS_REDACTED]
-- Organization Names (if they are not generic and could identify individuals): Replace with [ORGANIZATION_REDACTED]
+PII Categories for Redaction:
+1.  **Personal Names:** Replace clear instances of full names or first names used in a way that identifies a specific person with "[PERSON_REDACTED]". Be conservative: do NOT redact common nouns, verbs, or adjectives, even if they could coincidentally be names (e.g., "System", "Hope", "Mark"). Only redact if the context strongly suggests it's a person's name.
+2.  **Email Addresses:** Replace with "[EMAIL_REDACTED_BY_AI]". (Primary regex should catch most of these).
+3.  **Phone Numbers:** Replace with "[PHONE_REDACTED_BY_AI]". (Primary regex should catch most of these).
+4.  **Physical Addresses:** Replace specific street addresses, cities if uniquely identifiable and not generic, etc., with "[ADDRESS_REDACTED]".
+5.  **Organization Names:** Replace specific, non-generic organization names (e.g., "Acme Corp") with "[ORGANIZATION_REDACTED]". Do not redact generic terms like "the company" or "our team".
 
-CRITICAL INSTRUCTIONS:
-1.  ONLY output the fully redacted text.
-2.  Do NOT include any explanations, apologies, conversational preambles, or any text other than the modified input.
-3.  If no PII of the specified types is found, return the original text unmodified.
-4.  Preserve the original formatting (like line breaks) of the text.
-5.  Be careful not to redact common nouns that might coincidentally match names if the context does not imply a person. Focus on clear instances of PII.
+Output Requirements:
+-   **You MUST return ONLY the processed text.**
+-   Do NOT include any conversational introduction, explanation, apologies, or summaries.
+-   Do NOT include the "Text to process:" or "---" markers from this prompt in your output.
+-   Preserve original line breaks and general formatting of the input text.
+-   If no PII from the categories above is found, return the original text chunk unmodified.
 
 Text to process:
----
 {text_after_regex}
----
-Redacted text:"""
+""" # Removed the "---" and "Redacted text:" from the end of the prompt to avoid model confusion.
 
     try:
         logger.info(f"PII Filter: Calling LLM ({pii_model_name}) for name/PII redaction. Language hint: {language_hint}. Chunk size: {len(text_after_regex)}")
         
-        # Ensure we don't send an empty system prompt if not needed by the model's API
-        # For Claude, system prompt is optional if the main instruction is in the user message.
-        # Here, we'll put the core instruction within the user message block for the LLM.
+        # For Claude, the instruction is better within the user message.
+        # System prompt is optional here.
         response = llm_client.messages.create(
             model=pii_model_name,
             max_tokens=len(text_after_regex) + 200, # Allow some overhead for placeholders
@@ -79,11 +76,15 @@ Redacted text:"""
                     "content": prompt
                 }
             ],
-            temperature=0.1, # Low temperature for less creativity, more instruction following
+            temperature=0.1, # Low temperature for more deterministic output
         )
 
         if response.content and isinstance(response.content, list) and len(response.content) > 0:
             llm_redacted_text = response.content[0].text.strip()
+            
+            # Additional cleanup for potential "---" artifacts if the model still adds them despite instruction
+            llm_redacted_text = re.sub(r"^-+$\n?", "", llm_redacted_text, flags=re.MULTILINE).strip()
+
             if llm_redacted_text != text_after_regex: # Check if LLM made changes
                  logger.info(f"PII Filter: LLM successfully redacted PII. Original (post-regex) len: {len(text_after_regex)}, LLM output len: {len(llm_redacted_text)}")
             else:
