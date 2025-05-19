@@ -49,7 +49,6 @@ PII Categories for Redaction:
 2.  **Email Addresses:** Replace with "[EMAIL_REDACTED_BY_AI]". (Primary regex should catch most of these).
 3.  **Phone Numbers:** Replace with "[PHONE_REDACTED_BY_AI]". (Primary regex should catch most of these).
 4.  **Physical Addresses:** Replace specific street addresses, cities if uniquely identifiable and not generic, etc., with "[ADDRESS_REDACTED]".
-5.  **Organization Names:** Replace specific, non-generic organization names (e.g., "Acme Corp") with "[ORGANIZATION_REDACTED]". Do not redact generic terms like "the company" or "our team".
 
 Output Requirements:
 -   **You MUST return ONLY the processed text.**
