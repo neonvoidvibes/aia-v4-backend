@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import uuid 
 from collections import defaultdict
 import subprocess 
+from werkzeug.utils import secure_filename # Added for file uploads
 
 from flask_sock import Sock 
 
@@ -67,6 +68,9 @@ app = Flask(__name__)
 CORS(app) 
 sock = Sock(app) 
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
+
+UPLOAD_FOLDER = 'tmp/uploaded_transcriptions/'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
     "hello", "hello :)", "hi", "hi :)", "hey", "hey :)", "yo", "greetings", "good morning", "good afternoon",
@@ -718,7 +722,9 @@ def get_pinecone_index_stats(index_name: str):
         else: stats_dict = {"raw_stats": str(stats)}
         logger.info(f"Successfully retrieved stats for index '{index_name}'.")
         return jsonify(stats_dict), 200
-    except Exception as e: logger.error(f"Error getting stats for index '{index_name}': {e}", exc_info=True); return jsonify({"error": "An unexpected error occurred"}), 500
+    except Exception as e: 
+        logger.error(f"Error getting stats for index '{index_name}': {e}", exc_info=True)
+        return jsonify({"error": "An unexpected error occurred"}), 500
 
 @app.route('/api/index/<string:index_name>/namespace/<string:namespace_name>/list_ids', methods=['GET'])
 def list_vector_ids_in_namespace(index_name: str, namespace_name: str):
@@ -751,7 +757,9 @@ def list_vector_ids_in_namespace(index_name: str, namespace_name: str):
         except Exception as proc_e: logger.error(f"Error processing list response: {proc_e}", exc_info=True)
         logger.info(f"Found {len(vector_ids)} vector IDs in '{query_namespace}'. Next Token: {next_page_token}")
         return jsonify({"namespace": namespace_name, "vector_ids": vector_ids, "next_token": next_page_token}), 200
-    except Exception as e: logger.error(f"Error listing vector IDs for index '{index_name}', ns '{namespace_name}': {e}", exc_info=True); return jsonify({"error": "Unexpected error listing vector IDs"}), 500
+    except Exception as e: 
+        logger.error(f"Error listing vector IDs for index '{index_name}', ns '{namespace_name}': {e}", exc_info=True)
+        return jsonify({"error": "Unexpected error listing vector IDs"}), 500
 
 @app.route('/api/index/<string:index_name>/namespace/<string:namespace_name>/list_docs', methods=['GET'])
 def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
@@ -779,7 +787,9 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
             else: logger.warning(f"index.list() returned unexpected type: {type(list_response)}")
 
             logger.info(f"Retrieved {len(vector_ids_to_parse)} vector IDs for parsing document names.")
-        except Exception as list_e: logger.error(f"Error listing vector IDs: {list_e}", exc_info=True); return jsonify({"error": "Failed list vector IDs from Pinecone"}), 500
+        except Exception as list_e: 
+            logger.error(f"Error listing vector IDs: {list_e}", exc_info=True)
+            return jsonify({"error": "Failed list vector IDs from Pinecone"}), 500
         
         unique_doc_names = set()
         for vec_id in vector_ids_to_parse:
@@ -793,12 +803,82 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
                          unique_doc_names.add(urllib.parse.unquote_plus(vec_id)) 
                 else: 
                     unique_doc_names.add(urllib.parse.unquote_plus(vec_id))
-            except Exception as parse_e: logger.error(f"Error parsing vector ID '{vec_id}': {parse_e}")
+            except Exception as parse_e: 
+                logger.error(f"Error parsing vector ID '{vec_id}': {parse_e}")
         
         sorted_doc_names = sorted(list(unique_doc_names))
         logger.info(f"Found {len(sorted_doc_names)} unique doc names in ns '{query_namespace}'.")
         return jsonify({"index": index_name, "namespace": namespace_name, "unique_document_names": sorted_doc_names, "vector_ids_checked": len(vector_ids_to_parse)}), 200
-    except Exception as e: logger.error(f"Error listing unique docs index '{index_name}', ns '{namespace_name}': {e}", exc_info=True); return jsonify({"error": "Unexpected error listing documents"}), 500
+    except Exception as e: 
+        logger.error(f"Error listing unique docs index '{index_name}', ns '{namespace_name}': {e}", exc_info=True)
+        return jsonify({"error": "Unexpected error listing documents"}), 500
+
+@app.route('/internal_api/transcribe_file', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def transcribe_uploaded_file(user: SupabaseUser):
+    logger.info(f"Received request /internal_api/transcribe_file from user: {user.id}")
+    if 'audio_file' not in request.files:
+        logger.warning("No audio_file part in request files.")
+        return jsonify({"error": "No audio_file part in the request"}), 400
+    
+    file = request.files['audio_file']
+    
+    if file.filename == '':
+        logger.warning("No selected file provided in audio_file part.")
+        return jsonify({"error": "No selected file"}), 400
+
+    if file:
+        temp_filepath = None # Ensure temp_filepath is defined for cleanup
+        try:
+            filename = secure_filename(file.filename if file.filename else "audio.tmp")
+            unique_id = uuid.uuid4().hex
+            temp_filename = f"{unique_id}_{filename}"
+            temp_filepath = os.path.join(UPLOAD_FOLDER, temp_filename)
+            
+            logger.info(f"Saving uploaded file temporarily to: {temp_filepath}")
+            file.save(temp_filepath)
+
+            openai_api_key = os.getenv('OPENAI_API_KEY')
+            if not openai_api_key:
+                logger.error("OpenAI API key not found for transcription service.")
+                return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
+            
+            from transcription_service import _transcribe_audio_segment_openai as transcribe_whisper_file
+            
+            logger.info(f"Starting transcription for {temp_filepath}...")
+            transcription_data = transcribe_whisper_file(
+                audio_file_path=temp_filepath,
+                openai_api_key=openai_api_key,
+            )
+
+            if transcription_data and 'text' in transcription_data:
+                full_transcript = transcription_data['text']
+                logger.info(f"Transcription successful for {temp_filepath}. Length: {len(full_transcript)}")
+                return jsonify({"transcript": full_transcript}), 200
+            else:
+                error_msg = "Transcription failed or returned empty result."
+                if transcription_data and 'segments' in transcription_data and not transcription_data['text']: # This check is good
+                    error_msg = "Transcription successful but no text detected in audio."
+                elif transcription_data and 'error' in transcription_data: # OpenAI API errors might be structured this way
+                    error_msg = f"Transcription service error: {transcription_data['error']}"
+                elif transcription_data: # Other unexpected structure from Whisper
+                    error_msg = f"Transcription returned unexpected data structure: {str(transcription_data)[:200]}..."
+
+                logger.error(f"{error_msg} File: {temp_filepath}. API Result (if any): {transcription_data}")
+                return jsonify({"error": error_msg}), 500
+
+        except Exception as e:
+            logger.error(f"Error processing uploaded file {file.filename if file.filename else 'unknown'}: {e}", exc_info=True)
+            return jsonify({"error": "Internal server error during file processing"}), 500
+        finally:
+            if temp_filepath and os.path.exists(temp_filepath):
+                try:
+                    os.remove(temp_filepath)
+                    logger.info(f"Cleaned up temporary file: {temp_filepath}")
+                except Exception as e_clean:
+                    logger.error(f"Error cleaning up temporary file {temp_filepath}: {e_clean}")
+    
+    return jsonify({"error": "File not processed correctly"}), 400
 
 @app.route('/api/s3/list', methods=['GET'])
 @supabase_auth_required(agent_required=False)
@@ -824,7 +904,9 @@ def list_s3_documents(user: SupabaseUser):
             })
         if "transcripts/" in s3_prefix: formatted_files = [f for f in formatted_files if not f['name'].startswith('rolling-')]
         return jsonify(formatted_files), 200
-    except Exception as e: logger.error(f"Error listing S3 objects for prefix '{s3_prefix}': {e}", exc_info=True); return jsonify({"error": "Internal server error listing S3 objects"}), 500
+    except Exception as e: 
+        logger.error(f"Error listing S3 objects for prefix '{s3_prefix}': {e}", exc_info=True)
+        return jsonify({"error": "Internal server error listing S3 objects"}), 500
 
 @app.route('/api/s3/view', methods=['GET'])
 @supabase_auth_required(agent_required=False)
@@ -837,7 +919,9 @@ def view_s3_document(user: SupabaseUser):
         content = s3_read_content(s3_key, f"S3 file for viewing ({s3_key})")
         if content is None: return jsonify({"error": "File not found or could not be read"}), 404
         return jsonify({"content": content}), 200
-    except Exception as e: logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error viewing S3 object"}), 500
+    except Exception as e: 
+        logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True)
+        return jsonify({"error": "Internal server error viewing S3 object"}), 500
 
 @app.route('/api/s3/download', methods=['GET'])
 @supabase_auth_required(agent_required=False)
@@ -855,18 +939,25 @@ def download_s3_document(user: SupabaseUser):
             mimetype=s3_object.get('ContentType', 'application/octet-stream'),
             headers={"Content-Disposition": f"attachment;filename=\"{download_filename}\""} 
         )
-    except s3.exceptions.NoSuchKey: logger.warning(f"S3 Download: File not found at key: {s3_key}"); return jsonify({"error": "File not found"}), 404
-    except Exception as e: logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True); return jsonify({"error": "Internal server error downloading S3 object"}), 500
+    except s3.exceptions.NoSuchKey: 
+        logger.warning(f"S3 Download: File not found at key: {s3_key}")
+        return jsonify({"error": "File not found"}), 404
+    except Exception as e: 
+        logger.error(f"Error downloading S3 object '{s3_key}': {e}", exc_info=True)
+        return jsonify({"error": "Internal server error downloading S3 object"}), 500
 
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
 def handle_chat(user: SupabaseUser): 
     logger.info(f"Received request /api/chat method: {request.method} from user: {user.id}") 
     global transcript_state_cache
-    if not anthropic_client: logger.error("Chat fail: Anthropic client not init."); return jsonify({"error": "AI service unavailable"}), 503
+    if not anthropic_client: 
+        logger.error("Chat fail: Anthropic client not init.")
+        return jsonify({"error": "AI service unavailable"}), 503
     try:
         data = request.json
-        if not data or 'messages' not in data: return jsonify({"error": "Missing 'messages'"}), 400
+        if not data or 'messages' not in data: 
+            return jsonify({"error": "Missing 'messages'"}), 400
         agent_name = data.get('agent') 
         event_id = data.get('event', '0000')
         chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) 
@@ -879,16 +970,9 @@ def handle_chat(user: SupabaseUser):
         
         if not llm_messages_from_client: 
             logger.warning("Received chat request with no user/assistant messages from client.")
-            # This case should ideally be handled by frontend, but as a fallback:
-            # If this is truly the first interaction and only a system message would be formed,
-            # an error or a default greeting might be appropriate.
-            # For now, we proceed, assuming system prompt + transcript might be enough for a first turn.
-            # If not, Anthropic will likely error on empty messages list if final_llm_messages is empty.
 
-        # Initialize final_llm_messages list for this request
         final_llm_messages: List[Dict[str, str]] = []
 
-        # --- System Prompt Construction ---
         try:
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
             frameworks = get_latest_frameworks(agent_name); 
@@ -918,9 +1002,7 @@ def handle_chat(user: SupabaseUser):
         rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n3. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n4. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n5. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
         final_system_prompt += rag_usage_instructions
         
-        # --- RAG Context (if applicable) ---
         rag_context_block = ""; 
-        # Use the last message from llm_messages_from_client for RAG query, if it exists and is from user
         last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
 
         if last_actual_user_message_for_rag:
@@ -935,14 +1017,18 @@ def handle_chat(user: SupabaseUser):
                         items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
                         rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
                     else: rag_context_block = "\n\n[Note: No relevant documents found for this query via RAG.]"
-                except RuntimeError as e: logger.warning(f"RAG skipped: {e}"); rag_context_block = f"\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval failed for index '{agent_name}']\n=== END RETRIEVED CONTEXT ==="
-                except Exception as e: logger.error(f"Unexpected RAG error: {e}", exc_info=True); rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
-            elif is_simple_query: rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
-        else: # No last actual user message, e.g. first turn after initial transcript load
+                except RuntimeError as e: 
+                    logger.warning(f"RAG skipped: {e}")
+                    rag_context_block = f"\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval failed for index '{agent_name}']\n=== END RETRIEVED CONTEXT ==="
+                except Exception as e: 
+                    logger.error(f"Unexpected RAG error: {e}", exc_info=True)
+                    rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
+            elif is_simple_query: 
+                rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
+        else: 
             rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable for this turn.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block 
         
-        # --- Transcript Handling ---
         state_key = (agent_name, event_id)
         with transcript_state_lock:
             if state_key not in transcript_state_cache: 
@@ -950,25 +1036,17 @@ def handle_chat(user: SupabaseUser):
                 logger.info(f"New TranscriptState created for {agent_name}/{event_id}")
             current_transcript_state = transcript_state_cache[state_key]
             
-            # Force re-evaluation of initial transcript state on each call for this agent/event
-            # This makes the backend behave as if "UI reloaded" for transcript base.
             logger.debug(f"Resetting cached initial_full_transcript_content and current_latest_key for {agent_name}/{event_id} before S3 read.")
             current_transcript_state.initial_full_transcript_content = None
-            current_transcript_state.current_latest_key = None # Also reset this to ensure delta logic re-evaluates latest S3 file correctly
+            current_transcript_state.current_latest_key = None 
         
         try:
-            # `read_new_transcript_content` returns (content, was_initial_load_attempt)
-            # Now, was_initial_load_attempt should be True on every /api/chat call.
             transcript_data_from_s3, was_initial_load_attempt = read_new_transcript_content(
                 current_transcript_state, agent_name, event_id
             )
             
-            # The `initial_full_transcript_content` is now freshly loaded from S3 by read_new_transcript_content
-            # and stored in current_transcript_state.initial_full_transcript_content for this call.
-            
-            # 1. Prepend the freshly loaded full transcript if it exists
             if current_transcript_state.initial_full_transcript_content and \
-               not current_transcript_state.initial_full_transcript_content.startswith("__LOAD_ATTEMPTED"): # Avoid adding markers
+               not current_transcript_state.initial_full_transcript_content.startswith("__LOAD_ATTEMPTED"): 
                 initial_transcript_message_content = (
                     f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
                     f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
@@ -979,14 +1057,8 @@ def handle_chat(user: SupabaseUser):
                 final_llm_messages.append({'role': 'user', 'content': initial_transcript_message_content})
                 logger.info(f"Prepended freshly loaded full transcript (length {len(current_transcript_state.initial_full_transcript_content)}) to current API call's messages.")
 
-            # 2. Add the actual conversational turns from the client
             final_llm_messages.extend(llm_messages_from_client)
 
-            # 3. Handle current delta (if it's not the initial load data itself that was just fetched)
-            # Since was_initial_load_attempt will now be true, this delta block for transcript_data_from_s3
-            # should typically not run, as the data would have been part of the initial_full_transcript_content.
-            # However, if read_new_transcript_content has further internal delta logic based on file_positions,
-            # it might still return a small delta if a file grew *during* the processing of this API call.
             if transcript_data_from_s3 and not was_initial_load_attempt: 
                 label = "[Meeting Transcript Update (from S3)]" 
                 transcript_delta_to_add = f"{label}\n{transcript_data_from_s3}"
@@ -1013,7 +1085,6 @@ def handle_chat(user: SupabaseUser):
             elif not transcript_data_from_s3 and not was_initial_load_attempt:
                  logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn (after initial load).")
 
-
         except Exception as e: 
             logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
 
@@ -1021,7 +1092,7 @@ def handle_chat(user: SupabaseUser):
         final_system_prompt += f"\nCurrent Time Context: {time_str}" 
         llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-3-5-sonnet-20240620"); llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
         
-        if not final_llm_messages: # Should only happen if client sends empty message list AND no initial transcript
+        if not final_llm_messages: 
             logger.error("No messages to send to LLM after all processing. Aborting call.")
             return jsonify({"error": "No content to process for LLM."}), 400
 
@@ -1029,7 +1100,10 @@ def handle_chat(user: SupabaseUser):
             response_content = ""; stream_error = None
             try:
                 with _call_anthropic_stream_with_retry(model=llm_model_name, max_tokens=llm_max_tokens, system=final_system_prompt, messages=final_llm_messages) as stream:
-                    for text in stream.text_stream: response_content += text; sse_data = json.dumps({'delta': text}); yield f"data: {sse_data}\n\n"
+                    for text in stream.text_stream: 
+                        response_content += text
+                        sse_data = json.dumps({'delta': text})
+                        yield f"data: {sse_data}\n\n"
             except RetryError as e: 
                 stream_error = "Assistant unavailable after retries."
                 logger.error(f"RetryError during Anthropic stream: {e}")
@@ -1044,7 +1118,7 @@ def handle_chat(user: SupabaseUser):
                     pass 
                 stream_error = f"API Error: Status {e.status_code} - {error_body_str}"
                 logger.error(f"APIStatusError during Anthropic stream: Status {e.status_code}, Body: {error_body_str}", exc_info=True)
-            except AnthropicError as e: # Catch other Anthropic errors
+            except AnthropicError as e: 
                 stream_error = f"Anthropic Error: {str(e)}"
                 logger.error(f"AnthropicError during Anthropic stream: {e}", exc_info=True)
             except Exception as e: 
@@ -1064,27 +1138,43 @@ def handle_chat(user: SupabaseUser):
         return jsonify({"error": "Internal server error"}), 500
 
 def sync_agents_from_s3_to_supabase():
-    if not supabase: logger.warning("Agent Sync: Supabase client not initialized. Skipping."); return
+    if not supabase: 
+        logger.warning("Agent Sync: Supabase client not initialized. Skipping.")
+        return
     logger.info("Agent Sync: Starting synchronization from S3 to Supabase...")
     s3_agent_names = list_agent_names_from_s3()
-    if s3_agent_names is None: logger.error("Agent Sync: Failed to list agent names from S3. Aborting."); return
-    if not s3_agent_names: logger.info("Agent Sync: No agent directories found in S3."); return
+    if s3_agent_names is None: 
+        logger.error("Agent Sync: Failed to list agent names from S3. Aborting.")
+        return
+    if not s3_agent_names: 
+        logger.info("Agent Sync: No agent directories found in S3.")
+        return
     try:
         response = supabase.table("agents").select("name").execute()
-        if hasattr(response, 'error') and response.error: logger.error(f"Agent Sync: Error querying agents from Supabase: {response.error}"); return
+        if hasattr(response, 'error') and response.error: 
+            logger.error(f"Agent Sync: Error querying agents from Supabase: {response.error}")
+            return
         db_agent_names = {agent['name'] for agent in response.data}
         logger.info(f"Agent Sync: Found {len(db_agent_names)} agents in Supabase.")
-    except Exception as e: logger.error(f"Agent Sync: Unexpected error querying Supabase agents: {e}", exc_info=True); return
+    except Exception as e: 
+        logger.error(f"Agent Sync: Unexpected error querying Supabase agents: {e}", exc_info=True)
+        return
     missing_agents = [name for name in s3_agent_names if name not in db_agent_names]
-    if not missing_agents: logger.info("Agent Sync: Supabase 'agents' table is up-to-date with S3 directories."); return
+    if not missing_agents: 
+        logger.info("Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.")
+        return
     logger.info(f"Agent Sync: Found {len(missing_agents)} agents in S3 to add to Supabase: {missing_agents}")
     agents_to_insert = [{'name': name, 'description': f'Agent discovered from S3 path: {name}'} for name in missing_agents]
     try:
         insert_response = supabase.table("agents").insert(agents_to_insert).execute()
-        if hasattr(insert_response, 'error') and insert_response.error: logger.error(f"Agent Sync: Error inserting agents into Supabase: {insert_response.error}")
-        elif insert_response.data: logger.info(f"Agent Sync: Successfully inserted {len(insert_response.data)} new agents into Supabase.")
-        else: logger.warning(f"Agent Sync: Insert call succeeded but reported 0 rows inserted. Check response: {insert_response}")
-    except Exception as e: logger.error(f"Agent Sync: Unexpected error inserting agents: {e}", exc_info=True)
+        if hasattr(insert_response, 'error') and insert_response.error: 
+            logger.error(f"Agent Sync: Error inserting agents into Supabase: {insert_response.error}")
+        elif insert_response.data: 
+            logger.info(f"Agent Sync: Successfully inserted {len(insert_response.data)} new agents into Supabase.")
+        else: 
+            logger.warning(f"Agent Sync: Insert call succeeded but reported 0 rows inserted. Check response: {insert_response}")
+    except Exception as e: 
+        logger.error(f"Agent Sync: Unexpected error inserting agents: {e}", exc_info=True)
     logger.info("Agent Sync: Synchronization finished.")
 
 def cleanup_idle_sessions():
@@ -1113,8 +1203,10 @@ def cleanup_idle_sessions():
             _finalize_session(session_id_to_clean)
 
 if __name__ == '__main__':
-    if supabase: sync_agents_from_s3_to_supabase()
-    else: logger.warning("Skipping agent sync because Supabase client failed to initialize.")
+    if supabase: 
+        sync_agents_from_s3_to_supabase()
+    else: 
+        logger.warning("Skipping agent sync because Supabase client failed to initialize.")
     
     idle_cleanup_thread = threading.Thread(target=cleanup_idle_sessions, daemon=True)
     idle_cleanup_thread.start()
@@ -1123,7 +1215,6 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5001)); debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
     
-    # Log PII-related configurations
     logger.info(f"PII Filtering Enabled for Transcripts: {os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false')}")
     logger.info(f"PII Redaction LLM Model: {os.getenv('PII_REDACTION_MODEL_NAME', 'claude-3-haiku-20240307')}")
     logger.info(f"PII Redaction Fallback Behavior: {os.getenv('PII_REDACTION_FALLBACK_BEHAVIOR', 'regex_only')}")
