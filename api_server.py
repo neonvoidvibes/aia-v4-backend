@@ -851,21 +851,26 @@ def transcribe_uploaded_file(user: SupabaseUser):
                 openai_api_key=openai_api_key,
             )
 
-            if transcription_data and 'text' in transcription_data:
+            if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
                 full_transcript = transcription_data['text']
-                logger.info(f"Transcription successful for {temp_filepath}. Length: {len(full_transcript)}")
-                return jsonify({"transcript": full_transcript}), 200
+                segments = transcription_data['segments']
+                logger.info(f"Transcription successful for {temp_filepath}. Text Length: {len(full_transcript)}, Segments: {len(segments)}")
+                return jsonify({"transcript": full_transcript, "segments": segments}), 200
             else:
-                error_msg = "Transcription failed or returned empty result."
-                if transcription_data and 'segments' in transcription_data and not transcription_data['text']: # This check is good
-                    error_msg = "Transcription successful but no text detected in audio."
-                elif transcription_data and 'error' in transcription_data: # OpenAI API errors might be structured this way
-                    error_msg = f"Transcription service error: {transcription_data['error']}"
-                elif transcription_data: # Other unexpected structure from Whisper
-                    error_msg = f"Transcription returned unexpected data structure: {str(transcription_data)[:200]}..."
+                error_msg = "Transcription failed or returned incomplete data (missing text or segments)."
+                detailed_error_info = "No specific error details from service."
+                if transcription_data:
+                    if 'text' not in transcription_data:
+                        error_msg += " Full transcript text missing."
+                    if 'segments' not in transcription_data:
+                        error_msg += " Segment data missing."
+                    if transcription_data.get('error'):
+                         detailed_error_info = f"Service error: {transcription_data['error']}"
+                    elif not transcription_data.get('text') and transcription_data.get('segments') is not None : # segments exist but text is empty
+                         error_msg = "Transcription successful but no speech detected in the audio."
 
-                logger.error(f"{error_msg} File: {temp_filepath}. API Result (if any): {transcription_data}")
-                return jsonify({"error": error_msg}), 500
+                logger.error(f"{error_msg} File: {temp_filepath}. API Result (if any): {str(transcription_data)[:500]}...")
+                return jsonify({"error": error_msg, "details": detailed_error_info}), 500
 
         except Exception as e:
             logger.error(f"Error processing uploaded file {file.filename if file.filename else 'unknown'}: {e}", exc_info=True)
