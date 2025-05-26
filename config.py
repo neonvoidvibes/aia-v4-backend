@@ -37,7 +37,7 @@ class AppConfig:
     index: Optional[str] = None
 
     # LLM Model Name (Centralized Definition)
-    llm_model_name: str = "claude-3-7-sonnet-20250219" # Default model
+    llm_model_name: str = "claude-4-sonnet" # Default model
 
     # LLM Max Output Tokens
     llm_max_output_tokens: int = 4096 # Default max tokens for LLM response
