@@ -13,6 +13,7 @@ import requests # For OpenAI API call
 from typing import Dict, Any, Optional, List
 import threading # For s3_lock type hint
 import subprocess # For ffprobe fallback
+import mimetypes # Import the mimetypes library
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -87,43 +88,74 @@ def is_valid_transcription(text: str) -> bool:
 def _transcribe_audio_segment_openai(
     audio_file_path: str, 
     openai_api_key: str, 
-    language: Optional[str] = None,
-    chunk_duration: float = 15.0 
+    language: Optional[str] = None
+    # chunk_duration: float = 15.0 # chunk_duration is not used by Whisper file API
     ) -> Optional[Dict[str, Any]]:
     if not openai_api_key:
         logger.error("OpenAI API key not provided for transcription.")
         return None
 
     openai.api_key = openai_api_key 
-    
+
     try:
-        with open(audio_file_path, "rb") as audio_file:
+        with open(audio_file_path, "rb") as audio_file_obj: # Renamed to audio_file_obj
             url = "https://api.openai.com/v1/audio/transcriptions"
             headers = {"Authorization": f"Bearer {openai_api_key}"}
-            
+
             data_payload: Dict[str, Any] = {
                 'model': 'whisper-1',
                 'response_format': 'verbose_json', 
                 'temperature': 0.0,
             }
             if language: data_payload['language'] = language
-            else: data_payload['initial_prompt'] = "Please transcribe the speech accurately." 
-            
-            data_payload['logprob_threshold'] = -0.7 
-            data_payload['compression_ratio_threshold'] = 2.2
-            data_payload['no_speech_threshold'] = 0.7 
+            # else: data_payload['initial_prompt'] = "Please transcribe the speech accurately." # Optional: keep if desired
 
-            files_param = {'file': (os.path.basename(audio_file_path), audio_file, 'audio/wav')} 
+            # Optional parameters for finer control (already present in your code)
+            # data_payload['logprob_threshold'] = -0.7
+            # data_payload['compression_ratio_threshold'] = 2.2
+            # data_payload['no_speech_threshold'] = 0.7
+
+            # === DYNAMIC MIME TYPE DETECTION ===
+            file_name_for_api = os.path.basename(audio_file_path)
+            mime_type, _ = mimetypes.guess_type(audio_file_path)
+
+            # Fallback for common audio types if mimetypes fails or is too generic
+            # OpenAI Whisper supports: mp3, mp4, mpeg, mpga, m4a, wav, webm
+            if not mime_type or mime_type == 'application/octet-stream':
+                ext = os.path.splitext(file_name_for_api)[1].lower()
+                if ext == '.mp3':
+                    mime_type = 'audio/mpeg'
+                elif ext == '.mp4':
+                    mime_type = 'audio/mp4'
+                elif ext == '.m4a':
+                    mime_type = 'audio/mp4' # M4A files are MP4 containers
+                elif ext == '.wav':
+                    mime_type = 'audio/wav'
+                elif ext == '.webm':
+                    mime_type = 'audio/webm'
+                elif ext == '.mpeg':
+                    mime_type = 'audio/mpeg'
+                elif ext == '.mpga':
+                    mime_type = 'audio/mpeg'
+                else:
+                    logger.warning(f"Could not determine specific audio MIME type for {file_name_for_api} (ext: {ext}). Using 'application/octet-stream'. OpenAI might infer.")
+                    mime_type = 'application/octet-stream'
             
+            logger.info(f"Preparing to send {file_name_for_api} to OpenAI with detected MIME type: {mime_type}")
+            files_param = {'file': (file_name_for_api, audio_file_obj, mime_type)}
+            # === END DYNAMIC MIME TYPE DETECTION ===
+
             max_retries = 3
             transcription_timeout = 60 
             for attempt in range(max_retries):
                 try:
                     logger.info(f"Attempting transcription for {audio_file_path} (attempt {attempt + 1})...")
+                    # Reset file pointer for retries if the file object is being reused
+                    audio_file_obj.seek(0)
                     response = requests.post(url, headers=headers, data=data_payload, files=files_param, timeout=transcription_timeout)
                     response.raise_for_status()
                     transcription = response.json()
-                    
+
                     if 'segments' in transcription and isinstance(transcription['segments'], list):
                         logger.info(f"Successfully transcribed {audio_file_path}.")
                         return transcription
@@ -135,6 +167,12 @@ def _transcribe_audio_segment_openai(
                     if attempt == max_retries - 1: raise
                 except requests.exceptions.RequestException as e:
                     logger.error(f"RequestException transcribing {audio_file_path} on attempt {attempt + 1}: {e}")
+                    if response and response.content: # Check if response object exists
+                        try:
+                            error_detail = response.json()
+                            logger.error(f"OpenAI API error detail: {error_detail}")
+                        except json.JSONDecodeError:
+                            logger.error(f"OpenAI API error response (non-JSON): {response.text[:500]}")
                     if attempt == max_retries - 1: raise
                 except Exception as e: 
                     logger.error(f"Generic error transcribing {audio_file_path} on attempt {attempt + 1}: {e}")
