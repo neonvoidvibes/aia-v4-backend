@@ -219,6 +219,10 @@ def supabase_auth_required(agent_required: bool = True):
                     agent_name_from_payload = request.json.get('agent')
                 elif 'agent' in request.args: 
                     agent_name_from_payload = request.args.get('agent')
+                # For manage-file, agentName is expected in payload
+                elif request.is_json and request.json and 'agentName' in request.json and request.path.endswith('/manage-file'):
+                    agent_name_from_payload = request.json.get('agentName')
+
 
             user, error_response = verify_user_agent_access(token, agent_name_from_payload if agent_required else None)
             if error_response: 
@@ -945,6 +949,68 @@ def view_s3_document(user: SupabaseUser):
     except Exception as e: 
         logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True)
         return jsonify({"error": "Internal server error viewing S3 object"}), 500
+
+@app.route('/api/s3/manage-file', methods=['POST'])
+@supabase_auth_required(agent_required=False) # Agent name from payload is used for path construction
+def manage_s3_file(user: SupabaseUser):
+    logger.info(f"Received request /api/s3/manage-file from user: {user.id}")
+    data = request.json
+    s3_key_to_manage = data.get('s3Key')
+    action_to_perform = data.get('action')
+    agent_name_param = data.get('agentName')
+    event_id_param = data.get('eventId')
+
+    if not all([s3_key_to_manage, action_to_perform, agent_name_param, event_id_param]):
+        logger.error(f"ManageFile: Missing parameters. Received: s3Key={s3_key_to_manage}, action={action_to_perform}, agentName={agent_name_param}, eventId={event_id_param}")
+        return jsonify({"error": "Missing s3Key, action, agentName, or eventId in request"}), 400
+
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("ManageFile: S3 client or bucket not configured.")
+        return jsonify({"error": "S3 service not available"}), 503
+
+    if action_to_perform == "archive":
+        logger.info(f"Archive action requested for {s3_key_to_manage}. Agent: {agent_name_param}, Event: {event_id_param}")
+        try:
+            original_filename = os.path.basename(s3_key_to_manage)
+            # Construct destination key in the archive subfolder
+            # Path: organizations/river/agents/{agentName}/events/{eventId}/transcripts/archive/{original_filename}
+            destination_key = f"organizations/river/agents/{agent_name_param}/events/{event_id_param}/transcripts/archive/{original_filename}"
+            
+            logger.info(f"Archiving: Copying '{s3_key_to_manage}' to '{destination_key}' in bucket '{aws_s3_bucket}'")
+            
+            copy_source = {'Bucket': aws_s3_bucket, 'Key': s3_key_to_manage}
+            s3.copy_object(CopySource=copy_source, Bucket=aws_s3_bucket, Key=destination_key)
+            logger.info(f"Archiving: Successfully copied to '{destination_key}'.")
+
+            s3.delete_object(Bucket=aws_s3_bucket, Key=s3_key_to_manage)
+            logger.info(f"Archiving: Successfully deleted original file '{s3_key_to_manage}'.")
+            
+            return jsonify({"message": f"File '{original_filename}' successfully archived to '{destination_key}'."}), 200
+
+        except s3.exceptions.ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code")
+            if error_code == 'NoSuchKey':
+                logger.error(f"Archive Error: Original file not found at {s3_key_to_manage}. Error: {e}")
+                return jsonify({"error": f"File not found at {s3_key_to_manage}"}), 404
+            else:
+                logger.error(f"Archive Error: S3 ClientError while managing file {s3_key_to_manage}. Error: {e}", exc_info=True)
+                return jsonify({"error": f"S3 operation failed: {error_code}"}), 500
+        except Exception as e:
+            logger.error(f"Archive Error: Unexpected error while archiving {s3_key_to_manage}. Error: {e}", exc_info=True)
+            return jsonify({"error": "An unexpected error occurred during archiving."}), 500
+            
+    elif action_to_perform == "save_as_memory":
+        logger.info(f"Save as Memory action requested for {s3_key_to_manage}. Agent: {agent_name_param}, Event: {event_id_param}")
+        # Placeholder for future implementation
+        # 1. Call summarization service (utils/transcript_summarizer.py -> generate_transcript_summary)
+        # 2. If summarization successful and JSON summary saved to S3:
+        #    Move original transcript to `.../transcripts/saved/{original_filename}`
+        #    (similar S3 copy & delete logic as "archive")
+        return jsonify({"message": f"Save as Memory action for {s3_key_to_manage} received, summarization logic pending."}), 501 # Not Implemented
+    
+    return jsonify({"error": f"Unsupported action: {action_to_perform}"}), 400
 
 @app.route('/api/s3/download', methods=['GET'])
 @supabase_auth_required(agent_required=False)
