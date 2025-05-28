@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import threading 
 import time
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta # Ensure datetime, timezone, timedelta are imported
 import urllib.parse 
 from functools import wraps 
 from typing import Optional, List, Dict, Any, Tuple, Union 
@@ -838,6 +838,10 @@ def transcribe_uploaded_file(user: SupabaseUser):
             logger.info(f"Saving uploaded file temporarily to: {temp_filepath}")
             file.save(temp_filepath)
 
+            # Get agent_name from form data
+            agent_name_from_form = request.form.get('agent_name', 'UnknownAgent')
+            logger.info(f"Agent name from form for header: {agent_name_from_form}")
+
             openai_api_key = os.getenv('OPENAI_API_KEY')
             if not openai_api_key:
                 logger.error("OpenAI API key not found for transcription service.")
@@ -852,10 +856,24 @@ def transcribe_uploaded_file(user: SupabaseUser):
             )
 
             if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
-                full_transcript = transcription_data['text']
+                full_transcript_text = transcription_data['text']
                 segments = transcription_data['segments']
-                logger.info(f"Transcription successful for {temp_filepath}. Text Length: {len(full_transcript)}, Segments: {len(segments)}")
-                return jsonify({"transcript": full_transcript, "segments": segments}), 200
+
+                # Construct header
+                user_name = user.user_metadata.get('full_name', user.email if user.email else 'UnknownUser')
+                upload_timestamp_utc = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+                
+                header = (
+                    f"# Transcript - Uploaded\n"
+                    f"Agent: {agent_name_from_form}\n"
+                    f"User: {user_name}\n"
+                    f"Transcript Uploaded (UTC): {upload_timestamp_utc}\n\n"
+                )
+                
+                final_transcript_with_header = header + full_transcript_text
+                
+                logger.info(f"Transcription successful for {temp_filepath}. Header added. Total Text Length (with header): {len(final_transcript_with_header)}, Segments: {len(segments)}")
+                return jsonify({"transcript": final_transcript_with_header, "segments": segments}), 200
             else:
                 error_msg = "Transcription failed or returned incomplete data (missing text or segments)."
                 detailed_error_info = "No specific error details from service."
