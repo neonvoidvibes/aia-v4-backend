@@ -146,7 +146,7 @@ def _transcribe_audio_segment_openai(
             # === END DYNAMIC MIME TYPE DETECTION ===
 
             max_retries = 3
-            transcription_timeout = 60 
+            transcription_timeout = 900 # Increased from 60 to 900 (15 minutes)
             for attempt in range(max_retries):
                 try:
                     logger.info(f"Attempting transcription for {audio_file_path} (attempt {attempt + 1})...")
