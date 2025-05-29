@@ -12,4 +12,5 @@ anthropic_api_key.txt
 /venv
 __pycache__/
 *.pyc
-claude_chat.log
+claude_chat.logapi_server.log
+*.log
