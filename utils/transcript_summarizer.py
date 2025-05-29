@@ -115,7 +115,7 @@ def generate_transcript_summary(
     event_id: str,
     source_s3_key: str,
     llm_client: Anthropic,
-    model_name: str = "claude-3-sonnet-20250514", # Use the specified model
+    model_name: Optional[str] = None, # Allows override if passed
     max_tokens: int = 4000
 ) -> Optional[Dict[str, Any]]:
     """
@@ -136,8 +136,11 @@ def generate_transcript_summary(
         current_utc_timestamp=current_utc_timestamp
     )
 
+    # Use explicitly passed model_name, then SUMMARY_LLM_MODEL_NAME, then the requested default
+    final_model_name = model_name or os.getenv("SUMMARY_LLM_MODEL_NAME", "claude-sonnet-4-20250514")
+
     try:
-        logger.info(f"Generating summary for '{original_filename}'. Agent: {agent_name}, Event: {event_id}. Prompt length (approx): {len(prompt_content)}")
+        logger.info(f"Generating summary for '{original_filename}' using model '{final_model_name}'. Agent: {agent_name}, Event: {event_id}. Prompt length (approx): {len(prompt_content)}")
         # Note: We use the system parameter for the main instructions here,
         # and the user message is just the transcript content itself, prefixed by the context.
         # This aligns better with how Claude models are often used for structured data extraction.
@@ -147,7 +150,7 @@ def generate_transcript_summary(
         # The actual "system" part of the Claude API call can be minimal or reinforce its role.
 
         response = llm_client.messages.create(
-            model=model_name,
+            model=final_model_name,
             max_tokens=max_tokens,
             system="You are an AI assistant specialized in analyzing meeting transcripts and extracting structured insights into JSON format. Follow the user's instructions precisely and output ONLY valid JSON.",
             messages=[
