@@ -474,17 +474,19 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
                         continue # Skip non-JSON files
 
                     filename = os.path.basename(s3_key)
-                    logger.debug(f"Reading summary file: {s3_key}")
+                    logger.info(f"Processing summary candidate file: {s3_key}") # Changed from debug to info
                     try:
                         summary_content_str = read_file_content(s3_key, f"summary file {filename}")
                         if summary_content_str:
+                            logger.debug(f"Successfully read content for {s3_key}, length {len(summary_content_str)}")
                             summary_data = json.loads(summary_content_str)
                             # Add filename to the summary data itself for easier reference later
                             if 'metadata' in summary_data and isinstance(summary_data['metadata'], dict):
                                 summary_data['metadata']['summary_filename'] = filename
-                            else: # if no metadata key or it's not a dict, create it
+                            else:
                                 summary_data['metadata'] = {'summary_filename': filename}
                             parsed_summaries.append(summary_data)
+                            logger.info(f"Successfully parsed and added summary from {filename} to list. Current total parsed: {len(parsed_summaries)}")
                         else:
                             logger.warning(f"Empty content for summary file: {s3_key}")
                     except json.JSONDecodeError as e_json:

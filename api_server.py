@@ -1257,10 +1257,15 @@ def handle_chat(user: SupabaseUser):
                     # Assuming summary_doc is the parsed JSON content
                     summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
                     summaries_context_str += f"### Summary: {summary_filename}\n"
-                    summaries_context_str += json.dumps(summary_doc, indent=2, ensure_ascii=False) # Send full JSON content
+                    summaries_context_str += json.dumps(summary_doc, indent=2, ensure_ascii=False)
                     summaries_context_str += "\n\n"
-                final_system_prompt = summaries_context_str + final_system_prompt # Prepend summaries to the system prompt
-                logger.debug(f"Prepended {len(summaries)} summaries to system prompt. New total length: {len(final_system_prompt)}")
+                
+                logger.debug(f"Constructed summaries_context_str (first 1000 chars): {summaries_context_str[:1000]}...")
+                logger.debug(f"Constructed summaries_context_str (last 500 chars): ...{summaries_context_str[-500:]}")
+                logger.info(f"Total length of summaries_context_str: {len(summaries_context_str)}")
+
+                final_system_prompt = summaries_context_str + final_system_prompt
+                logger.info(f"Prepended {len(summaries)} summaries to system prompt. New total length: {len(final_system_prompt)}") # Changed from debug to info
             else:
                 logger.info(f"No saved transcript summaries found for agent '{agent_name}', event '{event_id}'.")
         except Exception as e_sum:
