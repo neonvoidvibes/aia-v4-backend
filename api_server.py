@@ -506,9 +506,20 @@ def summarize_transcript_route(user: SupabaseUser):
             return jsonify({"error": "Failed to generate transcript summary using LLM"}), 500
 
         # 3. Save summary JSON to S3
-        base_name_no_ext, _ = os.path.splitext(original_filename)
-        summary_filename = f"{base_name_no_ext}_summary.json"
-        summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/summarized/{summary_filename}"
+        # New filename convention: summary_{original_transcript_main_part}.json
+        # Example: if original is "transcript_D20250519-T075616_...sID-xyz.txt"
+        # summary will be "summary_D20250519-T075616_...sID-xyz.json"
+        
+        original_base, _ = os.path.splitext(original_filename) # e.g., "transcript_D2025...sID-xyz"
+        if original_base.startswith("transcript_"):
+            summary_base_name = original_base[len("transcript_"):] # e.g., "D2025...sID-xyz"
+        else:
+            summary_base_name = original_base # Fallback if "transcript_" prefix is missing
+            
+        summary_filename = f"summary_{summary_base_name}.json"
+        
+        # Corrected path: include /transcripts/ before /summarized/
+        summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/{summary_filename}"
         
         try:
             summary_json_string = json.dumps(summary_data, indent=2, ensure_ascii=False)
