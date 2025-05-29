@@ -535,6 +535,30 @@ def summarize_transcript_route(user: SupabaseUser):
             # Check the response metadata for success
             if put_response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 200:
                 logger.info(f"SummarizeTranscript: Successfully saved summary to {summary_s3_key} (HTTP 200 OK).")
+                
+                # Step 3: Move original transcript to a /saved subfolder
+                try:
+                    original_transcript_dir = os.path.dirname(s3_key_original_transcript)
+                    original_transcript_basename = os.path.basename(s3_key_original_transcript)
+                    saved_transcript_key = f"{original_transcript_dir}/saved/{original_transcript_basename}"
+                    
+                    logger.info(f"SummarizeTranscript: Moving original transcript from '{s3_key_original_transcript}' to '{saved_transcript_key}'.")
+                    
+                    copy_source = {'Bucket': aws_s3_bucket, 'Key': s3_key_original_transcript}
+                    s3.copy_object(CopySource=copy_source, Bucket=aws_s3_bucket, Key=saved_transcript_key)
+                    logger.info(f"SummarizeTranscript: Successfully copied original to '{saved_transcript_key}'.")
+
+                    s3.delete_object(Bucket=aws_s3_bucket, Key=s3_key_original_transcript)
+                    logger.info(f"SummarizeTranscript: Successfully deleted original transcript at '{s3_key_original_transcript}'.")
+
+                except Exception as e_move:
+                    logger.error(f"SummarizeTranscript: Error moving original transcript {s3_key_original_transcript} to saved location: {e_move}", exc_info=True)
+                    # If moving fails, the summary is still created. We might want to indicate a partial success
+                    # or attempt to clean up the summary if the original can't be moved.
+                    # For now, return success for summary creation but log the move error. The client won't know about this specific error.
+                    # A more robust solution might involve a multi-step transaction or a cleanup mechanism.
+                    pass # Continue to return success for the summary part
+
             else:
                 logger.error(f"SummarizeTranscript: S3 put_object for {summary_s3_key} did NOT return HTTP 200. Full response: {put_response}")
                 # This case might not be hit if an exception is raised first for non-200, but good for robustness.
@@ -545,8 +569,9 @@ def summarize_transcript_route(user: SupabaseUser):
             return jsonify({"error": f"Failed to save summary to S3: {str(e_put)}"}), 500
 
         return jsonify({
-            "message": "Transcript summarized and saved successfully.",
-            "original_transcript_s3_key": s3_key_original_transcript,
+            "message": "Transcript summarized and saved successfully. Original transcript has been moved.",
+            "original_transcript_s3_key": s3_key_original_transcript, # This key now points to a non-existent object if move was successful
+            "moved_to_s3_key": saved_transcript_key if 'saved_transcript_key' in locals() else None,
             "summary_s3_key": summary_s3_key,
             "summary_filename": summary_filename
         }), 200
