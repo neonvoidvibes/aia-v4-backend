@@ -93,85 +93,46 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
         logger.error("read_new_transcript_content: AWS_S3_BUCKET not set.")
         return None, False
 
-    # --- Initial Full Load Logic ---
-    if state.initial_full_transcript_content is None and state.current_latest_key is None : # Check if initial load has not been performed yet
-        logger.info(f"Performing initial full transcript load for agent '{agent_name}', event '{event_id}'...")
+    # --- Initial Full Load Logic for "Listen: Latest" mode ---
+    if state.initial_full_transcript_content is None and state.current_latest_key is None:
+        logger.info(f"Performing initial load for 'Listen: Latest' mode for agent '{agent_name}', event '{event_id}'...")
         
-        base_prefix = f'organizations/river/agents/{agent_name}/events/{event_id}/transcripts/'
-        
-        all_transcript_objects_metadata: List[Dict[str, Any]] = []
+        latest_key_for_initial_load = get_latest_transcript_file(agent_name, event_id, s3)
+
+        if not latest_key_for_initial_load:
+            logger.info(f"Initial Latest Load: No transcript file found for agent '{agent_name}', event '{event_id}' (Mode: {TRANSCRIPT_MODE}).")
+            state.initial_full_transcript_content = "__LOAD_ATTEMPTED_NO_FILES__"
+            state.current_latest_key = f"__INITIAL_LOAD_LATEST_COMPLETE_NO_FILES_FOR_{agent_name}_{event_id}__"
+            return None, True # True because an initial load attempt was made
+
         try:
-            paginator = s3.get_paginator('list_objects_v2')
-            logger.debug(f"Initial load: Listing S3 objects with prefix: {base_prefix}")
-            for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_prefix):
-                if 'Contents' in page:
-                    for obj in page['Contents']:
-                        key = obj['Key']
-                        if key.startswith(base_prefix) and key != base_prefix and key.endswith('.txt'):
-                            relative_path = key[len(base_prefix):]
-                            if '/' not in relative_path: 
-                                filename = os.path.basename(key)
-                                is_rolling = filename.startswith('rolling-')
-                                if (TRANSCRIPT_MODE == 'rolling' and is_rolling) or \
-                                   (TRANSCRIPT_MODE == 'regular' and not is_rolling):
-                                    all_transcript_objects_metadata.append(obj)
-        except Exception as e:
-            logger.error(f"Initial load: Error listing S3 objects for {base_prefix}: {e}", exc_info=True)
-            state.initial_full_transcript_content = "__LOAD_ATTEMPTED_S3_ERROR__" # Mark attempt
-            return None, True 
+            s3_metadata_initial = s3.head_object(Bucket=aws_s3_bucket, Key=latest_key_for_initial_load)
+            s3_size_initial = s3_metadata_initial['ContentLength']
+            s3_mod_time_initial_utc = s3_metadata_initial['LastModified']
 
-        if not all_transcript_objects_metadata:
-            logger.info(f"Initial load: No transcript files found for agent '{agent_name}', event '{event_id}' (Mode: {TRANSCRIPT_MODE}).")
-            state.initial_full_transcript_content = "__LOAD_ATTEMPTED_NO_FILES__" # Mark attempt
-            state.current_latest_key = f"__INITIAL_LOAD_COMPLETE_NO_FILES_FOR_{agent_name}_{event_id}__" # Keep this for delta logic
-            return None, True 
+            logger.debug(f"Initial Latest Load: Reading full content of {latest_key_for_initial_load} (Size: {s3_size_initial}, Modified: {s3_mod_time_initial_utc})")
+            response_initial = s3.get_object(Bucket=aws_s3_bucket, Key=latest_key_for_initial_load)
+            file_content_bytes_initial = response_initial['Body'].read()
+            file_content_str_initial = file_content_bytes_initial.decode('utf-8', errors='replace')
             
-        all_transcript_objects_metadata.sort(key=lambda x: x['LastModified'])
-        logger.info(f"Initial load: Found {len(all_transcript_objects_metadata)} transcript files to process.")
+            filename_initial = os.path.basename(latest_key_for_initial_load)
+            labeled_content_initial = f"(Source File: {filename_initial})\n{file_content_str_initial}"
+            
+            state.initial_full_transcript_content = labeled_content_initial
+            state.current_latest_key = latest_key_for_initial_load
+            state.file_positions[latest_key_for_initial_load] = s3_size_initial # Mark as fully read
+            state.last_modified[latest_key_for_initial_load] = s3_mod_time_initial_utc
+            
+            logger.info(f"Initial Latest Load: Completed. Content length: {len(labeled_content_initial)} chars. Latest key set to: {state.current_latest_key}")
+            return labeled_content_initial, True # Return the loaded content and True for was_initial_load_attempt
 
-        combined_content_parts = []
-        actual_latest_file_key_from_all: Optional[str] = None
-        actual_latest_mod_time: Optional[datetime] = None 
+        except Exception as e:
+            logger.error(f"Initial Latest Load: Error reading or processing file {latest_key_for_initial_load}: {e}", exc_info=True)
+            state.initial_full_transcript_content = "__LOAD_ATTEMPTED_S3_ERROR__"
+            return None, True # True because an initial load attempt was made
 
-        for s3_obj in all_transcript_objects_metadata:
-            key = s3_obj['Key']
-            s3_size = s3_obj.get('Size', 0) 
-            s3_mod_time_utc = s3_obj['LastModified'] 
 
-            try:
-                logger.debug(f"Initial load: Reading full content of {key} (Size: {s3_size}, Modified: {s3_mod_time_utc})")
-                response = s3.get_object(Bucket=aws_s3_bucket, Key=key)
-                file_content_bytes = response['Body'].read()
-                file_content_str = file_content_bytes.decode('utf-8', errors='replace') 
-                
-                filename = os.path.basename(key)
-                labeled_content = f"(Source File: {filename})\n{file_content_str}"
-                combined_content_parts.append(labeled_content)
-
-                state.file_positions[key] = s3_size # Mark as fully read
-                state.last_modified[key] = s3_mod_time_utc
-
-                if actual_latest_mod_time is None or s3_mod_time_utc > actual_latest_mod_time:
-                    actual_latest_mod_time = s3_mod_time_utc
-                    actual_latest_file_key_from_all = key
-                
-            except Exception as e:
-                logger.error(f"Initial load: Error reading or processing file {key}: {e}", exc_info=True)
-
-        state.current_latest_key = actual_latest_file_key_from_all # Set after processing all
-        
-        if not combined_content_parts:
-            logger.info(f"Initial load: No content aggregated from files for agent '{agent_name}', event '{event_id}'.")
-            state.initial_full_transcript_content = "__LOAD_ATTEMPTED_EMPTY_CONTENT__" # Mark attempt
-            return None, True 
-        
-        final_content = "\n\n".join(combined_content_parts)
-        state.initial_full_transcript_content = final_content # Store it
-        logger.info(f"Initial load completed and stored. Total content length: {len(final_content)} chars. Latest key set to: {state.current_latest_key}")
-        return final_content, True # Return the loaded content and True for was_initial_load_attempt
-
-    # --- Delta Load Logic ---
-    # This part executes if initial_full_transcript_content is already set (meaning initial load was done or attempted).
+    # --- Delta Load Logic (executes if initial_full_transcript_content is already set) ---
     latest_key_on_s3 = get_latest_transcript_file(agent_name, event_id, s3)
     
     if not latest_key_on_s3:

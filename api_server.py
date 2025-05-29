@@ -1303,10 +1303,13 @@ def handle_chat(user: SupabaseUser):
                     logger.info(f"New TranscriptState created for {agent_name}/{event_id}")
                 current_transcript_state = transcript_state_cache[state_key]
                 
-                logger.debug(f"Resetting cached initial_full_transcript_content and current_latest_key for {agent_name}/{event_id} before S3 read.")
-                current_transcript_state.initial_full_transcript_content = None
-                current_transcript_state.current_latest_key = None
-            
+                # Removed the reset of initial_full_transcript_content and current_latest_key here.
+                # These should persist across requests for 'latest' mode to correctly track deltas
+                # and avoid re-reading all historical transcripts unnecessarily on each turn.
+                # An explicit "new chat" action on the frontend should clear this server-side state if needed,
+                # or a new (agent_name, event_id) key will naturally get a fresh TranscriptState.
+                logger.debug(f"Using existing/new TranscriptState for {agent_name}/{event_id} for 'latest' mode.")
+
             try:
                 transcript_data_from_s3, was_initial_load_attempt = read_new_transcript_content(
                     current_transcript_state, agent_name, event_id
