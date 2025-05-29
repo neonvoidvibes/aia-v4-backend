@@ -22,7 +22,7 @@ from gotrue.errors import AuthApiError
 from gotrue.types import User as SupabaseUser 
 
 from utils.retrieval_handler import RetrievalHandler
-from utils.transcript_utils import TranscriptState, read_new_transcript_content 
+from utils.transcript_utils import TranscriptState, read_new_transcript_content, read_all_transcripts_in_folder
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
