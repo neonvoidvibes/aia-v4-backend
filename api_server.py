@@ -511,16 +511,27 @@ def summarize_transcript_route(user: SupabaseUser):
         summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/summarized/{summary_filename}"
         
         try:
-            s3.put_object(
+            logger.info(f"SummarizeTranscript: Attempting to save summary. Bucket: '{aws_s3_bucket}', Key: '{summary_s3_key}', ContentType: 'application/json; charset=utf-8'")
+            summary_json_string = json.dumps(summary_data, indent=2, ensure_ascii=False)
+            put_response = s3.put_object(
                 Bucket=aws_s3_bucket,
                 Key=summary_s3_key,
-                Body=json.dumps(summary_data, indent=2, ensure_ascii=False).encode('utf-8'),
+                Body=summary_json_string.encode('utf-8'),
                 ContentType='application/json; charset=utf-8'
             )
-            logger.info(f"SummarizeTranscript: Successfully saved summary to {summary_s3_key}")
+            logger.info(f"SummarizeTranscript: S3 put_object response: {put_response}")
+            
+            # Check the response metadata for success
+            if put_response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 200:
+                logger.info(f"SummarizeTranscript: Successfully saved summary to {summary_s3_key} (HTTP 200 OK).")
+            else:
+                logger.error(f"SummarizeTranscript: S3 put_object for {summary_s3_key} did NOT return HTTP 200. Full response: {put_response}")
+                # This case might not be hit if an exception is raised first for non-200, but good for robustness.
+                return jsonify({"error": "Failed to save summary to S3 - S3 returned non-200 status."}), 500
+                
         except Exception as e_put:
-            logger.error(f"SummarizeTranscript: Failed to save summary JSON to S3 at {summary_s3_key}: {e_put}", exc_info=True)
-            return jsonify({"error": "Failed to save summary to S3"}), 500
+            logger.error(f"SummarizeTranscript: Exception during S3 put_object for {summary_s3_key}: {e_put}", exc_info=True)
+            return jsonify({"error": f"Failed to save summary to S3: {str(e_put)}"}), 500
 
         return jsonify({
             "message": "Transcript summarized and saved successfully.",
