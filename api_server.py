@@ -511,8 +511,8 @@ def summarize_transcript_route(user: SupabaseUser):
         summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/summarized/{summary_filename}"
         
         try:
-            logger.info(f"SummarizeTranscript: Attempting to save summary. Bucket: '{aws_s3_bucket}', Key: '{summary_s3_key}', ContentType: 'application/json; charset=utf-8'")
             summary_json_string = json.dumps(summary_data, indent=2, ensure_ascii=False)
+            logger.info(f"SummarizeTranscript: Attempting to save summary. Bucket: '{aws_s3_bucket}', Key: '{summary_s3_key}', ContentType: 'application/json; charset=utf-8', JSON_String_Length: {len(summary_json_string)}")
             put_response = s3.put_object(
                 Bucket=aws_s3_bucket,
                 Key=summary_s3_key,
