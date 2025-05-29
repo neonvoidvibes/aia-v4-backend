@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import re # Added missing import
 from typing import Optional, Dict, Any
 from anthropic import Anthropic, APIError
 from datetime import datetime, timezone
@@ -167,22 +168,36 @@ def generate_transcript_summary(
         logger.debug(f"Raw LLM output for summary (first 500 chars): {raw_llm_output[:500]}...")
 
         # Attempt to parse the JSON
-        # The prompt strongly asks for ONLY JSON, so we expect the entire output to be parseable.
+        # LLMs sometimes wrap JSON in markdown code blocks (```json ... ```)
+        # or might have leading/trailing text despite instructions.
+        
+        cleaned_llm_output = raw_llm_output.strip()
+        if cleaned_llm_output.startswith("```json"):
+            cleaned_llm_output = cleaned_llm_output[len("```json"):]
+        if cleaned_llm_output.startswith("```"): # Catch if it's just ```
+            cleaned_llm_output = cleaned_llm_output[len("```"):]
+        if cleaned_llm_output.endswith("```"):
+            cleaned_llm_output = cleaned_llm_output[:-len("```")]
+        
+        cleaned_llm_output = cleaned_llm_output.strip()
+
         try:
-            summary_data = json.loads(raw_llm_output)
+            summary_data = json.loads(cleaned_llm_output)
+            logger.info("Successfully parsed JSON directly after cleaning.")
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode JSON from LLM response: {e}. Raw response: {raw_llm_output[:1000]}")
-            # Attempt to find JSON within common LLM output artifacts (like ```json ... ```)
-            match = re.search(r"```json\s*(\{.*?\})\s*```", raw_llm_output, re.DOTALL | re.IGNORECASE)
+            logger.error(f"Failed to decode cleaned JSON from LLM response: {e}. Cleaned response sample: {cleaned_llm_output[:500]}...")
+            # If direct parsing fails, try the regex again as a more specific fallback for ```json { ... } ```
+            match = re.search(r"(\{.*?\})", cleaned_llm_output, re.DOTALL) # More general regex to find first { to last }
             if match:
-                logger.info("Found JSON block within markdown, attempting to parse that.")
+                logger.info("Attempting to parse extracted JSON block using regex.")
                 try:
                     summary_data = json.loads(match.group(1))
+                    logger.info("Successfully parsed JSON from regex-extracted block.")
                 except json.JSONDecodeError as e_nested:
-                    logger.error(f"Failed to decode JSON even from extracted block: {e_nested}")
+                    logger.error(f"Failed to decode JSON from regex-extracted block: {e_nested}. Block sample: {match.group(1)[:500]}...")
                     return None
             else:
-                logger.error("No recoverable JSON block found in LLM output.")
+                logger.error("No JSON object found in LLM output even with regex.")
                 return None
         
         # Basic validation of the summary structure
