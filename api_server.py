@@ -28,6 +28,7 @@ from utils.s3_utils import (
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
     list_agent_names_from_s3, list_s3_objects_metadata 
 )
+from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError
@@ -450,6 +451,87 @@ def _finalize_session(session_id: str):
         logger.info(f"Session {session_id} finalized and removed from active sessions.")
     else:
         logger.warning(f"Session {session_id} was already removed from active_sessions before final cleanup phase.")
+
+@app.route('/api/s3/summarize-transcript', methods=['POST'])
+@supabase_auth_required(agent_required=False) # agentName will be in payload
+def summarize_transcript_route(user: SupabaseUser):
+    logger.info(f"Received request /api/s3/summarize-transcript from user: {user.id}")
+    data = request.json
+    s3_key_original_transcript = data.get('s3Key')
+    agent_name = data.get('agentName')
+    event_id = data.get('eventId')
+    original_filename = data.get('originalFilename') # Expecting this from frontend
+
+    if not all([s3_key_original_transcript, agent_name, event_id, original_filename]):
+        missing_params = [
+            k for k, v in {
+                "s3Key": s3_key_original_transcript, "agentName": agent_name,
+                "eventId": event_id, "originalFilename": original_filename
+            }.items() if not v
+        ]
+        logger.error(f"SummarizeTranscript: Missing parameters: {', '.join(missing_params)}")
+        return jsonify({"error": f"Missing required parameters: {', '.join(missing_params)}"}), 400
+
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("SummarizeTranscript: S3 client or bucket not configured.")
+        return jsonify({"error": "S3 service not available"}), 503
+    
+    if not anthropic_client:
+        logger.error("SummarizeTranscript: Anthropic client not initialized.")
+        return jsonify({"error": "LLM service for summarization not available"}), 503
+
+    try:
+        # 1. Read original transcript content
+        from utils.s3_utils import read_file_content as s3_read_content # Local import for clarity
+        transcript_content = s3_read_content(s3_key_original_transcript, f"transcript for summarization ({original_filename})")
+        if transcript_content is None:
+            logger.error(f"SummarizeTranscript: Failed to read original transcript from {s3_key_original_transcript}")
+            return jsonify({"error": "Could not read original transcript from S3"}), 404
+
+        # 2. Generate summary
+        summary_data = generate_transcript_summary(
+            transcript_content=transcript_content,
+            original_filename=original_filename,
+            agent_name=agent_name,
+            event_id=event_id,
+            source_s3_key=s3_key_original_transcript, # Pass the original S3 key
+            llm_client=anthropic_client 
+            # model_name and max_tokens will use defaults in generate_transcript_summary or be overridden by env vars there
+        )
+
+        if summary_data is None:
+            logger.error(f"SummarizeTranscript: Failed to generate summary for {original_filename}")
+            return jsonify({"error": "Failed to generate transcript summary using LLM"}), 500
+
+        # 3. Save summary JSON to S3
+        base_name_no_ext, _ = os.path.splitext(original_filename)
+        summary_filename = f"{base_name_no_ext}_summary.json"
+        summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/summarized/{summary_filename}"
+        
+        try:
+            s3.put_object(
+                Bucket=aws_s3_bucket,
+                Key=summary_s3_key,
+                Body=json.dumps(summary_data, indent=2, ensure_ascii=False).encode('utf-8'),
+                ContentType='application/json; charset=utf-8'
+            )
+            logger.info(f"SummarizeTranscript: Successfully saved summary to {summary_s3_key}")
+        except Exception as e_put:
+            logger.error(f"SummarizeTranscript: Failed to save summary JSON to S3 at {summary_s3_key}: {e_put}", exc_info=True)
+            return jsonify({"error": "Failed to save summary to S3"}), 500
+
+        return jsonify({
+            "message": "Transcript summarized and saved successfully.",
+            "original_transcript_s3_key": s3_key_original_transcript,
+            "summary_s3_key": summary_s3_key,
+            "summary_filename": summary_filename
+        }), 200
+
+    except Exception as e:
+        logger.error(f"SummarizeTranscript: Unexpected error for {original_filename}: {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred during summarization."}), 500
 
 
 @app.route('/api/recording/stop', methods=['POST'])
