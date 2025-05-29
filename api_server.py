@@ -26,7 +26,7 @@ from utils.transcript_utils import TranscriptState, read_new_transcript_content
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
-    list_agent_names_from_s3, list_s3_objects_metadata 
+    list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries # Added get_transcript_summaries
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.pinecone_utils import init_pinecone
@@ -1247,6 +1247,26 @@ def handle_chat(user: SupabaseUser):
             rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable for this turn.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block 
         
+        # Fetch and prepend saved transcript summaries
+        try:
+            summaries = get_transcript_summaries(agent_name, event_id)
+            if summaries:
+                logger.info(f"Found {len(summaries)} saved transcript summaries for agent '{agent_name}', event '{event_id}'.")
+                summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
+                for summary_doc in summaries:
+                    # Assuming summary_doc is the parsed JSON content
+                    summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
+                    summaries_context_str += f"### Summary: {summary_filename}\n"
+                    summaries_context_str += json.dumps(summary_doc, indent=2, ensure_ascii=False) # Send full JSON content
+                    summaries_context_str += "\n\n"
+                final_system_prompt = summaries_context_str + final_system_prompt # Prepend summaries to the system prompt
+                logger.debug(f"Prepended {len(summaries)} summaries to system prompt. New total length: {len(final_system_prompt)}")
+            else:
+                logger.info(f"No saved transcript summaries found for agent '{agent_name}', event '{event_id}'.")
+        except Exception as e_sum:
+            logger.error(f"Error fetching or processing transcript summaries: {e_sum}", exc_info=True)
+            # Continue without summaries if there's an error
+            
         state_key = (agent_name, event_id)
         with transcript_state_lock:
             if state_key not in transcript_state_cache: 

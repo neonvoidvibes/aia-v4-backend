@@ -447,3 +447,55 @@ def list_agent_names_from_s3() -> Optional[List[str]]:
     except Exception as e:
         logger.error(f"Error listing agent directories in S3 prefix '{base_prefix}': {e}", exc_info=True)
         return None
+
+def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, Any]]:
+    """
+    Fetches and parses all JSON transcript summaries for a given agent and event.
+    Returns a list of dictionaries, where each dictionary is a parsed JSON summary.
+    Includes filename in the returned metadata for each summary.
+    """
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("S3 client or bucket not available for fetching transcript summaries.")
+        return []
+
+    summaries_prefix = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/"
+    logger.info(f"Fetching transcript summaries from S3 prefix: {summaries_prefix}")
+    
+    parsed_summaries = []
+    try:
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=summaries_prefix):
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    s3_key = obj['Key']
+                    if not s3_key.endswith('.json'):
+                        continue # Skip non-JSON files
+
+                    filename = os.path.basename(s3_key)
+                    logger.debug(f"Reading summary file: {s3_key}")
+                    try:
+                        summary_content_str = read_file_content(s3_key, f"summary file {filename}")
+                        if summary_content_str:
+                            summary_data = json.loads(summary_content_str)
+                            # Add filename to the summary data itself for easier reference later
+                            if 'metadata' in summary_data and isinstance(summary_data['metadata'], dict):
+                                summary_data['metadata']['summary_filename'] = filename
+                            else: # if no metadata key or it's not a dict, create it
+                                summary_data['metadata'] = {'summary_filename': filename}
+                            parsed_summaries.append(summary_data)
+                        else:
+                            logger.warning(f"Empty content for summary file: {s3_key}")
+                    except json.JSONDecodeError as e_json:
+                        logger.error(f"Failed to parse JSON for summary file {s3_key}: {e_json}")
+                    except Exception as e_read:
+                        logger.error(f"Failed to read or process summary file {s3_key}: {e_read}")
+        
+        logger.info(f"Fetched and parsed {len(parsed_summaries)} transcript summaries for {agent_name}/{event_id}.")
+        # Optional: Sort summaries, e.g., by a timestamp within their metadata if available
+        # For now, returning in S3 list order.
+        return parsed_summaries
+    except Exception as e:
+        logger.error(f"Error listing or fetching transcript summaries from '{summaries_prefix}': {e}", exc_info=True)
+        return []
