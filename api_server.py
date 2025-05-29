@@ -1178,8 +1178,11 @@ def handle_chat(user: SupabaseUser):
             return jsonify({"error": "Missing 'messages'"}), 400
         agent_name = data.get('agent') 
         event_id = data.get('event', '0000')
+        transcript_listen_mode = data.get('transcriptListenMode', 'latest') # Default to 'latest'
+        saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled') # Default to 'disabled'
         chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) 
-        logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id} by User: {user.id}")
+        logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
+        logger.info(f"Settings - Transcript Listen: {transcript_listen_mode}, Saved Memory: {saved_transcript_memory_mode}")
         
         incoming_messages = data['messages']
         llm_messages_from_client = [{"role": msg["role"], "content": msg["content"]} 
@@ -1247,89 +1250,122 @@ def handle_chat(user: SupabaseUser):
             rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable for this turn.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block 
         
-        # Fetch and prepend saved transcript summaries
-        try:
-            summaries = get_transcript_summaries(agent_name, event_id)
-            if summaries:
-                logger.info(f"Found {len(summaries)} saved transcript summaries for agent '{agent_name}', event '{event_id}'.")
-                summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
-                for summary_doc in summaries:
-                    # Assuming summary_doc is the parsed JSON content
-                    summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
-                    summaries_context_str += f"### Summary: {summary_filename}\n"
-                    summaries_context_str += json.dumps(summary_doc, indent=2, ensure_ascii=False)
-                    summaries_context_str += "\n\n"
-                
-                logger.debug(f"Constructed summaries_context_str (first 1000 chars): {summaries_context_str[:1000]}...")
-                logger.debug(f"Constructed summaries_context_str (last 500 chars): ...{summaries_context_str[-500:]}")
-                logger.info(f"Total length of summaries_context_str: {len(summaries_context_str)}")
-
-                final_system_prompt = summaries_context_str + final_system_prompt
-                logger.info(f"Prepended {len(summaries)} summaries to system prompt. New total length: {len(final_system_prompt)}") # Changed from debug to info
-            else:
-                logger.info(f"No saved transcript summaries found for agent '{agent_name}', event '{event_id}'.")
-        except Exception as e_sum:
-            logger.error(f"Error fetching or processing transcript summaries: {e_sum}", exc_info=True)
-            # Continue without summaries if there's an error
+        # Fetch and prepend saved transcript summaries if mode is 'enabled'
+        if saved_transcript_memory_mode == 'enabled':
+            try:
+                summaries = get_transcript_summaries(agent_name, event_id)
+                if summaries:
+                    logger.info(f"Saved Memory Enabled: Found {len(summaries)} transcript summaries for agent '{agent_name}', event '{event_id}'.")
+                    summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
+                    for summary_doc in summaries:
+                        summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
+                        summaries_context_str += f"### Summary: {summary_filename}\n"
+                        summaries_context_str += json.dumps(summary_doc, indent=2, ensure_ascii=False)
+                        summaries_context_str += "\n\n"
+                    
+                    logger.debug(f"Constructed summaries_context_str (first 1000 chars): {summaries_context_str[:1000]}...")
+                    final_system_prompt = summaries_context_str + final_system_prompt
+                    logger.info(f"Prepended {len(summaries)} summaries to system prompt. New total length: {len(final_system_prompt)}")
+                else:
+                    logger.info(f"Saved Memory Enabled: No transcript summaries found for agent '{agent_name}', event '{event_id}'.")
+            except Exception as e_sum:
+                logger.error(f"Error fetching or processing transcript summaries: {e_sum}", exc_info=True)
+        else:
+            logger.info("Saved Transcript Memory mode is disabled. Skipping summary loading.")
             
-        state_key = (agent_name, event_id)
-        with transcript_state_lock:
-            if state_key not in transcript_state_cache: 
-                transcript_state_cache[state_key] = TranscriptState()
-                logger.info(f"New TranscriptState created for {agent_name}/{event_id}")
-            current_transcript_state = transcript_state_cache[state_key]
-            
-            logger.debug(f"Resetting cached initial_full_transcript_content and current_latest_key for {agent_name}/{event_id} before S3 read.")
-            current_transcript_state.initial_full_transcript_content = None
-            current_transcript_state.current_latest_key = None 
-        
-        try:
-            transcript_data_from_s3, was_initial_load_attempt = read_new_transcript_content(
-                current_transcript_state, agent_name, event_id
-            )
-            
-            if current_transcript_state.initial_full_transcript_content and \
-               not current_transcript_state.initial_full_transcript_content.startswith("__LOAD_ATTEMPTED"): 
-                initial_transcript_message_content = (
-                    f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
-                    f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
-                    f"=== BEGIN FULL MEETING TRANSCRIPT ===\n"
-                    f"{current_transcript_state.initial_full_transcript_content}\n"
-                    f"=== END FULL MEETING TRANSCRIPT ==="
+        # Transcript loading based on transcript_listen_mode
+        if transcript_listen_mode == 'all':
+            logger.info(f"Transcript Listen Mode 'all': Reading all transcripts for {agent_name}/{event_id}.")
+            all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
+            if all_transcripts_content:
+                full_transcript_message_content = (
+                    f"IMPORTANT CONTEXT: The following is the FULL transcript history for this meeting, provided because 'Listen: All' mode is active.\n\n"
+                    f"=== BEGIN ALL TRANSCRIPTS FOR THIS TURN ===\n"
+                    f"{all_transcripts_content}\n"
+                    f"=== END ALL TRANSCRIPTS FOR THIS TURN ==="
                 )
-                final_llm_messages.append({'role': 'user', 'content': initial_transcript_message_content})
-                logger.info(f"Prepended freshly loaded full transcript (length {len(current_transcript_state.initial_full_transcript_content)}) to current API call's messages.")
-
+                # Prepend this single block of all transcripts to the user messages that will be sent to LLM
+                # This ensures it's part of the immediate conversational context for this turn.
+                final_llm_messages.append({'role': 'user', 'content': full_transcript_message_content})
+                logger.info(f"Prepended all transcript content (length {len(all_transcripts_content)}) to messages due to 'Listen: All' mode.")
+            else:
+                logger.info(f"Transcript Listen Mode 'all': No transcript content found for {agent_name}/{event_id}.")
+            
+            # Extend with client messages after adding all transcripts
             final_llm_messages.extend(llm_messages_from_client)
 
-            if transcript_data_from_s3 and not was_initial_load_attempt: 
-                label = "[Meeting Transcript Update (from S3)]" 
-                transcript_delta_to_add = f"{label}\n{transcript_data_from_s3}"
+        elif transcript_listen_mode == 'latest': # Default behavior
+            logger.info(f"Transcript Listen Mode 'latest': Using delta/stateful transcript loading for {agent_name}/{event_id}.")
+            state_key = (agent_name, event_id)
+            with transcript_state_lock:
+                if state_key not in transcript_state_cache:
+                    transcript_state_cache[state_key] = TranscriptState()
+                    logger.info(f"New TranscriptState created for {agent_name}/{event_id}")
+                current_transcript_state = transcript_state_cache[state_key]
                 
-                insert_idx_for_delta = len(final_llm_messages) 
-                for i in range(len(final_llm_messages) - 1, -1, -1):
-                    msg_content_iter = final_llm_messages[i]['content']
-                    is_prog_initial_load_msg = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
-                    is_prog_delta_update_msg = msg_content_iter.startswith("[Meeting Transcript Update (from S3)]")
-                    
-                    if final_llm_messages[i]['role'] == 'user' and not is_prog_initial_load_msg and not is_prog_delta_update_msg:
-                        insert_idx_for_delta = i
-                        break
-                
-                if insert_idx_for_delta == len(final_llm_messages) and final_llm_messages and \
-                   final_llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:"):
-                    insert_idx_for_delta = 1
-
-                final_llm_messages.insert(insert_idx_for_delta, {'role': 'user', 'content': transcript_delta_to_add})
-                logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at effective index {insert_idx_for_delta} (this indicates growth during API call processing).")
+                logger.debug(f"Resetting cached initial_full_transcript_content and current_latest_key for {agent_name}/{event_id} before S3 read.")
+                current_transcript_state.initial_full_transcript_content = None
+                current_transcript_state.current_latest_key = None
             
-            elif not transcript_data_from_s3 and was_initial_load_attempt:
-                 logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data, or was already processed as initial.")
-            elif not transcript_data_from_s3 and not was_initial_load_attempt:
-                 logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn (after initial load).")
+            try:
+                transcript_data_from_s3, was_initial_load_attempt = read_new_transcript_content(
+                    current_transcript_state, agent_name, event_id
+                )
+                
+                if current_transcript_state.initial_full_transcript_content and \
+                   not current_transcript_state.initial_full_transcript_content.startswith("__LOAD_ATTEMPTED"):
+                    initial_transcript_message_content = (
+                        f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
+                        f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
+                        f"=== BEGIN FULL MEETING TRANSCRIPT ===\n"
+                        f"{current_transcript_state.initial_full_transcript_content}\n"
+                        f"=== END FULL MEETING TRANSCRIPT ==="
+                    )
+                    final_llm_messages.append({'role': 'user', 'content': initial_transcript_message_content})
+                    logger.info(f"Prepended freshly loaded full transcript (length {len(current_transcript_state.initial_full_transcript_content)}) to current API call's messages.")
 
-        except Exception as e: 
-            logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
+                final_llm_messages.extend(llm_messages_from_client)
+
+                if transcript_data_from_s3 and not was_initial_load_attempt:
+                    label = "[Meeting Transcript Update (from S3)]"
+                    transcript_delta_to_add = f"{label}\n{transcript_data_from_s3}"
+                    
+                    insert_idx_for_delta = len(final_llm_messages)
+                    for i in range(len(final_llm_messages) - 1, -1, -1):
+                        msg_content_iter = final_llm_messages[i]['content']
+                        is_prog_initial_load_msg = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
+                        is_prog_delta_update_msg = msg_content_iter.startswith("[Meeting Transcript Update (from S3)]")
+                        is_prog_all_transcripts_msg = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the FULL transcript history")
+
+
+                        if final_llm_messages[i]['role'] == 'user' and \
+                           not is_prog_initial_load_msg and \
+                           not is_prog_delta_update_msg and \
+                           not is_prog_all_transcripts_msg: # Ensure not to insert before other special transcript messages
+                            insert_idx_for_delta = i
+                            break
+                    
+                    # Handle cases where final_llm_messages might only contain special transcript messages
+                    if insert_idx_for_delta == len(final_llm_messages):
+                        # If only special messages exist, try to insert after the first one (initial load / all transcripts)
+                        if final_llm_messages and (final_llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:") or final_llm_messages[0]['content'].startswith("=== BEGIN")):
+                           insert_idx_for_delta = 1
+                        # If no messages or no place to insert, it will append, which is acceptable fallback.
+
+
+                    final_llm_messages.insert(insert_idx_for_delta, {'role': 'user', 'content': transcript_delta_to_add})
+                    logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at effective index {insert_idx_for_delta} (this indicates growth during API call processing).")
+                
+                elif not transcript_data_from_s3 and was_initial_load_attempt:
+                     logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data, or was already processed as initial.")
+                elif not transcript_data_from_s3 and not was_initial_load_attempt:
+                     logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn (after initial load).")
+
+            except Exception as e:
+                logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
+        else: # transcript_listen_mode is not 'all' or 'latest' (should not happen with defaults)
+            logger.warning(f"Unknown transcript_listen_mode: {transcript_listen_mode}. Defaulting to no transcript loading for this turn.")
+            final_llm_messages.extend(llm_messages_from_client) # Just add client messages
 
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
         final_system_prompt += f"\nCurrent Time Context: {time_str}" 
