@@ -98,13 +98,12 @@ def detect_cross_segment_repetition(segments: List[Dict], window_size: int = 10)
     
     return filtered_segments
 
-def detect_short_word_loops(segments: List[Dict]) -> List[Dict]:
-    """Filter out short words that appear too frequently in loops (like 'Okej' repeating)"""
+def detect_single_word_loops(segments: List[Dict]) -> List[Dict]:
+    """Filter out single words that appear too frequently in loops (like 'Okej' repeating)"""
     filtered_segments = []
     word_frequency_tracker = {}  # word -> list of timestamps
-    max_short_word_frequency = 3  # Max occurrences of short words within time window
-    time_window_minutes = 2.0  # 2-minute sliding window
-    short_word_max_length = 6  # Words/phrases with 6 chars or less
+    max_single_word_frequency = 3  # Max occurrences of single words within time window
+    time_window_minutes = 3.0  # 3-minute sliding window
     
     for segment in segments:
         text = segment.get('text', '').strip()
@@ -113,8 +112,8 @@ def detect_short_word_loops(segments: List[Dict]) -> List[Dict]:
         # Normalize text for comparison (remove punctuation, convert to lowercase)
         normalized_text = re.sub(r'[^\w\s]', '', text.lower()).strip()
         
-        # Only apply this filter to short words/phrases
-        if len(normalized_text) <= short_word_max_length and normalized_text:
+        # Only apply this filter to single words (no spaces = single word)
+        if normalized_text and ' ' not in normalized_text:
             # Clean up old entries outside the time window
             cutoff_time = segment_start_time - (time_window_minutes * 60)
             if normalized_text in word_frequency_tracker:
@@ -126,8 +125,8 @@ def detect_short_word_loops(segments: List[Dict]) -> List[Dict]:
             # Count occurrences within the time window
             current_count = len(word_frequency_tracker.get(normalized_text, []))
             
-            if current_count >= max_short_word_frequency:
-                logger.debug(f"Filtering looping short word: '{text}' (appeared {current_count} times in last {time_window_minutes} minutes)")
+            if current_count >= max_single_word_frequency:
+                logger.debug(f"Filtering looping single word: '{text}' (appeared {current_count} times in last {time_window_minutes} minutes)")
                 continue
             
             # Track this occurrence
@@ -485,6 +484,9 @@ def process_audio_segment_and_update_s3(
         
         filtered_segments = detect_cross_segment_repetition(filtered_segments)
         logger.debug(f"After cross-segment repetition filter: {len(filtered_segments)} segments remain")
+        
+        filtered_segments = detect_single_word_loops(filtered_segments)
+        logger.debug(f"After single word loop filter: {len(filtered_segments)} segments remain")
         
         filtered_segments = [s for s in filtered_segments if filter_by_duration_and_confidence(s)]
         logger.debug(f"After duration/confidence filter: {len(filtered_segments)} segments remain")
