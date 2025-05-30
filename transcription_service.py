@@ -246,6 +246,10 @@ def filter_hallucinations(text: str) -> str:
         r"(?i)^\s*\d+\.?\d*\s*cm\s*x\s*\d+\.?\d*\s*cm\s*$", # Measurement patterns
         r"(?i)^\s*\d+\.\d+kg\s+.*썰어주세요.*", # Korean cooking instructions
         
+        # Common standalone filler words that are often hallucinated
+        r"(?i)^\s*okay\.?\s*$", # Standalone "okay"
+        r"(?i)^\s*okej\.?\s*$", # Standalone Swedish "okej"
+        
         # Short, potentially out-of-context phrases - to be used cautiously, rely on thresholds first
         # r"^\s*What\s*\?\s*$",
         # r"^\s*Oh\s*\.?\s*$",
@@ -481,9 +485,6 @@ def process_audio_segment_and_update_s3(
         
         filtered_segments = detect_cross_segment_repetition(filtered_segments)
         logger.debug(f"After cross-segment repetition filter: {len(filtered_segments)} segments remain")
-        
-        filtered_segments = detect_short_word_loops(filtered_segments)
-        logger.debug(f"After short word loop filter: {len(filtered_segments)} segments remain")
         
         filtered_segments = [s for s in filtered_segments if filter_by_duration_and_confidence(s)]
         logger.debug(f"After duration/confidence filter: {len(filtered_segments)} segments remain")
