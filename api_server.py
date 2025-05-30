@@ -291,7 +291,7 @@ def start_recording_route(user: SupabaseUser):
     agent_name = data.get('agent') 
     event_id = data.get('event')
     # 'language' is the old key, 'transcriptionLanguage' is the new one. Prioritize new one.
-    language_setting = data.get('transcriptionLanguage', data.get('language', 'en')) # Default to 'en'
+    language_setting = data.get('transcriptionLanguage', data.get('language', 'any')) # Default to 'any'
     
     logger.info(f"Start recording: agent='{agent_name}', event='{event_id}', language_setting='{language_setting}'")
 
@@ -1184,7 +1184,7 @@ def handle_chat(user: SupabaseUser):
         event_id = data.get('event', '0000')
         transcript_listen_mode = data.get('transcriptListenMode', 'latest') # Default to 'latest'
         saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled') # Default to 'disabled'
-        transcription_language_setting = data.get('transcriptionLanguage', 'en') # Default to 'en'
+        transcription_language_setting = data.get('transcriptionLanguage', 'any') # Default to 'any'
         chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) 
         logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
         logger.info(f"Settings - Transcript Listen: {transcript_listen_mode}, Saved Memory: {saved_transcript_memory_mode}, Transcription Language: {transcription_language_setting}")

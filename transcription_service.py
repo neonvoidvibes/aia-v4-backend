@@ -292,7 +292,7 @@ def is_valid_transcription(text: str) -> bool:
 def _transcribe_audio_segment_openai(
     audio_file_path: str, 
     openai_api_key: str, 
-    language_setting_from_client: Optional[str] = None # Changed from 'language'
+    language_setting_from_client: Optional[str] = "any" # Changed default from None to "any"
     # chunk_duration: float = 15.0 # chunk_duration is not used by Whisper file API
     ) -> Optional[Dict[str, Any]]:
     if not openai_api_key:
@@ -319,11 +319,11 @@ def _transcribe_audio_segment_openai(
             if language_setting_from_client == "en" or language_setting_from_client == "sv":
                 data_payload['language'] = language_setting_from_client
                 logger.info(f"Whisper: Language explicitly set to '{language_setting_from_client}'.")
-            elif language_setting_from_client == "any":
-                logger.info("Whisper: Language set to 'any' (auto-detect by omitting language param).")
+            elif language_setting_from_client == "any" or language_setting_from_client is None: # Explicitly handle None as 'any'
+                logger.info(f"Whisper: Language set to '{language_setting_from_client if language_setting_from_client else 'any (default)'}' (auto-detect by omitting language param).")
                 # No 'language' key is added to data_payload, Whisper will auto-detect
-            else: # Default or unrecognized, treat as auto-detect or a sensible default like 'en'
-                logger.info(f"Whisper: Language setting '{language_setting_from_client}' unrecognized or not provided, defaulting to auto-detect.")
+            else: # Unrecognized, treat as auto-detect
+                logger.info(f"Whisper: Language setting '{language_setting_from_client}' unrecognized, defaulting to auto-detect.")
                 # No 'language' key added for auto-detect
 
             # Construct initial_prompt
@@ -424,7 +424,7 @@ def process_audio_segment_and_update_s3(
     s3_transcript_key = session_data.get('s3_transcript_key')
     session_start_time_utc = session_data.get('session_start_time_utc')
     segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0) 
-    language_setting_from_client = session_data.get('language_setting_from_client', 'en') # Use new key, default 'en'
+    language_setting_from_client = session_data.get('language_setting_from_client', 'any') # Use new key, default 'any'
     
     # Define language_hint_fallback (now primarily for PII filter if language setting is 'any')
     language_hint_fallback = 'en' # Default language hint if not in session_data or if 'any'
