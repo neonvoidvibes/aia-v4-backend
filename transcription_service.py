@@ -58,8 +58,95 @@ def format_timestamp_range(
     end_time_str = _format_time_delta(end_seconds_delta, base_datetime_utc)
     return f"[{start_time_str} - {end_time_str} {timezone_name}]"
 
+def detect_repetition_hallucination(text: str, threshold: float = 0.7) -> bool:
+    """Detect if text is likely a hallucination based on repetition patterns"""
+    words = text.split()
+    if len(words) < 3:
+        return False
+    
+    # Check for phrase repetition within the text
+    word_count = len(words)
+    for phrase_len in range(2, min(word_count // 2 + 1, 6)):  # Check 2-5 word phrases
+        phrases = [' '.join(words[i:i+phrase_len]) for i in range(word_count - phrase_len + 1)]
+        unique_phrases = set(phrases)
+        repetition_ratio = 1 - (len(unique_phrases) / len(phrases))
+        if repetition_ratio > threshold:
+            logger.debug(f"Detected repetition hallucination in text: '{text[:100]}...' (ratio: {repetition_ratio:.2f})")
+            return True
+    
+    return False
+
+def detect_cross_segment_repetition(segments: List[Dict], window_size: int = 5) -> List[Dict]:
+    """Filter out segments that repeat recent content"""
+    filtered_segments = []
+    recent_texts = []
+    
+    for segment in segments:
+        text = segment.get('text', '').strip()
+        
+        # Check if this text appeared recently
+        if text in recent_texts[-window_size:]:
+            logger.debug(f"Filtering repetitive segment: '{text}'")
+            continue
+            
+        filtered_segments.append(segment)
+        recent_texts.append(text)
+        
+        # Keep only recent history
+        if len(recent_texts) > window_size:
+            recent_texts.pop(0)
+    
+    return filtered_segments
+
+def filter_by_duration_and_confidence(segment: Dict) -> bool:
+    """Filter segments that are too short or have low confidence"""
+    duration = segment.get('end', 0) - segment.get('start', 0)
+    avg_logprob = segment.get('avg_logprob', 0)
+    no_speech_prob = segment.get('no_speech_prob', 0)
+    
+    # Filter very short segments with low confidence
+    if duration < 1.0 and (avg_logprob < -0.5 or no_speech_prob > 0.3):
+        logger.debug(f"Filtering short low-confidence segment: duration={duration:.2f}s, logprob={avg_logprob:.2f}, no_speech={no_speech_prob:.2f}")
+        return False
+    
+    # Filter segments that are likely silent
+    if no_speech_prob > 0.8:
+        logger.debug(f"Filtering likely silent segment: no_speech_prob={no_speech_prob:.2f}")
+        return False
+        
+    return True
+
+def analyze_silence_gaps(segments: List[Dict]) -> List[Dict]:
+    """Filter segments that appear after long silence gaps (likely hallucinations)"""
+    filtered = []
+    
+    for i, segment in enumerate(segments):
+        if i == 0:
+            filtered.append(segment)
+            continue
+            
+        prev_end = segments[i-1].get('end', 0)
+        curr_start = segment.get('start', 0)
+        gap = curr_start - prev_end
+        
+        # If there's a large gap (>5 seconds), be more suspicious
+        if gap > 5.0:
+            no_speech_prob = segment.get('no_speech_prob', 0)
+            if no_speech_prob > 0.5:  # Lower threshold after silence
+                logger.debug(f"Filtering post-silence segment: '{segment.get('text', '')}' (gap={gap:.2f}s, no_speech={no_speech_prob:.2f})")
+                continue
+                
+        filtered.append(segment)
+    
+    return filtered
+
 def filter_hallucinations(text: str) -> str:
     """Remove known hallucination patterns from transcribed text."""
+    # First check for repetition-based hallucinations
+    if detect_repetition_hallucination(text):
+        logger.debug(f"Filtering repetition-based hallucination: '{text[:100]}...'")
+        return ""
+    
     patterns = [
         # Existing patterns
         r"^\s*Över\.?\s*$",                          
@@ -110,6 +197,14 @@ def filter_hallucinations(text: str) -> str:
         r"(?i)^\s*이 과정에 대해 더 자세히 알아보시기 바랍니다.*", # Korean
         r"(?i)^\s*감사합니다\s*\.?$", # Korean "Thank you"
         r"(?i)^\s*Я амірую!\s*$", # Cyrillic phrase
+        
+        # Enhanced language-specific patterns
+        r"(?i)^\s*Tack för att du har tittat.*", # Swedish thanks variations
+        r"(?i)^\s*(Ja|Nej),?\s*(men samtidigt).*", # Swedish filler phrases  
+        r"(?i)^\s*이 영상은 유료광고.*", # Korean ad disclaimers
+        r"(?i)^\s*\d+\.?\d*\s*cm\s*x\s*\d+\.?\d*\s*cm\s*$", # Measurement patterns
+        r"(?i)^\s*\d+\.\d+kg\s+.*썰어주세요.*", # Korean cooking instructions
+        
         # Short, potentially out-of-context phrases - to be used cautiously, rely on thresholds first
         # r"^\s*What\s*\?\s*$",
         # r"^\s*Oh\s*\.?\s*$",
@@ -134,17 +229,7 @@ def filter_hallucinations(text: str) -> str:
         except re.error as e:
             logger.error(f"Regex error with pattern '{pattern_str}': {e}")
             continue # Skip faulty regex
-
-    # Fallback check for very generic patterns if needed on a normalized string,
-    # but the (?i) in patterns should handle most cases.
-    # Example: normalized_text = ' '.join(text.lower().split())
-    # if "subscribe to my channel" in normalized_text: return ""
             
-    return text
-    for pattern in patterns:
-        if re.search(pattern, normalized_text, re.IGNORECASE):
-            logger.debug(f"Filter: Matched pattern '{pattern}' on text {original_text_repr}. Filtering out.")
-            return "" 
     return text
 
 def is_valid_transcription(text: str) -> bool:
@@ -174,9 +259,9 @@ def _transcribe_audio_segment_openai(
                 'model': 'whisper-1',
                 'response_format': 'verbose_json', 
                 'temperature': 0.0,
-                'no_speech_threshold': 0.85,
-                'logprob_threshold': -0.7,
-                'compression_ratio_threshold': 2.0,
+                'no_speech_threshold': 0.9,        # Increased from 0.85 to 0.9 (stricter)
+                'logprob_threshold': -0.5,         # Increased from -0.7 to -0.5 (stricter)
+                'compression_ratio_threshold': 1.8, # Decreased from 2.0 to 1.8 (stricter)
             }
 
             # Handle language setting from client
@@ -346,8 +431,21 @@ def process_audio_segment_and_update_s3(
     
     processed_transcript_lines = [] # Stores lines from audio transcription
     if transcription_result and transcription_result.get('segments'):
-        logger.debug(f"Preparing to process {len(transcription_result['segments'])} transcribed segments for {temp_segment_wav_path}")
-        for segment_idx, segment in enumerate(transcription_result['segments']):
+        raw_segments = transcription_result['segments']
+        logger.debug(f"Raw transcription returned {len(raw_segments)} segments for {temp_segment_wav_path}")
+        
+        # Apply new hallucination mitigation filters
+        filtered_segments = analyze_silence_gaps(raw_segments)
+        logger.debug(f"After silence gap analysis: {len(filtered_segments)} segments remain")
+        
+        filtered_segments = detect_cross_segment_repetition(filtered_segments)
+        logger.debug(f"After cross-segment repetition filter: {len(filtered_segments)} segments remain")
+        
+        filtered_segments = [s for s in filtered_segments if filter_by_duration_and_confidence(s)]
+        logger.debug(f"After duration/confidence filter: {len(filtered_segments)} segments remain")
+        
+        logger.debug(f"Preparing to process {len(filtered_segments)} filtered segments for {temp_segment_wav_path}")
+        for segment_idx, segment in enumerate(filtered_segments):
             raw_text = segment.get('text', '').strip()
             filtered_text_stage1 = filter_hallucinations(raw_text) # Basic hallucination filter
             is_valid_stage1 = is_valid_transcription(filtered_text_stage1)
