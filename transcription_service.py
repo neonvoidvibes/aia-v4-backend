@@ -61,6 +61,7 @@ def format_timestamp_range(
 def filter_hallucinations(text: str) -> str:
     """Remove known hallucination patterns from transcribed text."""
     patterns = [
+        # Existing patterns
         r"^\s*Över\.?\s*$",                          
         r"Översättning av.*",                       
         r"www\.sdimedia\.com",                      
@@ -68,11 +69,78 @@ def filter_hallucinations(text: str) -> str:
         r"^\s*Tack (för|till).*(tittade|hjälpte).*", 
         r"^\s*Trio(,\s*Trio)*\.?\s*$",               
         r"^\s*(Ja|Nej)(,\s*(Ja|Nej))*\.?\s*$",      
-        r"^\s*Thank(s?).*watching.*",
-        r"^\s*Thank(s?).*listening.*",
+        r"^\s*Thank(s?).*watching.*", # Made more general below
+        r"^\s*Thank(s?).*listening.*", # Made more general below
+
+        # New patterns from examples
+        r"(?i)^\s*Share this video with your friends.*",
+        r"(?i)^\s*Якщо вам подобається їжа.*", # Ukrainian
+        r"(?i)^\s*今日の映像はここまでです!.*", # Japanese
+        r"(?i)^\s*最後まで視聴してくださって 本当にありがとうございます。.*", # Japanese
+        r"(?i)^\s*次の映像でまた会いましょう!.*", # Japanese
+        r"(?i)^\s*Дякуємо за перегляд і до зустрічі у наступному відео!.*", # Ukrainian
+        r"^\s*[ಠ]+$", # Symbol repetitions
+        r"^\s*[୧]+$",
+        r"^\s*[ស្ក]+$", # Khmer-like symbols
+        r"^\s*([0-9]\.){5,}[0-9]?\s*$", # For "1.1.1.1..."
+        r"(?i)^\s*Thank you for joining us.*",
+        r"(?i)^\s*I'll see you next time.*",
+        r"(?i)^\s*「パパ!」.*", # Japanese "Papa!"
+        r"(?i)^\s*「ネズミがいない!」.*", # Japanese "Nezumi ga inai!"
+        r"(?i)^\s*If you enjoyed this video, please subscribe, like, and leave a comment.*",
+        r"(?i)^\s*1\.5cm x 1\.5cm\s*$",
+        r"(?i)^\s*チャンネル登録をお願いいたします.*", # Japanese "Channel registration please"
+        r"(?i)^\s*If you enjoyed the video, please subscribe, like, and set an alarm.*",
+        r"(?i)^\s*If you like(d)? the video, don't forget to like it and subscribe to the channel\s*\.?$", # Covers multiple variations
+        r"(?i)^\s*If you like this video, don't forget to like it and subscribe to my channel\s*\.?$",
+        r"(?i)^\s*1\.5 tbsp of lemon juice\s*$",
+        r"(?i)^\s*Thank you very much\s*\.?$",
+        r"(?i)^\s*If you like this video, don't forget to give it a thumbs up and subscribe to my channel\s*\.?$",
+        r"(?i)^\s*Om du gillar den här videon, gör gärna en tumme upp.*", # Swedish like/comment
+        r"(?i)^\s*プレイヤーを選択すると.*", # Japanese player select
+        r"(?i)^\s*3Dプロジェクターを作成するプロジェクトを作成するプロジェクト.*", # Japanese 3D projector
+        r"(?i)^\s*ご視聴いただきありがとうございます.*", # Japanese "Thank you for watching"
+        r"(?i)^\s*Thank you\s*\.?$",
+        r"(?i)^\s*I hope you have a great day, and I'll see you in the next video\s*\.?$",
+        r"(?i)^\s*Bye!\s*$",
+        r"(?i)^\s*I hope you have a wonderful day, and I will see you in the next video\s*\.?$",
+        r"(?i)^\s*Якщо вам сподобалося це відео, не забудьте дати менI лайк.*", # Ukrainian like/subscribe
+        r"(?i)^\s*Дякую за перегляд!\s*$", # Ukrainian "Thanks for watching"
+        r"(?i)^\s*하지만 이것은 가장 어려운 과정입니다.*", # Korean
+        r"(?i)^\s*이 과정에 대해 더 자세히 알아보시기 바랍니다.*", # Korean
+        r"(?i)^\s*감사합니다\s*\.?$", # Korean "Thank you"
+        r"(?i)^\s*Я амірую!\s*$", # Cyrillic phrase
+        # Short, potentially out-of-context phrases - to be used cautiously, rely on thresholds first
+        # r"^\s*What\s*\?\s*$",
+        # r"^\s*Oh\s*\.?\s*$",
+        # r"^\s*Sorry\s*\.?\s*$",
+        # r"^\s*Have a nice day!\s*$"
     ]
     original_text_repr = repr(text)
-    normalized_text = ' '.join(text.lower().split())
+    # For case-insensitive matching on the whole text for some patterns
+    text_lower_for_some_checks = text.lower()
+    
+    # For most patterns, we compile them with re.IGNORECASE and check directly.
+    # No need to manually lower `text` for those.
+    # Let's refine how normalized_text is used.
+    # Keep original text for direct pattern application if pattern handles case.
+
+    for pattern_str in patterns:
+        try:
+            # Most patterns now include (?i) for case-insensitivity directly
+            if re.search(pattern_str, text):
+                logger.debug(f"Filter: Matched pattern '{pattern_str}' on text {original_text_repr}. Filtering out.")
+                return ""
+        except re.error as e:
+            logger.error(f"Regex error with pattern '{pattern_str}': {e}")
+            continue # Skip faulty regex
+
+    # Fallback check for very generic patterns if needed on a normalized string,
+    # but the (?i) in patterns should handle most cases.
+    # Example: normalized_text = ' '.join(text.lower().split())
+    # if "subscribe to my channel" in normalized_text: return ""
+            
+    return text
     for pattern in patterns:
         if re.search(pattern, normalized_text, re.IGNORECASE):
             logger.debug(f"Filter: Matched pattern '{pattern}' on text {original_text_repr}. Filtering out.")
@@ -88,7 +156,7 @@ def is_valid_transcription(text: str) -> bool:
 def _transcribe_audio_segment_openai(
     audio_file_path: str, 
     openai_api_key: str, 
-    language: Optional[str] = None
+    language_setting_from_client: Optional[str] = None # Changed from 'language'
     # chunk_duration: float = 15.0 # chunk_duration is not used by Whisper file API
     ) -> Optional[Dict[str, Any]]:
     if not openai_api_key:
@@ -106,14 +174,42 @@ def _transcribe_audio_segment_openai(
                 'model': 'whisper-1',
                 'response_format': 'verbose_json', 
                 'temperature': 0.0,
+                'no_speech_threshold': 0.85,
+                'logprob_threshold': -0.7,
+                'compression_ratio_threshold': 2.0,
             }
-            if language: data_payload['language'] = language
-            # else: data_payload['initial_prompt'] = "Please transcribe the speech accurately." # Optional: keep if desired
 
-            # Optional parameters for finer control (already present in your code)
-            # data_payload['logprob_threshold'] = -0.7
-            # data_payload['compression_ratio_threshold'] = 2.2
-            # data_payload['no_speech_threshold'] = 0.7
+            # Handle language setting from client
+            if language_setting_from_client == "en" or language_setting_from_client == "sv":
+                data_payload['language'] = language_setting_from_client
+                logger.info(f"Whisper: Language explicitly set to '{language_setting_from_client}'.")
+            elif language_setting_from_client == "any":
+                logger.info("Whisper: Language set to 'any' (auto-detect by omitting language param).")
+                # No 'language' key is added to data_payload, Whisper will auto-detect
+            else: # Default or unrecognized, treat as auto-detect or a sensible default like 'en'
+                logger.info(f"Whisper: Language setting '{language_setting_from_client}' unrecognized or not provided, defaulting to auto-detect.")
+                # No 'language' key added for auto-detect
+
+            # Construct initial_prompt
+            initial_prompt_text_base = (
+                "Please focus on transcribing professional business discourse accurately. "
+                "Avoid common conversational filler phrases if they obscure meaning. "
+                "Do not transcribe generic social media phrases, common video outros like 'subscribe to my channel' "
+                "or 'thanks for watching', or phrases in languages clearly unrelated to a business meeting context "
+                "unless they are direct quotes or proper nouns. If unsure, prioritize clear speech over interpreting noise."
+            )
+            
+            initial_prompt_text = ""
+            if language_setting_from_client == "en":
+                initial_prompt_text = "The primary language is English. " + initial_prompt_text_base
+            elif language_setting_from_client == "sv":
+                initial_prompt_text = "The primary language is Swedish. " + initial_prompt_text_base
+            else: # "any" or default/unrecognized
+                initial_prompt_text = "The primary languages expected are English and Swedish. " + initial_prompt_text_base
+            
+            data_payload['initial_prompt'] = initial_prompt_text
+            logger.info(f"Whisper: Using initial_prompt: '{initial_prompt_text[:100]}...'")
+
 
             # === DYNAMIC MIME TYPE DETECTION ===
             file_name_for_api = os.path.basename(audio_file_path)
@@ -192,10 +288,10 @@ def process_audio_segment_and_update_s3(
     s3_transcript_key = session_data.get('s3_transcript_key')
     session_start_time_utc = session_data.get('session_start_time_utc')
     segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0) 
-    language = session_data.get('language') 
+    language_setting_from_client = session_data.get('language_setting_from_client', 'en') # Use new key, default 'en'
     
-    # Define language_hint_fallback at the beginning of the function
-    language_hint_fallback = 'sv' # Default language hint if not in session_data
+    # Define language_hint_fallback (now primarily for PII filter if language setting is 'any')
+    language_hint_fallback = 'en' # Default language hint if not in session_data or if 'any'
 
     if not all([temp_segment_wav_path, s3_transcript_key, isinstance(session_start_time_utc, datetime)]):
         logger.error("Missing critical data for processing segment (path, S3 key, or start time).")
@@ -246,7 +342,7 @@ def process_audio_segment_and_update_s3(
     from utils.pii_filter import anonymize_transcript_chunk
     
     # Transcribe audio first (can be outside the S3 lock)
-    transcription_result = _transcribe_audio_segment_openai(temp_segment_wav_path, openai_api_key, language)
+    transcription_result = _transcribe_audio_segment_openai(temp_segment_wav_path, openai_api_key, language_setting_from_client)
     
     processed_transcript_lines = [] # Stores lines from audio transcription
     if transcription_result and transcription_result.get('segments'):
@@ -260,7 +356,12 @@ def process_audio_segment_and_update_s3(
 
             if is_valid_stage1 and os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
                 logger.debug(f"Attempting PII filtering for chunk: '{filtered_text_stage1[:100]}...'")
-                language_hint_for_pii = session_data.get('language', language_hint_fallback) # Use 'language' from session_data if available
+                # Use the specific language setting if 'en' or 'sv', otherwise fallback for 'any'
+                if language_setting_from_client == "en" or language_setting_from_client == "sv":
+                    language_hint_for_pii = language_setting_from_client
+                else: # 'any' or other unexpected value
+                    language_hint_for_pii = language_hint_fallback # PII filter needs a concrete hint
+                
                 pii_model_name_config = os.getenv("PII_REDACTION_MODEL_NAME", "claude-3-haiku-20240307")
                 
                 if pii_llm_client_for_service:

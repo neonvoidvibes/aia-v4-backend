@@ -290,8 +290,11 @@ def start_recording_route(user: SupabaseUser):
     data = request.json
     agent_name = data.get('agent') 
     event_id = data.get('event')
-    language = data.get('language') 
+    # 'language' is the old key, 'transcriptionLanguage' is the new one. Prioritize new one.
+    language_setting = data.get('transcriptionLanguage', data.get('language', 'en')) # Default to 'en'
     
+    logger.info(f"Start recording: agent='{agent_name}', event='{event_id}', language_setting='{language_setting}'")
+
     if not event_id: 
         return jsonify({"status": "error", "message": "Missing event ID"}), 400
 
@@ -309,7 +312,7 @@ def start_recording_route(user: SupabaseUser):
         "user_id": user.id,
         "agent_name": agent_name,
         "event_id": event_id,
-        "language": language, 
+        "language_setting_from_client": language_setting, # Store the new setting
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_transcript_key,
         "temp_audio_session_dir": temp_audio_base_dir, 
@@ -986,6 +989,7 @@ def transcribe_uploaded_file(user: SupabaseUser):
             transcription_data = transcribe_whisper_file(
                 audio_file_path=temp_filepath,
                 openai_api_key=openai_api_key,
+                language_setting_from_client=transcriptionLanguage # Pass the language setting
             )
 
             if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
@@ -1180,9 +1184,10 @@ def handle_chat(user: SupabaseUser):
         event_id = data.get('event', '0000')
         transcript_listen_mode = data.get('transcriptListenMode', 'latest') # Default to 'latest'
         saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled') # Default to 'disabled'
+        transcription_language_setting = data.get('transcriptionLanguage', 'en') # Default to 'en'
         chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) 
         logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
-        logger.info(f"Settings - Transcript Listen: {transcript_listen_mode}, Saved Memory: {saved_transcript_memory_mode}")
+        logger.info(f"Settings - Transcript Listen: {transcript_listen_mode}, Saved Memory: {saved_transcript_memory_mode}, Transcription Language: {transcription_language_setting}")
         
         incoming_messages = data['messages']
         llm_messages_from_client = [{"role": msg["role"], "content": msg["content"]} 
