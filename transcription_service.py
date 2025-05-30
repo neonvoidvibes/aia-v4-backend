@@ -98,16 +98,22 @@ def detect_cross_segment_repetition(segments: List[Dict], window_size: int = 10)
     
     return filtered_segments
 
-def detect_single_word_loops(segments: List[Dict]) -> List[Dict]:
+def detect_single_word_loops(segments: List[Dict], session_data: Dict[str, Any], segment_offset_seconds: float) -> List[Dict]:
     """Filter out single words that appear too frequently in loops (like 'Okej' repeating)"""
     filtered_segments = []
-    word_frequency_tracker = {}  # word -> list of timestamps
-    max_single_word_frequency = 3  # Max occurrences of single words within time window
+    
+    # Get persistent word frequency tracker from session data
+    if 'word_frequency_tracker' not in session_data:
+        session_data['word_frequency_tracker'] = {}
+    word_frequency_tracker = session_data['word_frequency_tracker']
+    
+    max_single_word_frequency = 3  # Allow 3 occurrences, filter 4th+
     time_window_minutes = 3.0  # 3-minute sliding window
     
     for segment in segments:
         text = segment.get('text', '').strip()
-        segment_start_time = segment.get('start', 0.0)
+        # Calculate absolute timestamp relative to session start
+        absolute_timestamp = segment_offset_seconds + segment.get('start', 0.0)
         
         # Normalize text for comparison (remove punctuation, convert to lowercase)
         normalized_text = re.sub(r'[^\w\s]', '', text.lower()).strip()
@@ -115,24 +121,25 @@ def detect_single_word_loops(segments: List[Dict]) -> List[Dict]:
         # Only apply this filter to single words (no spaces = single word)
         if normalized_text and ' ' not in normalized_text:
             # Clean up old entries outside the time window
-            cutoff_time = segment_start_time - (time_window_minutes * 60)
+            cutoff_time = absolute_timestamp - (time_window_minutes * 60)
             if normalized_text in word_frequency_tracker:
                 word_frequency_tracker[normalized_text] = [
                     timestamp for timestamp in word_frequency_tracker[normalized_text] 
                     if timestamp > cutoff_time
                 ]
             
-            # Count occurrences within the time window
+            # Count current occurrences within the time window
             current_count = len(word_frequency_tracker.get(normalized_text, []))
             
+            # Filter if we already have max occurrences
             if current_count >= max_single_word_frequency:
-                logger.debug(f"Filtering looping single word: '{text}' (appeared {current_count} times in last {time_window_minutes} minutes)")
+                logger.debug(f"Filtering looping single word: '{text}' (would be occurrence #{current_count + 1} in last {time_window_minutes} minutes)")
                 continue
             
             # Track this occurrence
             if normalized_text not in word_frequency_tracker:
                 word_frequency_tracker[normalized_text] = []
-            word_frequency_tracker[normalized_text].append(segment_start_time)
+            word_frequency_tracker[normalized_text].append(absolute_timestamp)
         
         filtered_segments.append(segment)
     
@@ -485,7 +492,7 @@ def process_audio_segment_and_update_s3(
         filtered_segments = detect_cross_segment_repetition(filtered_segments)
         logger.debug(f"After cross-segment repetition filter: {len(filtered_segments)} segments remain")
         
-        filtered_segments = detect_single_word_loops(filtered_segments)
+        filtered_segments = detect_single_word_loops(filtered_segments, session_data, segment_offset_seconds)
         logger.debug(f"After single word loop filter: {len(filtered_segments)} segments remain")
         
         filtered_segments = [s for s in filtered_segments if filter_by_duration_and_confidence(s)]
