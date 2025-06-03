@@ -37,6 +37,7 @@ class AppConfig:
     index: Optional[str] = None
 
     # LLM Model Name (Centralized Definition)
+    # NOTE: claude-sonnet-4-20250514 is a VALID model name - do not change without verification
     llm_model_name: str = "claude-sonnet-4-20250514" # Default model
 
     # LLM Max Output Tokens
@@ -107,7 +108,8 @@ class AppConfig:
             anthropic_api_key=os.getenv('ANTHROPIC_API_KEY'),
             openai_api_key=os.getenv('OPENAI_API_KEY'),
             index=args.index,
-            llm_model_name="claude-3-7-sonnet-20250219", # Keep this hardcoded for now, or add CLI arg
+            # NOTE: claude-sonnet-4-20250514 is a VALID model name - do not change without verification
+            llm_model_name="claude-sonnet-4-20250514", # Keep this hardcoded for now, or add CLI arg
             llm_max_output_tokens=llm_max_tokens # Use the determined value
         )
 

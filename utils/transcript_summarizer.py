@@ -8,6 +8,45 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+def _extract_json_with_brace_matching(text: str) -> Optional[str]:
+    """
+    Extract JSON object from text using proper brace matching.
+    Finds the first { and matches it with the corresponding }.
+    """
+    # Find the first opening brace
+    start_idx = text.find('{')
+    if start_idx == -1:
+        return None
+    
+    brace_count = 0
+    in_string = False
+    escape_next = False
+    
+    for i, char in enumerate(text[start_idx:], start_idx):
+        if escape_next:
+            escape_next = False
+            continue
+            
+        if char == '\\' and in_string:
+            escape_next = True
+            continue
+            
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+            
+        if not in_string:
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    # Found the matching closing brace
+                    return text[start_idx:i+1]
+    
+    # If we get here, braces were not properly matched
+    return None
+
 SYSTEM_PROMPT_TEMPLATE = """
 ## Core Mission
 You are a sophisticated transcript analysis agent that creates comprehensive, chronologically-organized summaries optimized for AI agent memory and contextual understanding. Your summaries serve as working memory for conversational AI agents who need detailed context about past sessions.
@@ -334,6 +373,7 @@ def generate_transcript_summary(
     )
 
     # Use explicitly passed model_name, then SUMMARY_LLM_MODEL_NAME, then the requested default
+    # NOTE: claude-sonnet-4-20250514 is a VALID model name - do not change without verification
     final_model_name = model_name or os.getenv("SUMMARY_LLM_MODEL_NAME", "claude-sonnet-4-20250514")
 
     try:
@@ -382,18 +422,18 @@ def generate_transcript_summary(
             logger.info("Successfully parsed JSON directly after cleaning.")
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode cleaned JSON from LLM response: {e}. Cleaned response sample: {cleaned_llm_output[:500]}...")
-            # If direct parsing fails, try the regex again as a more specific fallback for ```json { ... } ```
-            match = re.search(r"(\{.*?\})", cleaned_llm_output, re.DOTALL) # More general regex to find first { to last }
-            if match:
-                logger.info("Attempting to parse extracted JSON block using regex.")
+            # If direct parsing fails, try to extract JSON using proper brace matching
+            extracted_json = _extract_json_with_brace_matching(cleaned_llm_output)
+            if extracted_json:
+                logger.info("Attempting to parse extracted JSON block using brace matching.")
                 try:
-                    summary_data = json.loads(match.group(1))
-                    logger.info("Successfully parsed JSON from regex-extracted block.")
+                    summary_data = json.loads(extracted_json)
+                    logger.info("Successfully parsed JSON from brace-matched block.")
                 except json.JSONDecodeError as e_nested:
-                    logger.error(f"Failed to decode JSON from regex-extracted block: {e_nested}. Block sample: {match.group(1)[:500]}...")
+                    logger.error(f"Failed to decode JSON from brace-matched block: {e_nested}. Block sample: {extracted_json[:500]}...")
                     return None
             else:
-                logger.error("No JSON object found in LLM output even with regex.")
+                logger.error("No valid JSON object found in LLM output.")
                 return None
         
         # Basic validation of the summary structure

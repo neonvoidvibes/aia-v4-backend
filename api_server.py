@@ -1377,6 +1377,7 @@ def handle_chat(user: SupabaseUser):
 
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
         final_system_prompt += f"\nCurrent Time Context: {time_str}" 
+        # NOTE: claude-sonnet-4-20250514 is a VALID model name - do not change without verification
         llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514"); llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
         
         if not final_llm_messages: 
