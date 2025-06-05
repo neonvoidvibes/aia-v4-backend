@@ -6,8 +6,8 @@ import boto3
 from botocore.config import Config as BotoConfig # For S3 timeouts
 import logging
 import json
-from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime, timezone, timedelta
+from typing import Optional, List, Dict, Any, Tuple, Callable
 import threading # For s3_client_lock
 
 # Configure logging for this module
@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 s3_client_instance = None # Renamed to avoid confusion with boto3.client
 s3_client_lock = threading.Lock()
 
+# Global Cache for S3 files
+S3_FILE_CACHE: Dict[str, Dict[str, Any]] = {}
+S3_CACHE_LOCK = threading.Lock()
+S3_CACHE_TTL_DEFAULT = timedelta(minutes=5)
+S3_CACHE_TTL_NOT_FOUND = timedelta(minutes=1)
 
 def get_s3_client(config: Optional[BotoConfig] = None) -> Optional[boto3.client]:
     """
@@ -66,10 +71,48 @@ def get_s3_client(config: Optional[BotoConfig] = None) -> Optional[boto3.client]
                 s3_client_instance = None
     return s3_client_instance
 
+def get_cached_s3_file(
+    cache_key: str,
+    fetch_function: Callable[[], Optional[Tuple[str, str]]],
+    description: str
+    ) -> Optional[str]:
+    """
+    Generic caching wrapper for S3 file content fetching functions.
+    """
+    # Check cache first
+    with S3_CACHE_LOCK:
+        cached_item = S3_FILE_CACHE.get(cache_key)
+        if cached_item and cached_item['expiry'] > datetime.now(timezone.utc):
+            logger.info(f"CACHE HIT for {description} ('{cache_key}')")
+            return cached_item['content']
+
+    # If not in cache or expired, fetch from S3
+    logger.info(f"CACHE MISS for {description} ('{cache_key}')")
+    result = fetch_function()
+    content = result[1] if result else None
+
+    # Update cache
+    with S3_CACHE_LOCK:
+        if content is not None:
+            S3_FILE_CACHE[cache_key] = {
+                'content': content,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_DEFAULT
+            }
+            logger.info(f"CACHE SET for {description} ('{cache_key}').")
+        else:
+            # Cache "not found" to avoid repeated lookups for a short time
+            S3_FILE_CACHE[cache_key] = {
+                'content': None,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_NOT_FOUND
+            }
+            logger.info(f"CACHE SET (None) for {description} ('{cache_key}').")
+    
+    return content
+
+
 def read_file_content(file_key: str, description: str) -> Optional[str]:
     """Read content from S3 file, handling potential errors."""
     s3 = get_s3_client()
-    # Read bucket name here as well, in case it changes or needs checking per call
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
         logger.error(f"S3 client or bucket name not available for reading {description}.")
@@ -78,13 +121,12 @@ def read_file_content(file_key: str, description: str) -> Optional[str]:
         logger.debug(f"Reading {description} from S3: s3://{aws_s3_bucket}/{file_key}")
         response = s3.get_object(Bucket=aws_s3_bucket, Key=file_key)
         content = response['Body'].read().decode('utf-8')
-        # No need to log full content, length is sufficient for debug
         logger.debug(f"Successfully read {description} ({len(content)} chars)")
         return content
     except s3.exceptions.NoSuchKey:
         logger.warning(f"{description} file not found at S3 key: {file_key}")
         return None
-    except Exception as e: # Generic catch after specific S3 exceptions
+    except Exception as e:
         logger.error(f"Error reading {description} from {file_key}: {e}", exc_info=True)
         return None
 
@@ -192,13 +234,17 @@ def find_file_any_extension(base_pattern: str, description: str) -> Optional[Tup
         logger.error(f"Error finding {description} file for pattern '{base_pattern}': {e}", exc_info=True)
         return None
 
-# --- Functions moved from magic_chat.py ---
-
 def get_latest_system_prompt(agent_name: Optional[str] = None) -> Optional[str]:
-    """Get and combine system prompts from S3"""
+    """Get and combine system prompts from S3, using a cache."""
     logger.debug(f"Getting system prompt (agent: {agent_name})")
-    base_result = find_file_any_extension('_config/systemprompt_base', "base system prompt")
-    base_prompt = base_result[1] if base_result else None
+    
+    # Use caching for base prompt
+    base_prompt_pattern = '_config/systemprompt_base'
+    base_prompt = get_cached_s3_file(
+        base_prompt_pattern,
+        "base system prompt",
+        lambda: find_file_any_extension(base_prompt_pattern, "base system prompt")
+    )
 
     if not base_prompt:
          logger.error("Base system prompt '_config/systemprompt_base' not found or failed to load.")
@@ -207,12 +253,14 @@ def get_latest_system_prompt(agent_name: Optional[str] = None) -> Optional[str]:
     agent_prompt = ""
     if agent_name:
         agent_pattern = f'organizations/river/agents/{agent_name}/_config/systemprompt_aID-{agent_name}'
-        agent_result = find_file_any_extension(agent_pattern, "agent system prompt")
-        if agent_result:
-            agent_prompt = agent_result[1]
-            logger.info(f"Loaded agent-specific system prompt for '{agent_name}'.")
-        else:
-             logger.warning(f"No agent-specific system prompt found using pattern '{agent_pattern}'.")
+        # Use caching for agent-specific prompt
+        agent_prompt = get_cached_s3_file(
+            agent_pattern,
+            f"agent system prompt for {agent_name}",
+            lambda: find_file_any_extension(agent_pattern, f"agent system prompt for {agent_name}")
+        )
+        if agent_prompt: logger.info(f"Loaded agent-specific system prompt for '{agent_name}'.")
+        else: logger.warning(f"No agent-specific system prompt found using pattern '{agent_pattern}'.")
 
     system_prompt = base_prompt
     if agent_prompt: system_prompt += "\n\n" + agent_prompt
@@ -220,20 +268,26 @@ def get_latest_system_prompt(agent_name: Optional[str] = None) -> Optional[str]:
     return system_prompt
 
 def get_latest_frameworks(agent_name: Optional[str] = None) -> Optional[str]:
-    """Get and combine frameworks from S3"""
+    """Get and combine frameworks from S3, using a cache."""
     logger.debug(f"Getting frameworks (agent: {agent_name})")
-    base_result = find_file_any_extension('_config/frameworks_base', "base frameworks")
-    base_frameworks = base_result[1] if base_result else ""
+
+    base_framework_pattern = '_config/frameworks_base'
+    base_frameworks = get_cached_s3_file(
+        base_framework_pattern,
+        "base frameworks",
+        lambda: find_file_any_extension(base_framework_pattern, "base frameworks")
+    ) or ""
 
     agent_frameworks = ""
     if agent_name:
         agent_pattern = f'organizations/river/agents/{agent_name}/_config/frameworks_aID-{agent_name}'
-        agent_result = find_file_any_extension(agent_pattern, "agent frameworks")
-        if agent_result:
-            agent_frameworks = agent_result[1]
-            logger.info(f"Loaded agent-specific frameworks for '{agent_name}'.")
-        else:
-             logger.warning(f"No agent-specific frameworks found using pattern '{agent_pattern}'.")
+        agent_frameworks = get_cached_s3_file(
+            agent_pattern,
+            f"agent frameworks for {agent_name}",
+            lambda: find_file_any_extension(agent_pattern, f"agent frameworks for {agent_name}")
+        ) or ""
+        if agent_frameworks: logger.info(f"Loaded agent-specific frameworks for '{agent_name}'.")
+        else: logger.warning(f"No agent-specific frameworks found using pattern '{agent_pattern}'.")
 
     frameworks = base_frameworks
     if agent_frameworks: frameworks += ("\n\n" + agent_frameworks) if frameworks else agent_frameworks
@@ -242,77 +296,99 @@ def get_latest_frameworks(agent_name: Optional[str] = None) -> Optional[str]:
     else: logger.warning("No base or agent-specific frameworks found.")
     return frameworks if frameworks else None
 
+
 def get_latest_context(agent_name: str, event_id: Optional[str] = None) -> Optional[str]:
-    """Get and combine agent-specific and event-specific contexts from S3."""
+    """Get and combine agent-specific and event-specific contexts from S3, with caching."""
     logger.debug(f"Getting context (agent: {agent_name}, event: {event_id})")
     
-    agent_primary_context = ""
-    # Load agent-specific context from the agent's _config folder
-    # Pattern: organizations/river/agents/{agent_name}/_config/context_aID-{agent_name}.[txt|json|md]
     agent_context_pattern = f'organizations/river/agents/{agent_name}/_config/context_aID-{agent_name}'
-    logger.info(f"Attempting agent-specific context load using pattern: '{agent_context_pattern}'.")
-    agent_context_result = find_file_any_extension(agent_context_pattern, "agent primary context")
-    if agent_context_result:
-        agent_primary_context = agent_context_result[1]
-        logger.info(f"Loaded agent-specific primary context for agent '{agent_name}'. Length: {len(agent_primary_context)}")
-    else:
-        logger.warning(f"No agent-specific primary context found for agent '{agent_name}' using pattern '{agent_context_pattern}'.")
+    agent_primary_context = get_cached_s3_file(
+        agent_context_pattern,
+        f"agent primary context for {agent_name}",
+        lambda: find_file_any_extension(agent_context_pattern, "agent primary context")
+    ) or ""
+    if agent_primary_context: logger.info(f"Loaded agent-specific primary context for agent '{agent_name}'.")
+    else: logger.warning(f"No agent-specific primary context found for agent '{agent_name}'.")
 
     event_context = ""
     if event_id and event_id != '0000':
-        # Event-specific context path already includes agent_name and event_id.
-        # This pattern remains consistent with the original code for event context.
         event_pattern = f'organizations/river/agents/{agent_name}/events/{event_id}/_config/context_aID-{agent_name}_eID-{event_id}'
-        logger.info(f"Attempting event-specific context load using pattern: '{event_pattern}'.")
-        event_result = find_file_any_extension(event_pattern, "event context")
-        if event_result:
-            event_context = event_result[1]
-            logger.info(f"Loaded event-specific context for event '{event_id}'. Length: {len(event_context)}")
-        else:
-            logger.warning(f"No event-specific context found for event '{event_id}' using pattern '{event_pattern}'.")
+        event_context = get_cached_s3_file(
+            event_pattern,
+            f"event context for {agent_name}/{event_id}",
+            lambda: find_file_any_extension(event_pattern, "event context")
+        ) or ""
+        if event_context: logger.info(f"Loaded event-specific context for event '{event_id}'.")
+        else: logger.warning(f"No event-specific context found for event '{event_id}'.")
 
-    # Combine agent primary context and event context
     final_context = agent_primary_context
     if event_context:
-        if final_context: # If agent_primary_context was found, append event_context
-            final_context += "\n\n" + event_context
-        else: # If no agent_primary_context, event_context becomes the final_context
-            final_context = event_context
+        final_context += ("\n\n" + event_context) if final_context else event_context
             
-    if final_context:
-        logger.info(f"Final combined context loaded. Total length: {len(final_context)}")
-    else:
-        logger.warning(f"No agent primary or event-specific context found for agent '{agent_name}', event '{event_id}'.")
+    if final_context: logger.info(f"Final combined context loaded. Total length: {len(final_context)}")
+    else: logger.warning(f"No agent primary or event-specific context found for agent '{agent_name}', event '{event_id}'.")
         
     return final_context if final_context else None
 
 def get_agent_docs(agent_name: str) -> Optional[str]:
-    """Get documentation files for the specified agent."""
-    s3 = get_s3_client()
-    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-    if not s3 or not aws_s3_bucket: logger.error("S3 unavailable for getting agent docs."); return None
+    """Get documentation files for the specified agent, with caching."""
+    
+    docs_cache_key = f"agent_docs_{agent_name}"
 
-    try:
-        prefix = f'organizations/river/agents/{agent_name}/docs/'
-        logger.debug(f"Searching for agent docs in S3 prefix '{prefix}'")
-        paginator = s3.get_paginator('list_objects_v2')
-        docs = []
-        for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=prefix):
-             if 'Contents' in page:
-                  for obj in page['Contents']:
-                      key = obj['Key']
-                      if key == prefix or key.endswith('/'): continue 
-                      relative_path = key[len(prefix):]
-                      if '/' in relative_path: continue 
+    def fetch_docs():
+        s3 = get_s3_client()
+        aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+        if not s3 or not aws_s3_bucket: logger.error("S3 unavailable for getting agent docs."); return None
+        try:
+            prefix = f'organizations/river/agents/{agent_name}/docs/'
+            logger.debug(f"Searching for agent docs in S3 prefix '{prefix}'")
+            paginator = s3.get_paginator('list_objects_v2')
+            docs = []
+            for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=prefix):
+                 if 'Contents' in page:
+                      for obj in page['Contents']:
+                          key = obj['Key']
+                          if key == prefix or key.endswith('/'): continue
+                          relative_path = key[len(prefix):]
+                          if '/' in relative_path: continue
+                          filename = os.path.basename(key)
+                          content = read_file_content(key, f'agent doc ({filename})')
+                          if content: docs.append(f"--- START Doc: {filename} ---\n{content}\n--- END Doc: {filename} ---")
+            if not docs: logger.warning(f"No documentation files found directly in '{prefix}'"); return None
+            logger.info(f"Loaded {len(docs)} documentation files for agent '{agent_name}'.")
+            # For caching, we need to return a tuple, but this function only returns the content string
+            # The get_cached_s3_file wrapper is designed for find_file_any_extension which returns (key, content)
+            # We'll return a dummy key here to satisfy the wrapper's expectation.
+            return docs_cache_key, "\n\n".join(docs)
+        except Exception as e: logger.error(f"Error getting agent docs for '{agent_name}': {e}", exc_info=True); return None
 
-                      filename = os.path.basename(key)
-                      content = read_file_content(key, f'agent doc ({filename})')
-                      if content: docs.append(f"--- START Doc: {filename} ---\n{content}\n--- END Doc: {filename} ---")
+    # We need to adapt this for get_cached_s3_file. Let's make it simpler.
+    with S3_CACHE_LOCK:
+        cached_item = S3_FILE_CACHE.get(docs_cache_key)
+        if cached_item and cached_item['expiry'] > datetime.now(timezone.utc):
+            logger.info(f"CACHE HIT for agent docs ('{docs_cache_key}')")
+            return cached_item['content']
 
-        if not docs: logger.warning(f"No documentation files found directly in '{prefix}'"); return None
-        logger.info(f"Loaded {len(docs)} documentation files for agent '{agent_name}'.")
-        return "\n\n".join(docs)
-    except Exception as e: logger.error(f"Error getting agent docs for '{agent_name}': {e}", exc_info=True); return None
+    logger.info(f"CACHE MISS for agent docs ('{docs_cache_key}')")
+    fetch_result = fetch_docs()
+    content = fetch_result[1] if fetch_result else None
+    
+    with S3_CACHE_LOCK:
+        if content is not None:
+            S3_FILE_CACHE[docs_cache_key] = {
+                'content': content,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_DEFAULT
+            }
+            logger.info(f"CACHE SET for agent docs ('{docs_cache_key}').")
+        else:
+            S3_FILE_CACHE[docs_cache_key] = {
+                'content': None,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_NOT_FOUND
+            }
+            logger.info(f"CACHE SET (None) for agent docs ('{docs_cache_key}').")
+    
+    return content
+
 
 def save_chat_to_s3(agent_name: str, chat_content: str, event_id: Optional[str], is_saved: bool = False, filename: Optional[str] = None) -> tuple[bool, Optional[str]]:
     """Save chat content to S3 bucket (archive or saved folder)."""

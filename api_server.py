@@ -1232,6 +1232,7 @@ def download_s3_document(user: SupabaseUser):
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
 def handle_chat(user: SupabaseUser): 
+    request_start_time = time.time()
     logger.info(f"Received request /api/chat method: {request.method} from user: {user.id}") 
     global transcript_state_cache
     if not anthropic_client: 
@@ -1260,6 +1261,7 @@ def handle_chat(user: SupabaseUser):
 
         final_llm_messages: List[Dict[str, str]] = []
 
+        s3_load_start_time = time.time()
         try:
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
             frameworks = get_latest_frameworks(agent_name); 
@@ -1269,6 +1271,9 @@ def handle_chat(user: SupabaseUser):
         except Exception as e: 
             logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True); 
             base_system_prompt = "Error: Could not load system configuration."; frameworks = event_context = agent_docs = None
+        
+        s3_load_time = time.time() - s3_load_start_time
+        logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
         
         source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes like `[^1]`. \n2. Place footnote directly after sentence/paragraph. \n3. List all cited sources at end under `### Sources` as `[^1]: source_file_name.ext`."
         
@@ -1293,6 +1298,7 @@ def handle_chat(user: SupabaseUser):
         last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
 
         if last_actual_user_message_for_rag:
+            rag_start_time = time.time()
             normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
             is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
             if not is_simple_query:
@@ -1312,11 +1318,14 @@ def handle_chat(user: SupabaseUser):
                     rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
             elif is_simple_query: 
                 rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
+            rag_time = time.time() - rag_start_time
+            logger.info(f"[PERF] RAG processing took {rag_time:.4f}s")
         else: 
             rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable for this turn.]\n=== END RETRIEVED CONTEXT ==="
         final_system_prompt += rag_context_block 
         
         # Fetch and prepend saved transcript summaries if mode is 'enabled'
+        summary_load_start_time = time.time()
         if saved_transcript_memory_mode == 'enabled':
             try:
                 summaries = get_transcript_summaries(agent_name, event_id)
@@ -1338,8 +1347,11 @@ def handle_chat(user: SupabaseUser):
                 logger.error(f"Error fetching or processing transcript summaries: {e_sum}", exc_info=True)
         else:
             logger.info("Saved Transcript Memory mode is disabled. Skipping summary loading.")
-            
+        summary_load_time = time.time() - summary_load_start_time
+        logger.info(f"[PERF] Transcript summary loading took {summary_load_time:.4f}s")
+
         # Transcript loading based on transcript_listen_mode
+        transcript_load_start_time = time.time()
         if transcript_listen_mode == 'all':
             logger.info(f"Transcript Listen Mode 'all': Reading all transcripts for {agent_name}/{event_id}.")
             all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
@@ -1434,8 +1446,10 @@ def handle_chat(user: SupabaseUser):
                 logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
         else: # transcript_listen_mode is not 'all' or 'latest' (should not happen with defaults)
             logger.warning(f"Unknown transcript_listen_mode: {transcript_listen_mode}. Defaulting to no transcript loading for this turn.")
-            final_llm_messages.extend(llm_messages_from_client) # Just add client messages
-
+            final_llm_messages.extend(llm_messages_from_client)
+        transcript_load_time = time.time() - transcript_load_start_time
+        logger.info(f"[PERF] Transcript loading took {transcript_load_time:.4f}s")
+        
         now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
         final_system_prompt += f"\nCurrent Time Context: {time_str}" 
         # NOTE: claude-sonnet-4-20250514 is a VALID model name - do not change without verification
@@ -1444,6 +1458,9 @@ def handle_chat(user: SupabaseUser):
         if not final_llm_messages: 
             logger.error("No messages to send to LLM after all processing. Aborting call.")
             return jsonify({"error": "No content to process for LLM."}), 400
+
+        pre_llm_call_time = time.time() - request_start_time
+        logger.info(f"[PERF] Total pre-request processing time: {pre_llm_call_time:.4f}s")
 
         def generate_stream():
             response_content = ""; stream_error = None
