@@ -716,6 +716,12 @@ def audio_stream_socket(ws, session_id: str):
                 try:
                     control_msg = json.loads(message)
                     action = control_msg.get("action")
+                    logger.debug(f"WebSocket session {session_id}: Received control message: {control_msg}")
+
+                    if action == "ping":
+                        ws.send(json.dumps({"type": "pong"}))
+                        continue # Don't log further for pings
+
                     logger.info(f"WebSocket session {session_id}: Received control message: {control_msg}")
                     if action == "set_processing_state": 
                         is_paused_by_client = control_msg.get("paused", False)

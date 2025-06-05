@@ -399,7 +399,8 @@ def _transcribe_audio_segment_openai(
                     if attempt == max_retries - 1: raise
                 except requests.exceptions.RequestException as e:
                     logger.error(f"RequestException transcribing {audio_file_path} on attempt {attempt + 1}: {e}")
-                    if response and response.content: # Check if response object exists
+                    # Check if 'response' exists before trying to access it
+                    if 'response' in locals() and response and response.content:
                         try:
                             error_detail = response.json()
                             logger.error(f"OpenAI API error detail: {error_detail}")
