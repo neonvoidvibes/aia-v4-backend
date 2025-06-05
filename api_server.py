@@ -31,7 +31,7 @@ from utils.s3_utils import (
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
-from anthropic import Anthropic, APIStatusError, AnthropicError
+from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError # Import APIConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
 
@@ -72,6 +72,59 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 
 UPLOAD_FOLDER = 'tmp/uploaded_transcriptions/'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+class CircuitBreaker:
+    STATE_CLOSED = "CLOSED"
+    STATE_OPEN = "OPEN"
+    STATE_HALF_OPEN = "HALF_OPEN"
+
+    def __init__(self, failure_threshold: int, recovery_timeout: int):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failure_count = 0
+        self.state = self.STATE_CLOSED
+        self.last_failure_time: Optional[float] = None
+        self._lock = threading.Lock()
+        logger.info(f"Circuit Breaker initialized: Threshold={failure_threshold}, Timeout={recovery_timeout}s")
+
+    def is_open(self) -> bool:
+        with self._lock:
+            if self.state == self.STATE_OPEN:
+                if time.time() - (self.last_failure_time or 0) > self.recovery_timeout:
+                    self.state = self.STATE_HALF_OPEN
+                    logger.warning("Circuit Breaker: State changed to HALF_OPEN. Allowing a test request.")
+                    return False
+                return True
+            return False
+
+    def record_failure(self):
+        with self._lock:
+            if self.state == self.STATE_HALF_OPEN:
+                self.state = self.STATE_OPEN
+                self.last_failure_time = time.time()
+                logger.error("Circuit Breaker: Failure in HALF_OPEN state. Tripping back to OPEN.")
+            else: # CLOSED
+                self.failure_count += 1
+                if self.failure_count >= self.failure_threshold:
+                    self.state = self.STATE_OPEN
+                    self.last_failure_time = time.time()
+                    logger.error(f"Circuit Breaker: Failure threshold ({self.failure_threshold}) reached. Tripping to OPEN state for {self.recovery_timeout}s.")
+    
+    def record_success(self):
+        with self._lock:
+            if self.state == self.STATE_HALF_OPEN:
+                logger.info("Circuit Breaker: Success in HALF_OPEN state. Resetting to CLOSED.")
+            elif self.state == self.STATE_CLOSED and self.failure_count > 0:
+                 logger.info("Circuit Breaker: Success recorded, resetting failure count.")
+            self.failure_count = 0
+            self.state = self.STATE_CLOSED
+
+# Instantiate it globally
+anthropic_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+
+# Custom Exception for Circuit Breaker
+class CircuitBreakerOpen(Exception):
+    pass
 
 SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
     "hello", "hello :)", "hi", "hi :)", "hey", "hey :)", "yo", "greetings", "good morning", "good afternoon",
@@ -123,11 +176,16 @@ try:
     logger.info("Anthropic client initialized.")
 except Exception as e: 
     logger.critical(f"Failed Anthropic client init: {e}", exc_info=True)
-    anthropic_client = None # Keep it None on failure so other parts can check
+    anthropic_client = None # Keep it None on failure
 
 def log_retry_error(retry_state): 
     logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
-retry_strategy = retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry_error_callback=log_retry_error, retry=(retry_if_exception_type(APIStatusError)))
+retry_strategy = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry_error_callback=log_retry_error,
+    retry=(retry_if_exception_type((APIStatusError, APIConnectionError)))
+)
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
 session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock) 
@@ -236,6 +294,9 @@ def supabase_auth_required(agent_required: bool = True):
 
 @retry_strategy
 def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
+    if anthropic_circuit_breaker.is_open():
+        raise CircuitBreakerOpen("Assistant is temporarily unavailable due to upstream issues. Please try again in a moment.")
+
     if not anthropic_client: raise RuntimeError("Anthropic client not initialized.")
     # Enhanced logging for API call payload
     logger.info("="*15 + " ANTHROPIC API CALL (STREAM) " + "="*15)
@@ -558,8 +619,7 @@ def summarize_transcript_route(user: SupabaseUser):
                     logger.error(f"SummarizeTranscript: Error moving original transcript {s3_key_original_transcript} to saved location: {e_move}", exc_info=True)
                     # If moving fails, the summary is still created. We might want to indicate a partial success
                     # or attempt to clean up the summary if the original can't be moved.
-                    # For now, return success for summary creation but log the move error. The client won't know about this specific error.
-                    # A more robust solution might involve a multi-step transaction or a cleanup mechanism.
+                    # For now, return success for the summary part
                     pass # Continue to return success for the summary part
 
             else:
@@ -958,6 +1018,7 @@ def transcribe_uploaded_file(user: SupabaseUser):
         return jsonify({"error": "No audio_file part in the request"}), 400
     
     file = request.files['audio_file']
+    transcriptionLanguage = request.form.get('transcription_language', 'any') # Get language from form
     
     if file.filename == '':
         logger.warning("No selected file provided in audio_file part.")
@@ -985,7 +1046,7 @@ def transcribe_uploaded_file(user: SupabaseUser):
             
             from transcription_service import _transcribe_audio_segment_openai as transcribe_whisper_file
             
-            logger.info(f"Starting transcription for {temp_filepath}...")
+            logger.info(f"Starting transcription for {temp_filepath} with language: {transcriptionLanguage}...")
             transcription_data = transcribe_whisper_file(
                 audio_file_path=temp_filepath,
                 openai_api_key=openai_api_key,
@@ -1392,9 +1453,14 @@ def handle_chat(user: SupabaseUser):
                         response_content += text
                         sse_data = json.dumps({'delta': text})
                         yield f"data: {sse_data}\n\n"
+                anthropic_circuit_breaker.record_success() # Success! Reset the breaker.
+            except CircuitBreakerOpen as e:
+                stream_error = str(e)
+                logger.error(f"CircuitBreaker is OPEN. Rejecting request immediately. Message: {stream_error}")
             except RetryError as e: 
-                stream_error = "Assistant unavailable after retries."
-                logger.error(f"RetryError during Anthropic stream: {e}")
+                stream_error = "Assistant is currently unavailable. Please try again in a moment."
+                logger.error(f"RetryError during Anthropic stream after all retries: {e}. Tripping circuit breaker.")
+                anthropic_circuit_breaker.record_failure()
             except APIStatusError as e:
                 error_body_str = "Unknown API error structure"
                 try:
@@ -1402,15 +1468,19 @@ def handle_chat(user: SupabaseUser):
                     error_body_str = json.dumps(error_detail_json) 
                 except json.JSONDecodeError:
                     error_body_str = e.response.text if hasattr(e.response, 'text') else "Non-JSON error response"
-                except Exception:
-                    pass 
+                except Exception: pass
                 stream_error = f"API Error: Status {e.status_code} - {error_body_str}"
                 logger.error(f"APIStatusError during Anthropic stream: Status {e.status_code}, Body: {error_body_str}", exc_info=True)
+                anthropic_circuit_breaker.record_failure()
+            except APIConnectionError as e:
+                stream_error = "A network error occurred while connecting to the assistant. Please check your connection and try again."
+                logger.error(f"APIConnectionError during Anthropic stream: {e}", exc_info=True)
+                anthropic_circuit_breaker.record_failure()
             except AnthropicError as e: 
-                stream_error = f"Anthropic Error: {str(e)}"
+                stream_error = f"An unexpected error occurred with the assistant: {str(e)}"
                 logger.error(f"AnthropicError during Anthropic stream: {e}", exc_info=True)
             except Exception as e: 
-                stream_error = f"Unexpected error during stream: {str(e)}"
+                stream_error = f"An unexpected server error occurred during stream generation: {str(e)}"
                 logger.error(f"Generic Exception during Anthropic stream: {e}", exc_info=True)
             
             if stream_error: 
