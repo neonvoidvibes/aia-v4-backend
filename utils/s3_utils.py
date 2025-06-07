@@ -241,9 +241,9 @@ def get_latest_system_prompt(agent_name: Optional[str] = None) -> Optional[str]:
     # Use caching for base prompt
     base_prompt_pattern = '_config/systemprompt_base'
     base_prompt = get_cached_s3_file(
-        base_prompt_pattern,
-        "base system prompt",
-        lambda: find_file_any_extension(base_prompt_pattern, "base system prompt")
+        cache_key=base_prompt_pattern,
+        description="base system prompt",
+        fetch_function=lambda: find_file_any_extension(base_prompt_pattern, "base system prompt")
     )
 
     if not base_prompt:
@@ -255,9 +255,9 @@ def get_latest_system_prompt(agent_name: Optional[str] = None) -> Optional[str]:
         agent_pattern = f'organizations/river/agents/{agent_name}/_config/systemprompt_aID-{agent_name}'
         # Use caching for agent-specific prompt
         agent_prompt = get_cached_s3_file(
-            agent_pattern,
-            f"agent system prompt for {agent_name}",
-            lambda: find_file_any_extension(agent_pattern, f"agent system prompt for {agent_name}")
+            cache_key=agent_pattern,
+            description=f"agent system prompt for {agent_name}",
+            fetch_function=lambda: find_file_any_extension(agent_pattern, f"agent system prompt for {agent_name}")
         )
         if agent_prompt: logger.info(f"Loaded agent-specific system prompt for '{agent_name}'.")
         else: logger.warning(f"No agent-specific system prompt found using pattern '{agent_pattern}'.")
@@ -273,18 +273,18 @@ def get_latest_frameworks(agent_name: Optional[str] = None) -> Optional[str]:
 
     base_framework_pattern = '_config/frameworks_base'
     base_frameworks = get_cached_s3_file(
-        base_framework_pattern,
-        "base frameworks",
-        lambda: find_file_any_extension(base_framework_pattern, "base frameworks")
+        cache_key=base_framework_pattern,
+        description="base frameworks",
+        fetch_function=lambda: find_file_any_extension(base_framework_pattern, "base frameworks")
     ) or ""
 
     agent_frameworks = ""
     if agent_name:
         agent_pattern = f'organizations/river/agents/{agent_name}/_config/frameworks_aID-{agent_name}'
         agent_frameworks = get_cached_s3_file(
-            agent_pattern,
-            f"agent frameworks for {agent_name}",
-            lambda: find_file_any_extension(agent_pattern, f"agent frameworks for {agent_name}")
+            cache_key=agent_pattern,
+            description=f"agent frameworks for {agent_name}",
+            fetch_function=lambda: find_file_any_extension(agent_pattern, f"agent frameworks for {agent_name}")
         ) or ""
         if agent_frameworks: logger.info(f"Loaded agent-specific frameworks for '{agent_name}'.")
         else: logger.warning(f"No agent-specific frameworks found using pattern '{agent_pattern}'.")
@@ -303,9 +303,9 @@ def get_latest_context(agent_name: str, event_id: Optional[str] = None) -> Optio
     
     agent_context_pattern = f'organizations/river/agents/{agent_name}/_config/context_aID-{agent_name}'
     agent_primary_context = get_cached_s3_file(
-        agent_context_pattern,
-        f"agent primary context for {agent_name}",
-        lambda: find_file_any_extension(agent_context_pattern, "agent primary context")
+        cache_key=agent_context_pattern,
+        description=f"agent primary context for {agent_name}",
+        fetch_function=lambda: find_file_any_extension(agent_context_pattern, "agent primary context")
     ) or ""
     if agent_primary_context: logger.info(f"Loaded agent-specific primary context for agent '{agent_name}'.")
     else: logger.warning(f"No agent-specific primary context found for agent '{agent_name}'.")
@@ -314,9 +314,9 @@ def get_latest_context(agent_name: str, event_id: Optional[str] = None) -> Optio
     if event_id and event_id != '0000':
         event_pattern = f'organizations/river/agents/{agent_name}/events/{event_id}/_config/context_aID-{agent_name}_eID-{event_id}'
         event_context = get_cached_s3_file(
-            event_pattern,
-            f"event context for {agent_name}/{event_id}",
-            lambda: find_file_any_extension(event_pattern, "event context")
+            cache_key=event_pattern,
+            description=f"event context for {agent_name}/{event_id}",
+            fetch_function=lambda: find_file_any_extension(event_pattern, "event context")
         ) or ""
         if event_context: logger.info(f"Loaded event-specific context for event '{event_id}'.")
         else: logger.warning(f"No event-specific context found for event '{event_id}'.")
