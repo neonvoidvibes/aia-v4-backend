@@ -404,6 +404,7 @@ def _transcribe_audio_segment_openai(
                         try:
                             error_detail = response.json()
                             logger.error(f"OpenAI API error detail: {error_detail}")
+                            logger.error(f"OpenAI API error detail: {error_detail}")
                         except json.JSONDecodeError:
                             logger.error(f"OpenAI API error response (non-JSON): {response.text[:500]}")
                     if attempt == max_retries - 1: raise
