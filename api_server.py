@@ -899,29 +899,12 @@ def audio_stream_socket(ws, session_id: str):
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
     finally:
-        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected. Entering finally block for potential cleanup.")
-        
-        # Give the client a grace period to reconnect before finalizing the session
-        time.sleep(30) # Wait 30 seconds
-
+        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected. Deregistering from session.")
         with session_locks[session_id]:
-            if session_id in active_sessions:
-                session_data = active_sessions[session_id]
-                # If a new websocket has already reconnected, do nothing.
-                if session_data.get("websocket_connection") is not None and session_data.get("websocket_connection") != ws:
-                    logger.info(f"Session {session_id} has a new active WebSocket. This old instance will not trigger finalization.")
-                # If the session is still marked as active but this websocket is gone, finalize it.
-                elif session_data.get("is_active"):
-                    logger.warning(f"Grace period for session {session_id} ended. No reconnect detected. Finalizing session.")
-                    _finalize_session(session_id)
-                else:
-                    # Session is not active (e.g., was stopped manually).
-                    # Deregister this websocket instance if it's still the one on record.
-                    if session_data.get("websocket_connection") == ws:
-                        session_data["websocket_connection"] = None
-                    logger.info(f"Session {session_id} was already inactive. Old WebSocket instance deregistered.")
-            else:
-                logger.info(f"Session {session_id} already cleaned up. No action needed in finally block.")
+            if session_id in active_sessions and active_sessions[session_id].get("websocket_connection") == ws:
+                active_sessions[session_id]["websocket_connection"] = None
+                active_sessions[session_id]["last_activity_timestamp"] = time.time() # Start the idle timer
+                logger.debug(f"Session {session_id} WebSocket instance deregistered. Idle cleanup thread will handle finalization if needed.")
         
 
 @app.route('/api/recording/status', methods=['GET'])
@@ -1581,23 +1564,16 @@ def sync_agents_from_s3_to_supabase():
 
 def cleanup_idle_sessions():
     while True:
-        time.sleep(5 * 60) 
+        time.sleep(30) # Check more frequently
         now = time.time()
         sessions_to_cleanup = []
         for session_id, session_data in list(active_sessions.items()): 
-            if not session_data.get("is_active", False) and not session_data.get("is_finalizing", False): 
-                 if now - session_data.get("last_activity_timestamp", 0) > (15 * 60): 
-                      logger.warning(f"Found stale inactive session {session_id}. Adding to cleanup queue.")
-                      sessions_to_cleanup.append(session_id)
-                 continue
-
-            if session_data.get("websocket_connection") is None and \
-               now - session_data.get("last_activity_timestamp", 0) > (10 * 60): 
-                logger.warning(f"Session {session_id} has no WebSocket and is idle. Marking for cleanup.")
-                sessions_to_cleanup.append(session_id)
-            elif session_data.get("websocket_connection") is not None and \
-                 now - session_data.get("last_activity_timestamp", 0) > (30 * 60): 
-                logger.warning(f"Session {session_id} has an active WebSocket but is idle. Marking for cleanup.")
+            # Finalize sessions that are active but have lost their websocket for a grace period
+            if session_data.get("is_active") and \
+               not session_data.get("is_finalizing") and \
+               session_data.get("websocket_connection") is None and \
+               now - session_data.get("last_activity_timestamp", 0) > 45: # 45s grace period for reconnect
+                logger.warning(f"Idle session cleanup: Session {session_id} has been active without a WebSocket for >45s. Marking for finalization.")
                 sessions_to_cleanup.append(session_id)
         
         for session_id_to_clean in sessions_to_cleanup:
