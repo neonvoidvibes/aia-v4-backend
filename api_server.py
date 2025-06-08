@@ -1403,54 +1403,45 @@ def handle_chat(user: SupabaseUser):
                     current_transcript_state, agent_name, event_id
                 )
                 
-                if current_transcript_state.initial_full_transcript_content and \
-                   not current_transcript_state.initial_full_transcript_content.startswith("__LOAD_ATTEMPTED"):
+                # Correctly handle initial load vs delta content.
+                if transcript_data_from_s3 and was_initial_load_attempt:
                     initial_transcript_message_content = (
                         f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
                         f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
                         f"=== BEGIN FULL MEETING TRANSCRIPT ===\n"
-                        f"{current_transcript_state.initial_full_transcript_content}\n"
+                        f"{transcript_data_from_s3}\n"
                         f"=== END FULL MEETING TRANSCRIPT ==="
                     )
                     final_llm_messages.append({'role': 'user', 'content': initial_transcript_message_content})
-                    logger.info(f"Prepended freshly loaded full transcript (length {len(current_transcript_state.initial_full_transcript_content)}) to current API call's messages.")
-
+                    logger.info(f"Prepended initial full transcript (length {len(transcript_data_from_s3)}) to current API call's messages.")
+                elif not transcript_data_from_s3 and was_initial_load_attempt:
+                    logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data. No initial transcript message added.")
+                
+                # Always add the client's messages for this turn
                 final_llm_messages.extend(llm_messages_from_client)
 
+                # Then, handle a subsequent delta update if one was found
                 if transcript_data_from_s3 and not was_initial_load_attempt:
                     label = "[Meeting Transcript Update (from S3)]"
                     transcript_delta_to_add = f"{label}\n{transcript_data_from_s3}"
                     
+                    # Insert the delta before the last user message, as it provides context for their message.
                     insert_idx_for_delta = len(final_llm_messages)
                     for i in range(len(final_llm_messages) - 1, -1, -1):
-                        msg_content_iter = final_llm_messages[i]['content']
-                        is_prog_initial_load_msg = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the full meeting transcript")
-                        is_prog_delta_update_msg = msg_content_iter.startswith("[Meeting Transcript Update (from S3)]")
-                        is_prog_all_transcripts_msg = msg_content_iter.startswith("IMPORTANT CONTEXT: The following is the FULL transcript history")
-
-
-                        if final_llm_messages[i]['role'] == 'user' and \
-                           not is_prog_initial_load_msg and \
-                           not is_prog_delta_update_msg and \
-                           not is_prog_all_transcripts_msg: # Ensure not to insert before other special transcript messages
+                        is_special_transcript_message = (
+                            final_llm_messages[i]['content'].startswith("IMPORTANT CONTEXT:") or
+                            final_llm_messages[i]['content'].startswith("[Meeting Transcript Update (from S3)]")
+                        )
+                        # We want to insert just before the last *actual* user message, not before system/transcript messages.
+                        if final_llm_messages[i]['role'] == 'user' and not is_special_transcript_message:
                             insert_idx_for_delta = i
                             break
                     
-                    # Handle cases where final_llm_messages might only contain special transcript messages
-                    if insert_idx_for_delta == len(final_llm_messages):
-                        # If only special messages exist, try to insert after the first one (initial load / all transcripts)
-                        if final_llm_messages and (final_llm_messages[0]['content'].startswith("IMPORTANT CONTEXT:") or final_llm_messages[0]['content'].startswith("=== BEGIN")):
-                           insert_idx_for_delta = 1
-                        # If no messages or no place to insert, it will append, which is acceptable fallback.
-
-
                     final_llm_messages.insert(insert_idx_for_delta, {'role': 'user', 'content': transcript_delta_to_add})
-                    logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at effective index {insert_idx_for_delta} (this indicates growth during API call processing).")
+                    logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at index {insert_idx_for_delta}.")
                 
-                elif not transcript_data_from_s3 and was_initial_load_attempt:
-                     logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data, or was already processed as initial.")
                 elif not transcript_data_from_s3 and not was_initial_load_attempt:
-                     logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn (after initial load).")
+                     logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn.")
 
             except Exception as e:
                 logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)

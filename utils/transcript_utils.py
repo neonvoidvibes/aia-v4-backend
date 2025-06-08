@@ -118,12 +118,14 @@ def read_new_transcript_content(state: TranscriptState, agent_name: str, event_i
             filename_initial = os.path.basename(latest_key_for_initial_load)
             labeled_content_initial = f"(Source File: {filename_initial})\n{file_content_str_initial}"
             
-            state.initial_full_transcript_content = labeled_content_initial
+            # After returning the content, set the state to a marker to prevent re-sending.
+            # Do not store the content in the state object.
+            state.initial_full_transcript_content = f"__LOAD_COMPLETED_{latest_key_for_initial_load}__"
             state.current_latest_key = latest_key_for_initial_load
             state.file_positions[latest_key_for_initial_load] = s3_size_initial # Mark as fully read
             state.last_modified[latest_key_for_initial_load] = s3_mod_time_initial_utc
             
-            logger.info(f"Initial Latest Load: Completed. Content length: {len(labeled_content_initial)} chars. Latest key set to: {state.current_latest_key}")
+            logger.info(f"Initial Latest Load: Completed. Content length: {len(labeled_content_initial)} chars. Latest key set to: {state.current_latest_key}. State marked as loaded.")
             return labeled_content_initial, True # Return the loaded content and True for was_initial_load_attempt
 
         except Exception as e:
