@@ -832,7 +832,8 @@ def audio_stream_socket(ws, session_id: str):
 
                         def process_segment_in_thread(
                             s_id, s_data_ref, lock_ref,
-                            audio_bytes, wav_path, current_offset
+                            audio_bytes, wav_path
+                            # REMOVED stale current_offset from args
                         ):
                             try:
                                 ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', wav_path]
@@ -853,10 +854,15 @@ def audio_stream_socket(ws, session_id: str):
                                     logger.info(f"Thread Session {s_id}: Actual duration of WAV {wav_path} is {actual_segment_dur:.2f}s")
                                 except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
                                     logger.error(f"Thread Session {s_id}: ffprobe failed for {wav_path}: {ffprobe_err}. Estimating.")
-                                    estimated_dur = len(audio_bytes) / (16000 * 2 * 0.2) 
+                                    # Fallback to a rough estimation based on WAV format (16kHz, 16-bit mono)
+                                    # This is a fallback and might not be perfectly accurate.
+                                    bytes_per_second = 16000 * 2 # 16kHz * 16-bit (2 bytes)
+                                    estimated_dur = len(audio_bytes) / bytes_per_second
                                     actual_segment_dur = estimated_dur
                                     logger.warning(f"Thread Session {s_id}: Using rough estimated duration: {actual_segment_dur:.2f}s")
                                 
+                                # This update is also moved inside the locked section in transcription_service
+                                # to ensure it's coupled with the offset calculation.
                                 with lock_ref:
                                     if s_id in active_sessions: 
                                         active_sessions[s_id]['actual_segment_duration_seconds'] = actual_segment_dur
@@ -871,7 +877,7 @@ def audio_stream_socket(ws, session_id: str):
                             except Exception as thread_e:
                                 logger.error(f"Thread Session {s_id}: Error during threaded segment processing: {thread_e}", exc_info=True)
                             finally:
-                                pass
+                                pass # Keep empty finally block
                         
                         processing_thread = threading.Thread(
                             target=process_segment_in_thread,
@@ -880,8 +886,8 @@ def audio_stream_socket(ws, session_id: str):
                                 session_data, 
                                 session_locks[session_id], 
                                 all_segment_bytes_for_ffmpeg_thread,
-                                final_output_wav_path_thread,
-                                session_data['current_total_audio_duration_processed_seconds'] 
+                                final_output_wav_path_thread
+                                # REMOVED stale current_offset from args
                             )
                         )
                         processing_thread.start()
