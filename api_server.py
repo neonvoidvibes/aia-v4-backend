@@ -698,11 +698,15 @@ def audio_stream_socket(ws, session_id: str):
 
     try:
         while True:
-            message = ws.receive(timeout=1) 
+            # The timeout here is for receiving a message. It doesn't keep the connection alive by itself.
+            # The main timeout logic is now handled in the finally block with a grace period.
+            message = ws.receive(timeout=5) # Increased timeout slightly
 
             if message is None: 
-                if active_sessions.get(session_id) and (time.time() - active_sessions[session_id]["last_activity_timestamp"] > 60): 
-                    logger.warning(f"WebSocket for session {session_id} timed out due to inactivity. Closing.")
+                # This block is now less critical as the main timeout is handled in `finally`.
+                # We can keep it as a secondary check.
+                if active_sessions.get(session_id) and (time.time() - active_sessions[session_id].get("last_activity_timestamp", 0) > 70):
+                    logger.warning(f"WebSocket for session {session_id} timed out due to inactivity (loop check). Closing.")
                     break 
                 continue 
 
@@ -895,12 +899,29 @@ def audio_stream_socket(ws, session_id: str):
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
     finally:
-        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected.")
-        if session_id in active_sessions and active_sessions[session_id].get("websocket_connection") == ws:
-            with session_locks[session_id]: 
-                 if session_id in active_sessions: 
-                    active_sessions[session_id]["websocket_connection"] = None
-                    logger.info(f"WebSocket for session {session_id} (user {user.id}) deregistered in finally block.")
+        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected. Entering finally block for potential cleanup.")
+        
+        # Give the client a grace period to reconnect before finalizing the session
+        time.sleep(30) # Wait 30 seconds
+
+        with session_locks[session_id]:
+            if session_id in active_sessions:
+                session_data = active_sessions[session_id]
+                # If a new websocket has already reconnected, do nothing.
+                if session_data.get("websocket_connection") is not None and session_data.get("websocket_connection") != ws:
+                    logger.info(f"Session {session_id} has a new active WebSocket. This old instance will not trigger finalization.")
+                # If the session is still marked as active but this websocket is gone, finalize it.
+                elif session_data.get("is_active"):
+                    logger.warning(f"Grace period for session {session_id} ended. No reconnect detected. Finalizing session.")
+                    _finalize_session(session_id)
+                else:
+                    # Session is not active (e.g., was stopped manually).
+                    # Deregister this websocket instance if it's still the one on record.
+                    if session_data.get("websocket_connection") == ws:
+                        session_data["websocket_connection"] = None
+                    logger.info(f"Session {session_id} was already inactive. Old WebSocket instance deregistered.")
+            else:
+                logger.info(f"Session {session_id} already cleaned up. No action needed in finally block.")
         
 
 @app.route('/api/recording/status', methods=['GET'])
