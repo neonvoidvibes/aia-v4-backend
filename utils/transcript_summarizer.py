@@ -521,7 +521,7 @@ def generate_transcript_summary(
     source_s3_key: str,
     llm_client: Anthropic,
     model_name: Optional[str] = None, # Allows override if passed
-    max_tokens: int = 4000
+    max_tokens: int = 12000
 ) -> Optional[Dict[str, Any]]:
     """
     Generates a structured JSON summary of a transcript using an LLM.
