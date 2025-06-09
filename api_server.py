@@ -37,18 +37,6 @@ from flask_cors import CORS
 
 from transcription_service import process_audio_segment_and_update_s3
 
-# Import VAD integration components
-try:
-    from vad_integration_bridge import (
-        initialize_vad_bridge, get_vad_bridge, cleanup_vad_bridge, 
-        is_vad_enabled, log_vad_configuration
-    )
-    VAD_IMPORT_SUCCESS = True
-    logger.info("VAD integration components imported successfully")
-except ImportError as e:
-    VAD_IMPORT_SUCCESS = False
-    logger.warning(f"VAD integration not available: {e}")
-
 load_dotenv()
 
 def setup_logging(debug=False):
@@ -76,6 +64,18 @@ else:
     startup_logger.error("AWS_S3_BUCKET environment variable is NOT SET at startup!")
 
 logger = setup_logging(debug=os.getenv('FLASK_DEBUG', 'False').lower() == 'true')
+
+# Import VAD integration components after logger is set up
+try:
+    from vad_integration_bridge import (
+        initialize_vad_bridge, get_vad_bridge, cleanup_vad_bridge, 
+        is_vad_enabled, log_vad_configuration
+    )
+    VAD_IMPORT_SUCCESS = True
+    logger.info("VAD integration components imported successfully")
+except ImportError as e:
+    VAD_IMPORT_SUCCESS = False
+    logger.warning(f"VAD integration not available: {e}")
 
 app = Flask(__name__)
 CORS(app) 
