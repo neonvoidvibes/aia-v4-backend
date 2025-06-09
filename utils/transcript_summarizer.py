@@ -1,55 +1,15 @@
 import os
 import json
 import logging
-import re # Added missing import
 from typing import Optional, Dict, Any
 from anthropic import Anthropic, APIError
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-def _extract_json_with_brace_matching(text: str) -> Optional[str]:
-    """
-    Extract JSON object from text using proper brace matching.
-    Finds the first { and matches it with the corresponding }.
-    """
-    # Find the first opening brace
-    start_idx = text.find('{')
-    if start_idx == -1:
-        return None
-    
-    brace_count = 0
-    in_string = False
-    escape_next = False
-    
-    for i, char in enumerate(text[start_idx:], start_idx):
-        if escape_next:
-            escape_next = False
-            continue
-            
-        if char == '\\' and in_string:
-            escape_next = True
-            continue
-            
-        if char == '"' and not escape_next:
-            in_string = not in_string
-            continue
-            
-        if not in_string:
-            if char == '{':
-                brace_count += 1
-            elif char == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    # Found the matching closing brace
-                    return text[start_idx:i+1]
-    
-    # If we get here, braces were not properly matched
-    return None
-
 def _clean_json_string(json_str: str) -> str:
     """
-    Clean and fix common JSON formatting issues that LLMs might generate.
+    Clean basic JSON formatting issues from LLM output.
     """
     # Remove any leading/trailing whitespace
     json_str = json_str.strip()
@@ -62,159 +22,7 @@ def _clean_json_string(json_str: str) -> str:
     if json_str.endswith("```"):
         json_str = json_str[:-len("```")]
     
-    json_str = json_str.strip()
-    
-    # Fix common issues
-    # Remove any text before the first {
-    first_brace = json_str.find('{')
-    if first_brace > 0:
-        json_str = json_str[first_brace:]
-    
-    # Remove any text after the last }
-    last_brace = json_str.rfind('}')
-    if last_brace != -1 and last_brace < len(json_str) - 1:
-        json_str = json_str[:last_brace + 1]
-    
-    return json_str
-
-def _fix_json_syntax_errors(json_str: str) -> str:
-    """
-    Attempt to fix common JSON syntax errors with comprehensive repair logic.
-    """
-    # Fix trailing commas before closing braces/brackets
-    json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
-    
-    # Split into lines for line-by-line analysis
-    lines = json_str.split('\n')
-    fixed_lines = []
-    in_string = False
-    brace_stack = []
-    
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        
-        # Skip empty lines
-        if not stripped:
-            fixed_lines.append(line)
-            continue
-            
-        # Track string state and brace nesting
-        quote_count = stripped.count('"')
-        # Simple heuristic: if odd number of quotes, we might be in a string
-        if quote_count % 2 == 1:
-            in_string = not in_string
-            
-        # Count braces to track nesting
-        open_braces = stripped.count('{') - stripped.count('}')
-        open_brackets = stripped.count('[') - stripped.count(']')
-        
-        # If this is the last line and it doesn't end properly, try to close structures
-        if i == len(lines) - 1:
-            # Check if we need to close an unterminated string
-            if in_string and not stripped.endswith('"'):
-                if ':' in stripped and not stripped.endswith(','):
-                    line = line.rstrip() + '"'
-                    stripped = line.strip()
-            
-            # Try to properly close the JSON structure
-            if not stripped.endswith('}') and not stripped.endswith(']'):
-                # Estimate how many closing braces we need
-                remaining_opens = json_str.count('{') - json_str.count('}')
-                if remaining_opens > 0:
-                    line = line.rstrip() + '}'
-                    stripped = line.strip()
-        
-        # Fix missing commas between properties
-        if i < len(lines) - 1:  # Not the last line
-            next_line = lines[i + 1].strip() if i + 1 < len(lines) else ""
-            
-            # If current line ends with a value and next line starts a new property
-            if (stripped.endswith('"') or stripped.endswith('}') or stripped.endswith(']')) and \
-               next_line.startswith('"') and ':' in next_line:
-                if not stripped.endswith(','):
-                    line = line.rstrip() + ','
-                    
-            # If current line is a complete object and next line starts another object
-            elif stripped.endswith('}') and next_line.startswith('{'):
-                if not stripped.endswith(','):
-                    line = line.rstrip() + ','
-                    
-            # If current line is an array and next line starts an object
-            elif stripped.endswith(']') and next_line.startswith('{'):
-                if not stripped.endswith(','):
-                    line = line.rstrip() + ','
-        
-        # Fix unterminated string values
-        if ':' in stripped and not in_string:
-            # Find the colon position
-            colon_pos = stripped.find(':')
-            value_part = stripped[colon_pos + 1:].strip()
-            
-            # If value starts with quote but doesn't end with quote or comma
-            if value_part.startswith('"') and not value_part.endswith('"') and not value_part.endswith('",'):
-                # Check if this looks like an unterminated string
-                if value_part.count('"') == 1:  # Only opening quote
-                    line = line.rstrip() + '"'
-                    if i < len(lines) - 1 and not line.endswith(','):
-                        line += ','
-        
-        fixed_lines.append(line)
-    
-    result = '\n'.join(fixed_lines)
-    
-    # Final cleanup: ensure proper JSON structure
-    result = re.sub(r',(\s*[}\]])', r'\1', result)  # Remove trailing commas again
-    
-    return result
-
-def _attempt_json_repair(json_str: str) -> str:
-    """
-    Advanced JSON repair for severely malformed JSON.
-    """
-    # Try to find the main JSON structure and ensure it's complete
-    lines = json_str.split('\n')
-    
-    # Find the start of the actual JSON object
-    start_idx = 0
-    for i, line in enumerate(lines):
-        if line.strip().startswith('{'):
-            start_idx = i
-            break
-    
-    # Count braces to see if we need to close the structure
-    open_braces = 0
-    open_brackets = 0
-    last_valid_line = len(lines) - 1
-    
-    for i in range(start_idx, len(lines)):
-        line = lines[i]
-        open_braces += line.count('{') - line.count('}')
-        open_brackets += line.count('[') - line.count(']')
-        
-        # If we have a line that looks incomplete, truncate here
-        if ('...' in line or line.strip().endswith('...') or 
-            (line.count('"') % 2 == 1 and not line.strip().endswith('"'))):
-            last_valid_line = max(0, i - 1)
-            break
-    
-    # Rebuild with only valid lines
-    valid_lines = lines[start_idx:last_valid_line + 1]
-    
-    # Ensure the last line doesn't end with incomplete content
-    if valid_lines:
-        last_line = valid_lines[-1].strip()
-        if last_line.endswith(','):
-            valid_lines[-1] = valid_lines[-1].rstrip().rstrip(',')
-        
-        # Add necessary closing braces
-        while open_braces > 0:
-            valid_lines.append('}')
-            open_braces -= 1
-        while open_brackets > 0:
-            valid_lines.append(']')
-            open_brackets -= 1
-    
-    return '\n'.join(valid_lines)
+    return json_str.strip()
 
 SYSTEM_PROMPT_TEMPLATE = """
 ## Core Mission
@@ -572,63 +380,16 @@ def generate_transcript_summary(
         raw_llm_output = response.content[0].text
         logger.debug(f"Raw LLM output for summary (first 500 chars): {raw_llm_output[:500]}...")
 
-        # Apply progressive JSON cleaning and parsing with 5 fallback strategies
+        # Clean and parse JSON
         cleaned_llm_output = _clean_json_string(raw_llm_output)
         
-        # First attempt: direct parsing after basic cleaning
         try:
             summary_data = json.loads(cleaned_llm_output)
-            logger.info("Successfully parsed JSON directly after basic cleaning.")
+            logger.info("Successfully parsed JSON.")
         except json.JSONDecodeError as e:
-            logger.warning(f"First parsing attempt failed: {e}. Trying syntax fixes...")
-            
-            # Second attempt: apply syntax fixes
-            try:
-                fixed_json = _fix_json_syntax_errors(cleaned_llm_output)
-                summary_data = json.loads(fixed_json)
-                logger.info("Successfully parsed JSON after syntax fixes.")
-            except json.JSONDecodeError as e2:
-                logger.warning(f"Second parsing attempt failed: {e2}. Trying advanced repair...")
-                
-                # Third attempt: advanced JSON repair
-                try:
-                    repaired_json = _attempt_json_repair(cleaned_llm_output)
-                    summary_data = json.loads(repaired_json)
-                    logger.info("Successfully parsed JSON after advanced repair.")
-                except json.JSONDecodeError as e3:
-                    logger.warning(f"Advanced repair failed: {e3}. Trying brace matching extraction...")
-                    
-                    # Fourth attempt: extract JSON using brace matching
-                    extracted_json = _extract_json_with_brace_matching(cleaned_llm_output)
-                    if extracted_json:
-                        try:
-                            summary_data = json.loads(extracted_json)
-                            logger.info("Successfully parsed JSON from brace-matched block.")
-                        except json.JSONDecodeError as e4:
-                            logger.warning(f"Brace-matched parsing failed: {e4}. Trying repairs on extracted JSON...")
-                            
-                            # Fifth attempt: apply all fixes to extracted JSON
-                            try:
-                                fixed_extracted = _fix_json_syntax_errors(extracted_json)
-                                summary_data = json.loads(fixed_extracted)
-                                logger.info("Successfully parsed JSON after fixing extracted block.")
-                            except json.JSONDecodeError as e5:
-                                logger.warning(f"Fixed extracted JSON failed: {e5}. Trying advanced repair on extracted JSON...")
-                                
-                                # Sixth attempt: advanced repair on extracted JSON
-                                try:
-                                    repaired_extracted = _attempt_json_repair(extracted_json)
-                                    summary_data = json.loads(repaired_extracted)
-                                    logger.info("Successfully parsed JSON after advanced repair on extracted block.")
-                                except json.JSONDecodeError as e6:
-                                    logger.error(f"All JSON parsing attempts failed. Final error: {e6}")
-                                    logger.error(f"Original response sample: {raw_llm_output[:1000]}...")
-                                    logger.error(f"Final processed sample: {repaired_extracted[:1000] if 'repaired_extracted' in locals() else 'N/A'}...")
-                                    return None
-                    else:
-                        logger.error("No valid JSON object found in LLM output after all attempts.")
-                        logger.error(f"Response sample: {raw_llm_output[:1000]}...")
-                        return None
+            logger.error(f"Failed to parse JSON from LLM response: {e}")
+            logger.error(f"Response sample: {raw_llm_output[:1000]}...")
+            return None
         
         # Basic validation of the summary structure
         if not isinstance(summary_data, dict) or "metadata" not in summary_data or "overall_summary" not in summary_data:
