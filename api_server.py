@@ -37,6 +37,18 @@ from flask_cors import CORS
 
 from transcription_service import process_audio_segment_and_update_s3
 
+# Import VAD integration components
+try:
+    from vad_integration_bridge import (
+        initialize_vad_bridge, get_vad_bridge, cleanup_vad_bridge, 
+        is_vad_enabled, log_vad_configuration
+    )
+    VAD_IMPORT_SUCCESS = True
+    logger.info("VAD integration components imported successfully")
+except ImportError as e:
+    VAD_IMPORT_SUCCESS = False
+    logger.warning(f"VAD integration not available: {e}")
+
 load_dotenv()
 
 def setup_logging(debug=False):
@@ -177,6 +189,26 @@ try:
 except Exception as e: 
     logger.critical(f"Failed Anthropic client init: {e}", exc_info=True)
     anthropic_client = None # Keep it None on failure
+
+# Initialize VAD integration if enabled and available
+vad_bridge = None
+if VAD_IMPORT_SUCCESS and os.getenv('ENABLE_VAD_TRANSCRIPTION', 'false').lower() == 'true':
+    try:
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if openai_api_key:
+            vad_bridge = initialize_vad_bridge(openai_api_key)
+            logger.info("VAD transcription bridge initialized successfully")
+        else:
+            logger.error("VAD transcription enabled but OPENAI_API_KEY not found")
+    except Exception as e:
+        logger.error(f"Failed to initialize VAD transcription bridge: {e}", exc_info=True)
+        vad_bridge = None
+
+# Log VAD configuration for debugging
+if VAD_IMPORT_SUCCESS:
+    log_vad_configuration()
+else:
+    logger.info("VAD transcription not available (import failed)")
 
 def log_retry_error(retry_state): 
     logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
@@ -387,10 +419,27 @@ def start_recording_route(user: SupabaseUser):
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0,
         "webm_global_header_bytes": None, 
-        "is_first_blob_received": False,   
+        "is_first_blob_received": False,
+        "vad_enabled": False,  # Will be set to True if VAD session is created successfully
     }
     logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
+    
+    # Initialize VAD session if enabled
+    if VAD_IMPORT_SUCCESS and is_vad_enabled() and vad_bridge:
+        try:
+            vad_success = vad_bridge.create_vad_session(
+                session_id=session_id,
+                existing_session_data=active_sessions[session_id]
+            )
+            if vad_success:
+                active_sessions[session_id]["vad_enabled"] = True
+                logger.info(f"VAD session {session_id} created successfully")
+            else:
+                logger.warning(f"Failed to create VAD session {session_id}, falling back to original transcription")
+        except Exception as e:
+            logger.error(f"Error creating VAD session {session_id}: {e}", exc_info=True)
+            logger.warning(f"VAD session creation failed for {session_id}, falling back to original transcription")
     
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
@@ -481,6 +530,15 @@ def _finalize_session(session_id: str):
                 pass
         else: 
             logger.info(f"Session {session_id} Finalize: No remaining audio bytes to process.")
+        
+        # Clean up VAD session if it exists
+        if VAD_IMPORT_SUCCESS and session_data.get("vad_enabled") and vad_bridge:
+            try:
+                logger.info(f"Session {session_id} Finalize: Destroying VAD session")
+                vad_bridge.destroy_vad_session(session_id)
+                logger.info(f"Session {session_id} Finalize: VAD session destroyed successfully")
+            except Exception as e:
+                logger.warning(f"Session {session_id} Finalize: Error destroying VAD session: {e}", exc_info=True)
         
         ws = session_data.get("websocket_connection")
         if ws:
@@ -758,140 +816,170 @@ def audio_stream_socket(ws, session_id: str):
                         break
                     session_data = active_sessions[session_id]
                     
-                    if not session_data.get("is_first_blob_received", False):
-                        session_data["webm_global_header_bytes"] = bytes(message) 
-                        session_data["is_first_blob_received"] = True
-                        logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
-                        session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
-                    else:
-                        session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                    # Check if VAD is enabled for this session
+                    vad_enabled = session_data.get("vad_enabled", False)
                     
-                    logger.debug(f"Session {session_id}: Appended {len(message)} bytes to raw_bytes buffer. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
-
-                    session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 
-
-                    if not session_data["is_backend_processing_paused"] and \
-                       session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
+                    if vad_enabled and VAD_IMPORT_SUCCESS and vad_bridge:
+                        # VAD Processing Path
+                        logger.debug(f"Session {session_id}: Processing audio blob via VAD pipeline ({len(message)} bytes)")
                         
-                        logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment from raw bytes.")
-                        
-                        current_fragment_bytes = bytes(session_data["current_segment_raw_bytes"])
-                        global_header_bytes = session_data.get("webm_global_header_bytes", b'')
-
-                        if not global_header_bytes and current_fragment_bytes:
-                            logger.warning(f"Session {session_id}: Global header not captured, but processing fragments. This might fail if not the very first segment.")
-                            all_segment_bytes = current_fragment_bytes
-                        elif global_header_bytes and current_fragment_bytes:
-                            if current_fragment_bytes.startswith(global_header_bytes) and len(global_header_bytes) > 0:
-                                all_segment_bytes = current_fragment_bytes
-                                logger.debug(f"Session {session_id}: Processing first segment data which includes its own header.")
-                            else:
-                                all_segment_bytes = global_header_bytes + current_fragment_bytes
-                                logger.debug(f"Session {session_id}: Prepended global header ({len(global_header_bytes)} bytes) to current fragments ({len(current_fragment_bytes)} bytes).")
-                        elif global_header_bytes and not current_fragment_bytes:
-                            logger.warning(f"Session {session_id}: Global header exists but no current fragments. Skipping empty segment.")
-                            session_data["current_segment_raw_bytes"] = bytearray() 
-                            session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
-                            session_data["actual_segment_duration_seconds"] = 0.0
-                            continue
-                        logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment from raw bytes.")
-                        
-                        bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
-                        global_header_for_thread = session_data.get("webm_global_header_bytes", b'')
-                        
-                        session_data["current_segment_raw_bytes"] = bytearray()
-                        session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
-                        
-                        if not bytes_to_process: 
-                            logger.warning(f"Session {session_id}: Raw byte buffer for current fragments is empty, though duration target met. Skipping processing.")
-                            continue
-
-                        all_segment_bytes_for_ffmpeg_thread = b''
-                        if not global_header_for_thread and bytes_to_process:
-                            all_segment_bytes_for_ffmpeg_thread = bytes_to_process
-                        elif global_header_for_thread and bytes_to_process:
-                            if bytes_to_process.startswith(global_header_for_thread) and len(global_header_for_thread) > 0:
-                                all_segment_bytes_for_ffmpeg_thread = bytes_to_process
-                            else:
-                                all_segment_bytes_for_ffmpeg_thread = global_header_for_thread + bytes_to_process
-                        elif global_header_for_thread and not bytes_to_process:
-                             logger.warning(f"Session {session_id}: Global header exists but no current fragments to process. Skipping empty segment.")
-                             continue
-                        else: 
-                            logger.warning(f"Session {session_id}: No global header and no current fragments to process. Skipping.")
-                            continue
-                        
-                        if not all_segment_bytes_for_ffmpeg_thread:
-                            logger.warning(f"Session {session_id}: Combined bytes for FFmpeg is empty. Skipping.")
-                            continue
-
-                        temp_processing_dir_thread = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
-                        os.makedirs(temp_processing_dir_thread, exist_ok=True)
-                        segment_uuid_thread = uuid.uuid4().hex
-                        final_output_wav_path_thread = os.path.join(temp_processing_dir_thread, f"final_audio_{segment_uuid_thread}.wav")
-
-                        def process_segment_in_thread(
-                            s_id, s_data_ref, lock_ref,
-                            audio_bytes, wav_path
-                            # REMOVED stale current_offset from args
-                        ):
+                        if not session_data["is_backend_processing_paused"]:
+                            # Send audio blob directly to VAD processing
                             try:
-                                ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', wav_path]
-                                logger.info(f"Thread Session {s_id}: Executing ffmpeg: {' '.join(ffmpeg_command)}")
-                                process = subprocess.Popen(ffmpeg_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                                _, stderr_ffmpeg = process.communicate(input=audio_bytes)
-
-                                if process.returncode != 0:
-                                    logger.error(f"Thread Session {s_id}: ffmpeg failed. RC: {process.returncode}, Err: {stderr_ffmpeg.decode('utf-8','ignore')}")
-                                    return 
-                                logger.info(f"Thread Session {s_id}: Successfully converted to {wav_path}")
-
-                                ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', wav_path]
-                                actual_segment_dur = 0.0
-                                try:
-                                    duration_result = subprocess.run(ffprobe_command, capture_output=True, text=True, check=True)
-                                    actual_segment_dur = float(duration_result.stdout.strip())
-                                    logger.info(f"Thread Session {s_id}: Actual duration of WAV {wav_path} is {actual_segment_dur:.2f}s")
-                                except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
-                                    logger.error(f"Thread Session {s_id}: ffprobe failed for {wav_path}: {ffprobe_err}. Estimating.")
-                                    # Fallback to a rough estimation based on WAV format (16kHz, 16-bit mono)
-                                    # This is a fallback and might not be perfectly accurate.
-                                    bytes_per_second = 16000 * 2 # 16kHz * 16-bit (2 bytes)
-                                    estimated_dur = len(audio_bytes) / bytes_per_second
-                                    actual_segment_dur = estimated_dur
-                                    logger.warning(f"Thread Session {s_id}: Using rough estimated duration: {actual_segment_dur:.2f}s")
-                                
-                                # This update is also moved inside the locked section in transcription_service
-                                # to ensure it's coupled with the offset calculation.
-                                with lock_ref:
-                                    if s_id in active_sessions: 
-                                        active_sessions[s_id]['actual_segment_duration_seconds'] = actual_segment_dur
-                                    else:
-                                        logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration. Transcription might use old offset.")
-                                        s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
-
-                                success_transcribe = process_audio_segment_and_update_s3(wav_path, s_data_ref, lock_ref)
-                                if not success_transcribe:
-                                     logger.error(f"Thread Session {s_id}: Transcription or S3 update failed for segment {wav_path}")
-
-                            except Exception as thread_e:
-                                logger.error(f"Thread Session {s_id}: Error during threaded segment processing: {thread_e}", exc_info=True)
-                            finally:
-                                pass # Keep empty finally block
+                                vad_success = vad_bridge.process_audio_blob(session_id, bytes(message))
+                                if not vad_success:
+                                    logger.error(f"Session {session_id}: VAD audio processing failed, falling back to original method")
+                                    # Fall back to original processing
+                                    vad_enabled = False
+                                    session_data["vad_enabled"] = False
+                                else:
+                                    logger.debug(f"Session {session_id}: Audio blob successfully queued for VAD processing")
+                                    # Continue to next message - VAD handles everything in background
+                                    continue
+                            except Exception as e:
+                                logger.error(f"Session {session_id}: Error during VAD processing: {e}", exc_info=True)
+                                logger.warning(f"Session {session_id}: VAD processing failed, falling back to original method")
+                                vad_enabled = False
+                                session_data["vad_enabled"] = False
+                        else:
+                            logger.debug(f"Session {session_id}: Backend processing paused, skipping VAD processing")
+                            continue
+                    
+                    # Original Processing Path (fallback or when VAD not enabled)
+                    if not vad_enabled:
+                        if not session_data.get("is_first_blob_received", False):
+                            session_data["webm_global_header_bytes"] = bytes(message) 
+                            session_data["is_first_blob_received"] = True
+                            logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
+                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                        else:
+                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
                         
-                        processing_thread = threading.Thread(
-                            target=process_segment_in_thread,
-                            args=(
-                                session_id,
-                                session_data, 
-                                session_locks[session_id], 
-                                all_segment_bytes_for_ffmpeg_thread,
-                                final_output_wav_path_thread
+                        logger.debug(f"Session {session_id}: Appended {len(message)} bytes to raw_bytes buffer. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
+
+                        session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0 
+
+                        if not session_data["is_backend_processing_paused"] and \
+                           session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
+                            
+                            logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment from raw bytes.")
+                            
+                            current_fragment_bytes = bytes(session_data["current_segment_raw_bytes"])
+                            global_header_bytes = session_data.get("webm_global_header_bytes", b'')
+
+                            if not global_header_bytes and current_fragment_bytes:
+                                logger.warning(f"Session {session_id}: Global header not captured, but processing fragments. This might fail if not the very first segment.")
+                                all_segment_bytes = current_fragment_bytes
+                            elif global_header_bytes and current_fragment_bytes:
+                                if current_fragment_bytes.startswith(global_header_bytes) and len(global_header_bytes) > 0:
+                                    all_segment_bytes = current_fragment_bytes
+                                    logger.debug(f"Session {session_id}: Processing first segment data which includes its own header.")
+                                else:
+                                    all_segment_bytes = global_header_bytes + current_fragment_bytes
+                                    logger.debug(f"Session {session_id}: Prepended global header ({len(global_header_bytes)} bytes) to current fragments ({len(current_fragment_bytes)} bytes).")
+                            elif global_header_bytes and not current_fragment_bytes:
+                                logger.warning(f"Session {session_id}: Global header exists but no current fragments. Skipping empty segment.")
+                                session_data["current_segment_raw_bytes"] = bytearray() 
+                                session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
+                                session_data["actual_segment_duration_seconds"] = 0.0
+                                continue
+                            
+                            bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
+                            global_header_for_thread = session_data.get("webm_global_header_bytes", b'')
+                            
+                            session_data["current_segment_raw_bytes"] = bytearray()
+                            session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
+                            
+                            if not bytes_to_process: 
+                                logger.warning(f"Session {session_id}: Raw byte buffer for current fragments is empty, though duration target met. Skipping processing.")
+                                continue
+
+                            all_segment_bytes_for_ffmpeg_thread = b''
+                            if not global_header_for_thread and bytes_to_process:
+                                all_segment_bytes_for_ffmpeg_thread = bytes_to_process
+                            elif global_header_for_thread and bytes_to_process:
+                                if bytes_to_process.startswith(global_header_for_thread) and len(global_header_for_thread) > 0:
+                                    all_segment_bytes_for_ffmpeg_thread = bytes_to_process
+                                else:
+                                    all_segment_bytes_for_ffmpeg_thread = global_header_for_thread + bytes_to_process
+                            elif global_header_for_thread and not bytes_to_process:
+                                 logger.warning(f"Session {session_id}: Global header exists but no current fragments to process. Skipping empty segment.")
+                                 continue
+                            else: 
+                                logger.warning(f"Session {session_id}: No global header and no current fragments to process. Skipping.")
+                                continue
+                            
+                            if not all_segment_bytes_for_ffmpeg_thread:
+                                logger.warning(f"Session {session_id}: Combined bytes for FFmpeg is empty. Skipping.")
+                                continue
+
+                            temp_processing_dir_thread = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
+                            os.makedirs(temp_processing_dir_thread, exist_ok=True)
+                            segment_uuid_thread = uuid.uuid4().hex
+                            final_output_wav_path_thread = os.path.join(temp_processing_dir_thread, f"final_audio_{segment_uuid_thread}.wav")
+
+                            def process_segment_in_thread(
+                                s_id, s_data_ref, lock_ref,
+                                audio_bytes, wav_path
                                 # REMOVED stale current_offset from args
+                            ):
+                                try:
+                                    ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', wav_path]
+                                    logger.info(f"Thread Session {s_id}: Executing ffmpeg: {' '.join(ffmpeg_command)}")
+                                    process = subprocess.Popen(ffmpeg_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                    _, stderr_ffmpeg = process.communicate(input=audio_bytes)
+
+                                    if process.returncode != 0:
+                                        logger.error(f"Thread Session {s_id}: ffmpeg failed. RC: {process.returncode}, Err: {stderr_ffmpeg.decode('utf-8','ignore')}")
+                                        return 
+                                    logger.info(f"Thread Session {s_id}: Successfully converted to {wav_path}")
+
+                                    ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', wav_path]
+                                    actual_segment_dur = 0.0
+                                    try:
+                                        duration_result = subprocess.run(ffprobe_command, capture_output=True, text=True, check=True)
+                                        actual_segment_dur = float(duration_result.stdout.strip())
+                                        logger.info(f"Thread Session {s_id}: Actual duration of WAV {wav_path} is {actual_segment_dur:.2f}s")
+                                    except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
+                                        logger.error(f"Thread Session {s_id}: ffprobe failed for {wav_path}: {ffprobe_err}. Estimating.")
+                                        # Fallback to a rough estimation based on WAV format (16kHz, 16-bit mono)
+                                        # This is a fallback and might not be perfectly accurate.
+                                        bytes_per_second = 16000 * 2 # 16kHz * 16-bit (2 bytes)
+                                        estimated_dur = len(audio_bytes) / bytes_per_second
+                                        actual_segment_dur = estimated_dur
+                                        logger.warning(f"Thread Session {s_id}: Using rough estimated duration: {actual_segment_dur:.2f}s")
+                                    
+                                    # This update is also moved inside the locked section in transcription_service
+                                    # to ensure it's coupled with the offset calculation.
+                                    with lock_ref:
+                                        if s_id in active_sessions: 
+                                            active_sessions[s_id]['actual_segment_duration_seconds'] = actual_segment_dur
+                                        else:
+                                            logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration. Transcription might use old offset.")
+                                            s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
+
+                                    success_transcribe = process_audio_segment_and_update_s3(wav_path, s_data_ref, lock_ref)
+                                    if not success_transcribe:
+                                         logger.error(f"Thread Session {s_id}: Transcription or S3 update failed for segment {wav_path}")
+
+                                except Exception as thread_e:
+                                    logger.error(f"Thread Session {s_id}: Error during threaded segment processing: {thread_e}", exc_info=True)
+                                finally:
+                                    pass # Keep empty finally block
+                            
+                            processing_thread = threading.Thread(
+                                target=process_segment_in_thread,
+                                args=(
+                                    session_id,
+                                    session_data, 
+                                    session_locks[session_id], 
+                                    all_segment_bytes_for_ffmpeg_thread,
+                                    final_output_wav_path_thread
+                                    # REMOVED stale current_offset from args
+                                )
                             )
-                        )
-                        processing_thread.start()
-                        logger.info(f"Session {session_id}: Started processing thread for segment {segment_uuid_thread}")
+                            processing_thread.start()
+                            logger.info(f"Session {session_id}: Started processing thread for segment {segment_uuid_thread}")
             
             if session_id not in active_sessions:
                 logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
