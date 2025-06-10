@@ -1333,175 +1333,220 @@ def download_s3_document(user: SupabaseUser):
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
 def handle_chat(user: SupabaseUser): 
+    """
+    Handles chat requests by streaming responses from the Anthropic API.
+    This function extracts request data and then uses a generator to stream the response,
+    ensuring the request context is not lost.
+    """
     request_start_time = time.time()
-    # Updated log to remove request.method to avoid "working outside of request context" error in streaming response
     logger.info(f"Received POST request to /api/chat from user: {user.id}")
+
     if not anthropic_client: 
-        logger.error("Chat fail: Anthropic client not init.")
+        logger.error("Chat fail: Anthropic client not initialized.")
         return jsonify({"error": "AI service unavailable"}), 503
+
     try:
         data = request.json
         if not data or 'messages' not in data: 
-            return jsonify({"error": "Missing 'messages'"}), 400
-        agent_name = data.get('agent') 
-        event_id = data.get('event', '0000')
-        transcript_listen_mode = data.get('transcriptListenMode', 'latest') # Default to 'latest'
-        saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled') # Default to 'disabled'
-        transcription_language_setting = data.get('transcriptionLanguage', 'any') # Default to 'any'
-        chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S')) 
-        logger.info(f"Chat request for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
-        logger.info(f"Settings - Transcript Listen: {transcript_listen_mode}, Saved Memory: {saved_transcript_memory_mode}, Transcription Language: {transcription_language_setting}")
-        
-        incoming_messages = data['messages']
-        llm_messages_from_client = [{"role": msg["role"], "content": msg["content"]} 
-                                    for msg in incoming_messages 
-                                    if msg.get("role") in ["user", "assistant"]]
-        
-        if not llm_messages_from_client: 
-            logger.warning("Received chat request with no user/assistant messages from client.")
+            return jsonify({"error": "Missing 'messages' in request body"}), 400
+    except Exception as e:
+        logger.error(f"Error parsing request JSON: {e}")
+        return jsonify({"error": "Invalid JSON in request body"}), 400
 
-        final_llm_messages: List[Dict[str, str]] = []
+    # Extract all necessary data from the request *before* starting the stream
+    agent_name = data.get('agent')
+    event_id = data.get('event', '0000')
+    transcript_listen_mode = data.get('transcriptListenMode', 'latest')
+    saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled')
+    transcription_language_setting = data.get('transcriptionLanguage', 'any')
+    incoming_messages = data.get('messages', [])
+    chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S'))
 
-        s3_load_start_time = time.time()
+    def generate_stream():
+        """
+        A generator function that prepares data, calls the LLM, and yields the response stream.
+        This runs within the `stream_with_context` to handle the response generation.
+        """
         try:
-            base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
-            frameworks = get_latest_frameworks(agent_name); 
-            event_context = get_latest_context(agent_name, event_id); 
-            agent_docs = get_agent_docs(agent_name)
-            logger.debug("Loaded base system prompt, frameworks, context, docs from S3.")
-        except Exception as e: 
-            logger.error(f"Error loading prompts/context from S3: {e}", exc_info=True); 
-            base_system_prompt = "Error: Could not load system configuration."; frameworks = event_context = agent_docs = None
-        
-        s3_load_time = time.time() - s3_load_start_time
-        logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
-        
-        source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes exactly like `[1]` (*not* [^1]). \n2. Place the footnote reference **immediately AFTER THE PUNCTUATION** at the end of a sentence (e.g., `...end of sentence.[1]` (*not* `[^1]`, not `...end of sentence[1].`)).\n3. List all cited sources at the end of your response using standard Markdown footnote syntax (e.g., `[1] source_file_name.ext`). **Important: DO NOT add any heading (like \"### Sources\"), horizontal lines (`---`), or other formatting. Sources will appear below assistant message.**"
-        
-        transcript_handling_instructions = (
-            "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
-            "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting.\n"
-            "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These updates are chronological and should be considered the most current information.\n"
-            "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. Do not only refer to the latest delta.\n"
-            "4.  **Source Attribution:** When referencing information from any transcript segment (initial or delta), cite the (Source File: ...) provided within that segment if possible, or generally mention it's from the meeting transcript."
-        )
-        
-        final_system_prompt = base_system_prompt + source_instr + transcript_handling_instructions
-        
-        if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
-        if event_context: final_system_prompt += "\n\n## Context\n" + event_context
-        if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
-        
-        rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n3. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n4. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n5. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
-        final_system_prompt += rag_usage_instructions
-        
-        rag_context_block = ""; 
-        last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
+            logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
+            logger.info(f"Stream settings - Listen: {transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}")
 
-        if last_actual_user_message_for_rag:
-            rag_start_time = time.time()
-            normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
-            is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
-            if not is_simple_query:
-                logger.info(f"Complex query ('{normalized_query[:50]}...'), attempting RAG.")
-                try: 
-                    retriever = RetrievalHandler(index_name=agent_name, agent_name=agent_name, session_id=chat_session_id_log, event_id=event_id, anthropic_client=anthropic_client)
-                    retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=5)
-                    if retrieved_docs:
-                        items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
-                        rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
-                    else: rag_context_block = "\n\n[Note: No relevant documents found for this query via RAG.]"
-                except RuntimeError as e: 
-                    logger.warning(f"RAG skipped: {e}")
-                    rag_context_block = f"\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval failed for index '{agent_name}']\n=== END RETRIEVED CONTEXT ==="
-                except Exception as e: 
-                    logger.error(f"Unexpected RAG error: {e}", exc_info=True)
-                    rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
-            elif is_simple_query: 
-                rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
-            rag_time = time.time() - rag_start_time
-            logger.info(f"[PERF] RAG processing took {rag_time:.4f}s")
-        else: 
-            rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval not applicable for this turn.]\n=== END RETRIEVED CONTEXT ==="
-        final_system_prompt += rag_context_block 
-        
-        # Fetch and prepend saved transcript summaries if mode is 'enabled'
-        summary_load_start_time = time.time()
-        if saved_transcript_memory_mode == 'enabled':
-            try:
+            llm_messages_from_client = [
+                {"role": msg["role"], "content": msg["content"]}
+                for msg in incoming_messages
+                if msg.get("role") in ["user", "assistant"]
+            ]
+
+            if not llm_messages_from_client:
+                logger.warning("Stream: No user/assistant messages from client.")
+                # You might want to yield a specific message here or just close the stream
+                yield f"data: {json.dumps({'error': 'No message content provided.'})}\n\n"
+                return
+
+            # --- System Prompt and Context Assembly ---
+            s3_load_start_time = time.time()
+            base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
+            frameworks = get_latest_frameworks(agent_name)
+            event_context = get_latest_context(agent_name, event_id)
+            agent_docs = get_agent_docs(agent_name)
+            s3_load_time = time.time() - s3_load_start_time
+            logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
+            
+            source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes exactly like `[1]` (*not* [^1]). \n2. Place the footnote reference **immediately AFTER THE PUNCTUATION** at the end of a sentence (e.g., `...end of sentence.[1]` (*not* `[^1]`, not `...end of sentence[1].`)).\n3. List all cited sources at the end of your response using standard Markdown footnote syntax (e.g., `[1] source_file_name.ext`). **Important: DO NOT add any heading (like \"### Sources\"), horizontal lines (`---`), or other formatting. Sources will appear below assistant message.**"
+            transcript_handling_instructions = (
+                "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
+                "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting.\n"
+                "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These updates are chronological and should be considered the most current information.\n"
+                "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. Do not only refer to the latest delta.\n"
+                "4.  **Source Attribution:** When referencing information from any transcript segment (initial or delta), cite the (Source File: ...) provided within that segment if possible, or generally mention it's from the meeting transcript."
+            )
+            final_system_prompt = base_system_prompt + source_instr + transcript_handling_instructions
+            if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
+            if event_context: final_system_prompt += "\n\n## Context\n" + event_context
+            if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
+            rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n3. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n4. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n5. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
+            final_system_prompt += rag_usage_instructions
+
+            # --- RAG ---
+            rag_context_block = ""
+            last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
+            if last_actual_user_message_for_rag:
+                rag_start_time = time.time()
+                normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
+                is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
+                if not is_simple_query:
+                    logger.info(f"Complex query ('{normalized_query[:50]}...'), attempting RAG.")
+                    try:
+                        retriever = RetrievalHandler(index_name=agent_name, agent_name=agent_name, session_id=chat_session_id_log, event_id=event_id, anthropic_client=anthropic_client)
+                        retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=5)
+                        if retrieved_docs:
+                            items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
+                            rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
+                        else:
+                            rag_context_block = "\n\n[Note: No relevant documents found for this query via RAG.]"
+                    except Exception as e:
+                        logger.error(f"Unexpected RAG error: {e}", exc_info=True)
+                        rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
+                else:
+                    rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
+                rag_time = time.time() - rag_start_time
+                logger.info(f"[PERF] RAG processing took {rag_time:.4f}s")
+            final_system_prompt += rag_context_block
+
+            # --- Summary & Transcript Loading ---
+            final_llm_messages = []
+            if saved_transcript_memory_mode == 'enabled':
                 summaries = get_transcript_summaries(agent_name, event_id)
                 if summaries:
-                    logger.info(f"Saved Memory Enabled: Found {len(summaries)} transcript summaries for agent '{agent_name}', event '{event_id}'.")
                     summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
                     for summary_doc in summaries:
                         summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
-                        summaries_context_str += f"### Summary: {summary_filename}\n"
-                        summaries_context_str += json.dumps(summary_doc, indent=2, ensure_ascii=False)
-                        summaries_context_str += "\n\n"
-                    
-                    logger.debug(f"Constructed summaries_context_str (first 1000 chars): {summaries_context_str[:1000]}...")
+                        summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
                     final_system_prompt = summaries_context_str + final_system_prompt
-                    logger.info(f"Prepended {len(summaries)} summaries to system prompt. New total length: {len(final_system_prompt)}")
-                else:
-                    logger.info(f"Saved Memory Enabled: No transcript summaries found for agent '{agent_name}', event '{event_id}'.")
-            except Exception as e_sum:
-                logger.error(f"Error fetching or processing transcript summaries: {e_sum}", exc_info=True)
-        else:
-            logger.info("Saved Transcript Memory mode is disabled. Skipping summary loading.")
-        summary_load_time = time.time() - summary_load_start_time
-        logger.info(f"[PERF] Transcript summary loading took {summary_load_time:.4f}s")
 
-        # Transcript loading based on transcript_listen_mode
-        transcript_load_start_time = time.time()
-        if transcript_listen_mode == 'all':
-            logger.info(f"Transcript Listen Mode 'all': Reading all transcripts for {agent_name}/{event_id}.")
-            
-            all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
-            
-            if all_transcripts_content:
-                full_transcript_message_content = (
-                    f"IMPORTANT CONTEXT: The following is the FULL transcript history for this meeting, provided because 'Listen: All' mode is active.\n\n"
-                    f"=== BEGIN ALL TRANSCRIPTS FOR THIS TURN ===\n"
-                    f"{all_transcripts_content}\n"
-                    f"=== END ALL TRANSCRIPTS FOR THIS TURN ==="
-                )
-                final_llm_messages.append({'role': 'user', 'content': full_transcript_message_content})
-                logger.info(f"Prepended all transcript content (length {len(all_transcripts_content)}) to messages due to 'Listen: All' mode.")
-            else:
-                logger.info(f"Transcript Listen Mode 'all': No transcript content found for {agent_name}/{event_id}.")
-            
+            if transcript_listen_mode == 'all':
+                all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
+                if all_transcripts_content:
+                    full_transcript_message_content = (
+                        f"IMPORTANT CONTEXT: The following is the FULL transcript history for this meeting, provided because 'Listen: All' mode is active.\n\n"
+                        f"=== BEGIN ALL TRANSCRIPTS FOR THIS TURN ===\n"
+                        f"{all_transcripts_content}\n"
+                        f"=== END ALL TRANSCRIPTS FOR THIS TURN ==="
+                    )
+                    final_llm_messages.append({'role': 'user', 'content': full_transcript_message_content})
+            elif transcript_listen_mode == 'latest':
+                transcript_content, success = read_new_transcript_content(agent_name, event_id)
+                if transcript_content:
+                    transcript_message_content = (
+                        f"IMPORTANT CONTEXT: The following is the content of the latest transcript file. "
+                        f"Refer to this as the most current information available.\n\n"
+                        f"=== BEGIN LATEST TRANSCRIPT ===\n"
+                        f"{transcript_content}\n"
+                        f"=== END LATEST TRANSCRIPT ==="
+                    )
+                    final_llm_messages.append({'role': 'user', 'content': transcript_message_content})
+
             final_llm_messages.extend(llm_messages_from_client)
 
-        elif transcript_listen_mode == 'latest': # Default behavior
-            logger.info(f"Transcript Listen Mode 'latest': Reading latest transcript for {agent_name}/{event_id}.")
-
-            transcript_content_from_s3, was_load_attempt_successful = read_new_transcript_content(
-                agent_name, event_id
+            # --- Call LLM and Stream ---
+            stream = _call_anthropic_stream_with_retry(
+                model=os.getenv("LLM_MODEL_NAME", "claude-3-haiku-20240307"),
+                max_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096)),
+                system=final_system_prompt,
+                messages=final_llm_messages
             )
 
-            if transcript_content_from_s3:
-                transcript_message_content = (
-                    f"IMPORTANT CONTEXT: The following is the content of the latest transcript file. "
-                    f"Refer to this as the most current information available.\n\n"
-                    f"=== BEGIN LATEST TRANSCRIPT ===\n"
-                    f"{transcript_content_from_s3}\n"
-                    f"=== END LATEST TRANSCRIPT ==="
-                )
-                final_llm_messages.append({'role': 'user', 'content': transcript_message_content})
-                logger.info(f"Prepended latest transcript (length {len(transcript_content_from_s3)}) to messages.")
-            elif was_load_attempt_successful:
-                 logger.info("Latest transcript was checked, but no content was found or file was empty.")
-            else: # load attempt failed
-                 logger.warning("Attempt to load latest transcript failed.")
+            for chunk in stream:
+                if chunk.type == "content_block_delta":
+                    text_delta = chunk.delta.text
+                    sse_data = json.dumps({'delta': text_delta})
+                    yield f"data: {sse_data}\n\n"
 
-            # Always add the client's messages for this turn
-            final_llm_messages.extend(llm_messages_from_client)
-
-        else: # transcript_listen_mode is 'none'
-            logger.info("Transcript Listen Mode is 'none'. No transcript loading for this turn.")
-            final_llm_messages.extend(llm_messages_from_client)
-            sse_done_data = json.dumps({'done': True}); 
+            sse_done_data = json.dumps({'done': True})
             yield f"data: {sse_done_data}\n\n"
+            logger.info(f"Stream for chat with agent {agent_name} completed successfully.")
+
+        except CircuitBreakerOpen as e:
+            logger.error(f"Circuit breaker is open. Aborting stream. Error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        except AnthropicError as e:
+            logger.error(f"Anthropic API error during stream: {e}", exc_info=True)
+            anthropic_circuit_breaker.record_failure()
+            yield f"data: {json.dumps({'error': f'Assistant API Error: {str(e)}'})}\n\n"
+        except Exception as e:
+            logger.error(f"Error in generate_stream: {e}", exc_info=True)
+            yield f"data: {json.dumps({'error': 'An internal server error occurred during the stream.'})}\n\n"
+
+    # Start the streaming response
+    return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
+                stream = _call_anthropic_stream_with_retry(
+                    model=model_name,
+                    max_tokens=max_tokens,
+                    system=final_system_prompt,
+                    messages=final_llm_messages
+                )
+                
+                # If we get here, the API call was successful at least once.
+                anthropic_circuit_breaker.record_success()
+
+                for chunk in stream:
+                    if chunk.type == "content_block_delta" and chunk.delta.type == "text_delta":
+                        text_delta = chunk.delta.text
+                        full_response_content += text_delta
+                        data_to_send = {"type": "content_delta", "delta": text_delta}
+                        yield f"data: {json.dumps(data_to_send)}\n\n"
+
+                sse_done_data = json.dumps({'done': True, 'session_id': chat_session_id_log})
+                yield f"data: {sse_done_data}\n\n"
+                logger.info(f"Chat stream for session {chat_session_id_log} completed.")
+
+                # Use a background thread to save chat history without blocking the response stream
+                threading.Thread(target=save_chat_to_s3, args=(
+                    agent_name,
+                    event_id,
+                    chat_session_id_log,
+                    final_llm_messages + [{"role": "assistant", "content": full_response_content}],
+                    final_system_prompt
+                )).start()
+
+            except CircuitBreakerOpen as e:
+                logger.error(f"Circuit breaker is open: {e}")
+                error_data = {"type": "error", "message": str(e)}
+                yield f"data: {json.dumps(error_data)}\n\n"
+            except (APIStatusError, APIConnectionError, AnthropicError, RetryError) as e:
+                anthropic_circuit_breaker.record_failure()
+                logger.error(f"Anthropic API/Connection/Retry Error in stream: {e}", exc_info=True)
+                message = "An assistant API error occurred. Please try again."
+                if isinstance(e, APIStatusError):
+                    message = f"Assistant API error (status {e.status_code}). Please try again."
+                elif isinstance(e, APIConnectionError):
+                    message = "Could not connect to the assistant. Please check your network and try again."
+                error_data = {"type": "error", "message": message}
+                yield f"data: {json.dumps(error_data)}\n\n"
+            except Exception as e:
+                logger.error(f"Error during response generation stream: {e}", exc_info=True)
+                error_data = {"type": "error", "message": "An unexpected error occurred while generating the response."}
+                yield f"data: {json.dumps(error_data)}\n\n"
             
         return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
     except Exception as e: 
