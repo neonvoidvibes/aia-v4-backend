@@ -750,7 +750,7 @@ class VADTranscriptionManager:
         )
         
         # Active sessions
-        self.active_sessions: Dict[str, SessionAudioProcessor] = {}
+        self.active_sessions: Dict[str, "SessionAudioProcessor"] = {}
         self.sessions_lock = threading.RLock()
         
         logger.info(f"VAD Transcription Manager initialized")
@@ -758,7 +758,7 @@ class VADTranscriptionManager:
         logger.info(f"VAD aggressiveness: {self.vad_aggressiveness}")
 
     def create_session(self, session_id: str, language_setting: str = "any",
-                      segment_duration_target: float = 15.0) -> SessionAudioProcessor:
+                      segment_duration_target: float = 15.0) -> "SessionAudioProcessor":
         """
         Create a new transcription session.
         
@@ -794,7 +794,7 @@ class VADTranscriptionManager:
             
             return processor
 
-    def get_session(self, session_id: str) -> Optional[SessionAudioProcessor]:
+    def get_session(self, session_id: str) -> Optional["SessionAudioProcessor"]:
         """Get an existing session."""
         with self.sessions_lock:
             return self.active_sessions.get(session_id)
