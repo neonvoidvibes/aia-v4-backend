@@ -1334,8 +1334,8 @@ def download_s3_document(user: SupabaseUser):
 @supabase_auth_required(agent_required=True)
 def handle_chat(user: SupabaseUser): 
     request_start_time = time.time()
-    logger.info(f"Received request /api/chat method: {request.method} from user: {user.id}") 
-    global transcript_state_cache
+    # Updated log to remove request.method to avoid "working outside of request context" error in streaming response
+    logger.info(f"Received POST request to /api/chat from user: {user.id}")
     if not anthropic_client: 
         logger.error("Chat fail: Anthropic client not init.")
         return jsonify({"error": "AI service unavailable"}), 503
