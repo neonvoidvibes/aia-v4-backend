@@ -59,12 +59,21 @@ class RetrievalHandler:
             logger.info(f"Retriever: Initialized Embeddings model '{self.embedding_model_name}'.")
         except Exception as e: raise RuntimeError("Failed Embeddings init") from e
 
-        pc = init_pinecone();
-        if not pc: raise RuntimeError("Failed Pinecone init")
+        pc = init_pinecone()
+        if not pc:
+            raise RuntimeError("Failed Pinecone init")
+        
         try:
-            self.index = pc.Index(self.index_name)
-            logger.info(f"Retriever: Connected to index '{self.index_name}'. Default top_k={self.top_k}")
-        except Exception as e: raise RuntimeError(f"Failed connection to index '{self.index_name}'") from e
+            # Check if index exists before creating an Index object
+            if self.index_name not in pc.list_indexes().names():
+                logger.warning(f"Retriever: Index '{self.index_name}' does not exist. RAG will be disabled for this handler.")
+                self.index = None
+            else:
+                self.index = pc.Index(self.index_name)
+                logger.info(f"Retriever: Connected to index '{self.index_name}'. Default top_k={self.top_k}")
+        except Exception as e:
+            logger.error(f"Retriever: Error connecting to or checking index '{self.index_name}': {e}", exc_info=True)
+            self.index = None # Ensure index is None on any error
 
     def _transform_query(self, query: str) -> str:
         """Uses LLM to rewrite the query for better vector search."""
@@ -102,6 +111,10 @@ class RetrievalHandler:
         is_transcript: bool = False
     ) -> List[Document]:
         """Retrieve relevant document chunks, applying query transformation."""
+        if not self.index:
+            logger.info("Retriever: Skipping context retrieval as Pinecone index is not available.")
+            return []
+            
         k = top_k or self.top_k
         logger.debug(f"Retriever: Original query: '{query[:100]}...' (is_tx={is_transcript})")
 

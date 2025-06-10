@@ -296,6 +296,17 @@ def supabase_auth_required(agent_required: bool = True):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            # For POST/PUT requests, parse the JSON body once and store it in Flask's request-bound global 'g'.
+            # This prevents consuming the request stream multiple times.
+            if request.method in ['POST', 'PUT', 'PATCH']:
+                try:
+                    g.json_data = request.get_json(silent=True) or {}
+                except Exception as e:
+                    logger.warning(f"Could not parse request body as JSON: {e}")
+                    g.json_data = {}
+            else:
+                g.json_data = {}
+
             auth_header = request.headers.get("Authorization")
             token = None
             if auth_header and auth_header.startswith("Bearer "):
@@ -303,14 +314,7 @@ def supabase_auth_required(agent_required: bool = True):
 
             agent_name_from_payload = None
             if agent_required:
-                # Parse JSON once and store it in Flask's request-bound global 'g'
-                # This prevents consuming the request stream multiple times.
-                try:
-                    g.json_data = request.get_json(silent=True) or {}
-                except Exception as e:
-                    logger.warning(f"Could not parse request body as JSON: {e}")
-                    g.json_data = {}
-
+                # Use the already-parsed data from g
                 if 'agent' in g.json_data:
                     agent_name_from_payload = g.json_data.get('agent')
                 elif 'agentName' in g.json_data: # For manage-file route
