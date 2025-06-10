@@ -433,7 +433,7 @@ def start_recording_route(user: SupabaseUser):
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
     
     # Initialize VAD session if enabled
-    if VAD_IMPORT_SUCCESS and is_vad_enabled() and vad_bridge:
+    if VAD_IMPORT_SUCCESS and vad_bridge: # Force VAD activation if available to fix hallucinations
         try:
             vad_success = vad_bridge.create_vad_session(
                 session_id=session_id,
