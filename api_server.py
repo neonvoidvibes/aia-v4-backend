@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from flask import Flask, jsonify, request, Response, stream_with_context
+from flask import Flask, jsonify, request, Response, stream_with_context, g
 from dotenv import load_dotenv
 import threading 
 import time
@@ -298,26 +298,32 @@ def supabase_auth_required(agent_required: bool = True):
         def decorated_function(*args, **kwargs):
             auth_header = request.headers.get("Authorization")
             token = None
-            if auth_header and auth_header.startswith("Bearer "): 
+            if auth_header and auth_header.startswith("Bearer "):
                 token = auth_header.split(" ", 1)[1]
-            
+
             agent_name_from_payload = None
             if agent_required:
-                if request.is_json and request.json and 'agent' in request.json:
-                    agent_name_from_payload = request.json.get('agent')
-                elif 'agent' in request.args: 
-                    agent_name_from_payload = request.args.get('agent')
-                # For manage-file, agentName is expected in payload
-                elif request.is_json and request.json and 'agentName' in request.json and request.path.endswith('/manage-file'):
-                    agent_name_from_payload = request.json.get('agentName')
+                # Parse JSON once and store it in Flask's request-bound global 'g'
+                # This prevents consuming the request stream multiple times.
+                try:
+                    g.json_data = request.get_json(silent=True) or {}
+                except Exception as e:
+                    logger.warning(f"Could not parse request body as JSON: {e}")
+                    g.json_data = {}
 
+                if 'agent' in g.json_data:
+                    agent_name_from_payload = g.json_data.get('agent')
+                elif 'agentName' in g.json_data: # For manage-file route
+                    agent_name_from_payload = g.json_data.get('agentName')
+                elif 'agent' in request.args: # Fallback for GET requests
+                    agent_name_from_payload = request.args.get('agent')
 
             user, error_response = verify_user_agent_access(token, agent_name_from_payload if agent_required else None)
-            if error_response: 
+            if error_response:
                 status_code = error_response.status_code if hasattr(error_response, 'status_code') else 500
                 error_json = error_response.get_json() if hasattr(error_response, 'get_json') else {"error": "Unknown authorization error"}
                 return jsonify(error_json), status_code
-            return f(user=user, *args, **kwargs) 
+            return f(user=user, *args, **kwargs)
         return decorated_function
     return decorator
 
@@ -377,7 +383,7 @@ def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> 
 @app.route('/api/recording/start', methods=['POST'])
 @supabase_auth_required(agent_required=True) 
 def start_recording_route(user: SupabaseUser): 
-    data = request.json
+    data = g.get('json_data', {})
     agent_name = data.get('agent') 
     event_id = data.get('event')
     # 'language' is the old key, 'transcriptionLanguage' is the new one. Prioritize new one.
@@ -575,7 +581,7 @@ def _finalize_session(session_id: str):
 @supabase_auth_required(agent_required=False) # agentName will be in payload
 def summarize_transcript_route(user: SupabaseUser):
     logger.info(f"Received request /api/s3/summarize-transcript from user: {user.id}")
-    data = request.json
+    data = g.get('json_data', {})
     s3_key_original_transcript = data.get('s3Key')
     agent_name = data.get('agentName')
     event_id = data.get('eventId')
@@ -702,7 +708,7 @@ def summarize_transcript_route(user: SupabaseUser):
 @app.route('/api/recording/stop', methods=['POST'])
 @supabase_auth_required(agent_required=False) 
 def stop_recording_route(user: SupabaseUser): 
-    data = request.json
+    data = g.get('json_data', {})
     session_id = data.get('session_id')
     if not session_id:
         return jsonify({"status": "error", "message": "Missing session_id"}), 400
@@ -1249,7 +1255,7 @@ def view_s3_document(user: SupabaseUser):
 @supabase_auth_required(agent_required=False) # Agent name from payload is used for path construction
 def manage_s3_file(user: SupabaseUser):
     logger.info(f"Received request /api/s3/manage-file from user: {user.id}")
-    data = request.json
+    data = g.get('json_data', {})
     s3_key_to_manage = data.get('s3Key')
     action_to_perform = data.get('action')
     agent_name_param = data.get('agentName')
@@ -1332,7 +1338,7 @@ def download_s3_document(user: SupabaseUser):
 
 @app.route('/api/chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
-def handle_chat(user: SupabaseUser): 
+def handle_chat(user: SupabaseUser):
     """
     Handles chat requests by streaming responses from the Anthropic API.
     This function extracts request data and then uses a generator to stream the response,
@@ -1341,17 +1347,17 @@ def handle_chat(user: SupabaseUser):
     request_start_time = time.time()
     logger.info(f"Received POST request to /api/chat from user: {user.id}")
 
-    if not anthropic_client: 
+    if not anthropic_client:
         logger.error("Chat fail: Anthropic client not initialized.")
         return jsonify({"error": "AI service unavailable"}), 503
 
     try:
-        data = request.json
-        if not data or 'messages' not in data: 
+        data = g.get('json_data', {}) # Use g instead of request.json
+        if not data or 'messages' not in data:
             return jsonify({"error": "Missing 'messages' in request body"}), 400
     except Exception as e:
-        logger.error(f"Error parsing request JSON: {e}")
-        return jsonify({"error": "Invalid JSON in request body"}), 400
+        logger.error(f"Error accessing request data: {e}")
+        return jsonify({"error": "Invalid request data"}), 400
 
     # Extract all necessary data from the request *before* starting the stream
     agent_name = data.get('agent')
@@ -1496,62 +1502,9 @@ def handle_chat(user: SupabaseUser):
         except Exception as e:
             logger.error(f"Error in generate_stream: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': 'An internal server error occurred during the stream.'})}\n\n"
-
+    
     # Start the streaming response
     return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
-                stream = _call_anthropic_stream_with_retry(
-                    model=model_name,
-                    max_tokens=max_tokens,
-                    system=final_system_prompt,
-                    messages=final_llm_messages
-                )
-                
-                # If we get here, the API call was successful at least once.
-                anthropic_circuit_breaker.record_success()
-
-                for chunk in stream:
-                    if chunk.type == "content_block_delta" and chunk.delta.type == "text_delta":
-                        text_delta = chunk.delta.text
-                        full_response_content += text_delta
-                        data_to_send = {"type": "content_delta", "delta": text_delta}
-                        yield f"data: {json.dumps(data_to_send)}\n\n"
-
-                sse_done_data = json.dumps({'done': True, 'session_id': chat_session_id_log})
-                yield f"data: {sse_done_data}\n\n"
-                logger.info(f"Chat stream for session {chat_session_id_log} completed.")
-
-                # Use a background thread to save chat history without blocking the response stream
-                threading.Thread(target=save_chat_to_s3, args=(
-                    agent_name,
-                    event_id,
-                    chat_session_id_log,
-                    final_llm_messages + [{"role": "assistant", "content": full_response_content}],
-                    final_system_prompt
-                )).start()
-
-            except CircuitBreakerOpen as e:
-                logger.error(f"Circuit breaker is open: {e}")
-                error_data = {"type": "error", "message": str(e)}
-                yield f"data: {json.dumps(error_data)}\n\n"
-            except (APIStatusError, APIConnectionError, AnthropicError, RetryError) as e:
-                anthropic_circuit_breaker.record_failure()
-                logger.error(f"Anthropic API/Connection/Retry Error in stream: {e}", exc_info=True)
-                message = "An assistant API error occurred. Please try again."
-                if isinstance(e, APIStatusError):
-                    message = f"Assistant API error (status {e.status_code}). Please try again."
-                elif isinstance(e, APIConnectionError):
-                    message = "Could not connect to the assistant. Please check your network and try again."
-                error_data = {"type": "error", "message": message}
-                yield f"data: {json.dumps(error_data)}\n\n"
-            except Exception as e:
-                logger.error(f"Error during response generation stream: {e}", exc_info=True)
-                error_data = {"type": "error", "message": "An unexpected error occurred while generating the response."}
-                yield f"data: {json.dumps(error_data)}\n\n"
-            
-        return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
-    except Exception as e: 
-        logger.error(f"Error in /api/chat: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
 
 def sync_agents_from_s3_to_supabase():
     if not supabase: 
