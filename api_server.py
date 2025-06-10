@@ -1379,7 +1379,7 @@ def handle_chat(user: SupabaseUser):
         s3_load_time = time.time() - s3_load_start_time
         logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
         
-        source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes exactly like `[1]` (*not* [^1]). \n2. Place the footnote reference **immediately after the punctuation** at the end of a sentence (e.g., `...end of sentence.[1]` (*not* [^1])).\n3. List all cited sources at the end of your response using standard Markdown footnote syntax (e.g., `[1]: source_file_name.ext`). **Important: DO NOT add any heading (like \"### Sources\"), horizontal lines (`---`), or other formatting. Sources will appear below assistant message.**"
+        source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes exactly like `[1]` (*not* [^1]). \n2. Place the footnote reference **immediately after the punctuation** at the end of a sentence (e.g., `...end of sentence.[1]` (*not* [^1])).\n3. List all cited sources at the end of your response using standard Markdown footnote syntax (e.g., `[1] source_file_name.ext`). **Important: DO NOT add any heading (like \"### Sources\"), horizontal lines (`---`), or other formatting. Sources will appear below assistant message.**"
         
         transcript_handling_instructions = (
             "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
