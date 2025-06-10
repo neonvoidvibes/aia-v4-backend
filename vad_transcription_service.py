@@ -22,7 +22,7 @@ import threading
 import subprocess
 import queue
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Callable
 import wave
 
 import webrtcvad

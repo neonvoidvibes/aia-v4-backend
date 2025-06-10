@@ -189,7 +189,7 @@ except Exception as e:
 
 # Initialize VAD integration if enabled and available
 vad_bridge = None
-if VAD_IMPORT_SUCCESS and os.getenv('ENABLE_VAD_TRANSCRIPTION', 'false').lower() == 'true':
+if VAD_IMPORT_SUCCESS and os.getenv('ENABLE_VAD_TRANSCRIPTION', 'true').lower() == 'true':
     try:
         openai_api_key = os.getenv('OPENAI_API_KEY')
         if openai_api_key:
