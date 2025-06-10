@@ -94,6 +94,9 @@ class VADIntegrationBridge:
                 return True
             
             try:
+                # Import here to avoid circular dependency issues at module level
+                from api_server import session_locks
+
                 # Extract configuration from existing session data
                 language_setting = existing_session_data.get('language_setting_from_client', 'any')
                 segment_duration = float(os.getenv('VAD_SEGMENT_DURATION', '15.0'))
@@ -112,6 +115,7 @@ class VADIntegrationBridge:
                     "language_setting": language_setting,
                     "segment_duration": segment_duration,
                     "existing_session_data": existing_session_data,
+                    "session_lock": session_locks[session_id], # Pass the specific lock for this session
                     "is_active": True
                 }
                 

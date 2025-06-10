@@ -602,7 +602,7 @@ class VADTranscriptionService:
             
             # Handle transcription result
             if result.get("transcription") and result.get("has_voice"):
-                self._handle_transcription_result(result)
+                self._handle_transcription_result(result, clean_wav_path)
             else:
                 logger.debug(f"Session {self.session_id}: Segment processed but no transcription - "
                            f"Voice: {result.get('has_voice')}, "
@@ -613,68 +613,50 @@ class VADTranscriptionService:
             with self.session_lock:
                 self.processing_stats["errors"].append(f"Segment processing error: {e}")
 
-    def _handle_transcription_result(self, result: Dict[str, Any]):
-        """Handle successful transcription result."""
-        transcription = result.get("transcription", {})
-        segments = transcription.get("segments", [])
+    def _handle_transcription_result(self, result: Dict[str, Any], clean_wav_path: str):
+        """
+        Handle successful transcription result by calling the canonical S3 update function.
+        """
+        logger.info(f"Session {self.session_id}: Handling transcription result for {clean_wav_path}")
         
-        if not segments:
-            logger.debug(f"Session {self.session_id}: No segments in transcription result")
-            return
-        
-        logger.info(f"Session {self.session_id}: Processing {len(segments)} transcription segments")
-        
-        # Apply existing filtering logic from original transcription service
-        from transcription_service import (
-            filter_by_duration_and_confidence,
-            detect_cross_segment_repetition,
-            analyze_silence_gaps,
-            filter_hallucinations,
-            is_valid_transcription
-        )
-        
-        # Filter segments
-        filtered_segments = [s for s in segments if filter_by_duration_and_confidence(s)]
-        filtered_segments = detect_cross_segment_repetition(filtered_segments)
-        filtered_segments = analyze_silence_gaps(filtered_segments)
-        
-        # Process filtered segments
-        valid_segments = []
-        for segment in filtered_segments:
-            raw_text = segment.get('text', '').strip()
-            filtered_text = filter_hallucinations(raw_text)
-            
-            if is_valid_transcription(filtered_text):
-                segment['filtered_text'] = filtered_text
-                valid_segments.append(segment)
-        
-        if valid_segments:
-            logger.info(f"Session {self.session_id}: {len(valid_segments)} valid segments after filtering")
-            
-            # Store valid segments for bridge to process
-            self._store_processed_segments(valid_segments, result)
-        else:
-            logger.debug(f"Session {self.session_id}: No valid segments after filtering")
+        # The VAD bridge needs access to the main server's session data and lock.
+        # This is achieved by passing them through when the VAD session is created.
+        try:
+            from vad_integration_bridge import get_vad_bridge
+            from transcription_service import process_audio_segment_and_update_s3
 
-    def _store_processed_segments(self, valid_segments: List[Dict[str, Any]], result: Dict[str, Any]):
-        """Store processed segments for the integration bridge to handle."""
-        # Create a result object that the bridge can process
-        processed_result = {
-            "session_id": self.session_id,
-            "segments": valid_segments,
-            "audio_duration_seconds": result.get("audio_duration_seconds", 0.0),
-            "processing_times": result.get("processing_times", {}),
-            "chunk_id": result.get("chunk_id"),
-            "timestamp": time.time()
-        }
-        
-        # Store in a queue or trigger callback for bridge processing
-        # This will be handled by the integration bridge
-        logger.debug(f"Session {self.session_id}: Stored {len(valid_segments)} processed segments for bridge integration")
-        
-        # For now, log the transcribed text
-        for segment in valid_segments:
-            logger.info(f"Session {self.session_id}: VAD Transcribed: '{segment.get('filtered_text', '')}'")
+            bridge = get_vad_bridge()
+            if not bridge:
+                logger.error(f"Session {self.session_id}: VAD Bridge not available to handle transcription result.")
+                return
+
+            with bridge.bridge_lock:
+                if self.session_id not in bridge.session_metadata:
+                    logger.error(f"Session {self.session_id}: Metadata not found in VAD bridge. Cannot process transcription.")
+                    return
+                
+                # Get the necessary data and lock from the bridge's stored metadata
+                main_session_data = bridge.session_metadata[self.session_id].get("existing_session_data")
+                main_session_lock = bridge.session_metadata[self.session_id].get("session_lock")
+                
+                if not main_session_data or not main_session_lock:
+                    logger.error(f"Session {self.session_id}: Main session data or lock not found in bridge metadata.")
+                    return
+
+            # Now, call the unified processing function from transcription_service
+            # This function is thread-safe and handles all filtering, PII, and S3 appending.
+            # We pass it the path to the CLEAN audio file, which contains only voiced segments.
+            process_audio_segment_and_update_s3(
+                temp_segment_wav_path=clean_wav_path,
+                session_data=main_session_data,
+                session_lock=main_session_lock
+            )
+            logger.info(f"Session {self.session_id}: Dispatched transcription result to be processed and saved to S3.")
+
+        except ImportError:
+            logger.error(f"Session {self.session_id}: Could not import VAD bridge or transcription service to handle result.")
+        except Exception as e:
+            logger.error(f"Session {self.session_id}: Unexpected error handling transcription result: {e}", exc_info=True)
 
     def _process_final_segment(self):
         """Process any remaining audio data when stopping."""
