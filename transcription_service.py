@@ -124,53 +124,6 @@ def detect_single_word_loops(segments: List[Dict], session_data: Dict[str, Any],
             cutoff_time = absolute_timestamp - (time_window_minutes * 60)
             if normalized_text in word_frequency_tracker:
                 word_frequency_tracker[normalized_text] = [
-                    timestamp for timestamp in word_frequency_tracker[normalized_text]
-                    if timestamp > cutoff_time
-                ]
-            
-            # Count current occurrences within the time window
-            current_count = len(word_frequency_tracker.get(normalized_text, []))
-            
-            # Filter if we already have max occurrences
-            if current_count >= max_single_word_frequency:
-                logger.debug(f"Filtering looping single word: '{text}' (would be occurrence #{current_count + 1} in last {time_window_minutes} minutes)")
-                continue
-            
-            # Track this occurrence
-            if normalized_text not in word_frequency_tracker:
-                word_frequency_tracker[normalized_text] = []
-            word_frequency_tracker[normalized_text].append(absolute_timestamp)
-        
-        filtered_segments.append(segment)
-    
-    return filtered_segments
-
-def detect_single_word_loops(segments: List[Dict], session_data: Dict[str, Any], segment_offset_seconds: float) -> List[Dict]:
-    """Filter out single words that appear too frequently in loops (like 'Okej' repeating)"""
-    filtered_segments = []
-    
-    # Get persistent word frequency tracker from session data
-    if 'word_frequency_tracker' not in session_data:
-        session_data['word_frequency_tracker'] = {}
-    word_frequency_tracker = session_data['word_frequency_tracker']
-    
-    max_single_word_frequency = 3  # Allow 3 occurrences, filter 4th+
-    time_window_minutes = 3.0  # 3-minute sliding window
-    
-    for segment in segments:
-        text = segment.get('text', '').strip()
-        # Calculate absolute timestamp relative to session start
-        absolute_timestamp = segment_offset_seconds + segment.get('start', 0.0)
-        
-        # Normalize text for comparison (remove punctuation, convert to lowercase)
-        normalized_text = re.sub(r'[^\w\s]', '', text.lower()).strip()
-        
-        # Only apply this filter to single words (no spaces = single word)
-        if normalized_text and ' ' not in normalized_text:
-            # Clean up old entries outside the time window
-            cutoff_time = absolute_timestamp - (time_window_minutes * 60)
-            if normalized_text in word_frequency_tracker:
-                word_frequency_tracker[normalized_text] = [
                     timestamp for timestamp in word_frequency_tracker[normalized_text] 
                     if timestamp > cutoff_time
                 ]
@@ -451,7 +404,6 @@ def _transcribe_audio_segment_openai(
                         try:
                             error_detail = response.json()
                             logger.error(f"OpenAI API error detail: {error_detail}")
-                            logger.error(f"OpenAI API error detail: {error_detail}")
                         except json.JSONDecodeError:
                             logger.error(f"OpenAI API error response (non-JSON): {response.text[:500]}")
                     if attempt == max_retries - 1: raise
@@ -513,7 +465,7 @@ def process_audio_segment_and_update_s3(
         filtered_segments_pre_lock = detect_cross_segment_repetition(filtered_segments_pre_lock)
         filtered_segments_pre_lock = [s for s in filtered_segments_pre_lock if filter_by_duration_and_confidence(s)]
 
-    # Get PII client ready
+    # Get PII client ready inside the function to avoid circular import at module level
     pii_llm_client_for_service = None
     try:
         from api_server import anthropic_client as global_anthropic_client
@@ -549,10 +501,6 @@ def process_audio_segment_and_update_s3(
                 
                 if is_valid_transcription(final_text_for_s3):
                     # Generate timestamp using the ATOMICALLY read offset
-                    abs_start = segment_offset_seconds + segment.get('start', 0.0)
-                    abs_end = segment_offset_seconds + segment.get('end', 0.0)
-                    timestamp_str = format_timestamp_range(abs_start, abs_end, session_start_time_utc)
-                    processed_transcript_lines.append(f"{timestamp_str} {final_text_for_s3}")
                     abs_start = segment_offset_seconds + segment.get('start', 0.0)
                     abs_end = segment_offset_seconds + segment.get('end', 0.0)
                     timestamp_str = format_timestamp_range(abs_start, abs_end, session_start_time_utc)

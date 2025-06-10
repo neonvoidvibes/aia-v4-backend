@@ -19,8 +19,6 @@ import time
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timezone
 
-from vad_transcription_service import VADTranscriptionManager, SessionAudioProcessor
-
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -38,6 +36,8 @@ class VADIntegrationBridge:
             openai_api_key: OpenAI API key for Whisper transcription
             base_temp_dir: Base directory for VAD session files
         """
+        from vad_transcription_service import VADTranscriptionManager # Import inside method
+
         self.openai_api_key = openai_api_key
         self.base_temp_dir = base_temp_dir
         
@@ -56,7 +56,7 @@ class VADIntegrationBridge:
             raise RuntimeError(f"VAD Integration Bridge initialization failed: {e}")
         
         # Integration state
-        self.session_processors: Dict[str, SessionAudioProcessor] = {}
+        self.session_processors: Dict[str, "SessionAudioProcessor"] = {}
         self.session_metadata: Dict[str, Dict[str, Any]] = {}
         self.transcription_callbacks: Dict[str, Callable] = {}
         self.bridge_lock = threading.RLock()

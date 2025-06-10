@@ -746,12 +746,12 @@ def audio_stream_socket(ws, session_id: str):
 
     if session_id not in active_sessions:
         logger.warning(f"WebSocket: Session {session_id} not found. Closing.")
-        ws.close(reason='Session not found or not initialized')
+        ws.close(code=1008, reason='Session not found or not initialized')
         return
     
     if active_sessions[session_id].get("websocket_connection") is not None:
         logger.warning(f"WebSocket: Session {session_id} already has a WebSocket connection. Closing new one.")
-        ws.close(reason='Session already has an active stream')
+        ws.close(code=1008, reason='Session already has an active stream')
         return
 
     active_sessions[session_id]["websocket_connection"] = ws
@@ -835,25 +835,27 @@ def audio_stream_socket(ws, session_id: str):
                             try:
                                 vad_success = vad_bridge.process_audio_blob(session_id, bytes(message))
                                 if not vad_success:
-                                    logger.error(f"Session {session_id}: VAD audio processing failed, falling back to original method")
-                                    # Fall back to original processing
+                                    # If VAD processing fails, we explicitly set vad_enabled to False
+                                    # so the fallback logic below can take over for THIS blob.
+                                    logger.error(f"Session {session_id}: VAD audio processing failed, falling back to original method for this chunk.")
                                     vad_enabled = False
                                     session_data["vad_enabled"] = False
                                 else:
-                                    logger.debug(f"Session {session_id}: Audio blob successfully queued for VAD processing")
-                                    # Continue to next message - VAD handles everything in background
-                                    continue
+                                    # If VAD processing was successful, skip the original logic path.
+                                    logger.debug(f"Session {session_id}: Audio blob successfully queued for VAD processing.")
+                                    continue # This is the key fix to prevent duplicate processing
                             except Exception as e:
                                 logger.error(f"Session {session_id}: Error during VAD processing: {e}", exc_info=True)
-                                logger.warning(f"Session {session_id}: VAD processing failed, falling back to original method")
+                                logger.warning(f"Session {session_id}: VAD processing failed, falling back to original method for this chunk.")
                                 vad_enabled = False
                                 session_data["vad_enabled"] = False
                         else:
-                            logger.debug(f"Session {session_id}: Backend processing paused, skipping VAD processing")
+                            logger.debug(f"Session {session_id}: Backend processing paused, skipping VAD processing.")
                             continue
                     
                     # Original Processing Path (fallback or when VAD not enabled)
                     if not vad_enabled:
+                        logger.debug(f"Session {session_id}: Using original processing path (VAD disabled or failed for chunk).")
                         if not session_data.get("is_first_blob_received", False):
                             session_data["webm_global_header_bytes"] = bytes(message) 
                             session_data["is_first_blob_received"] = True
