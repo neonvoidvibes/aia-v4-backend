@@ -600,9 +600,11 @@ class VADTranscriptionService:
                 if result.get("errors"):
                     self.processing_stats["errors"].extend(result["errors"])
             
-            # Handle transcription result
+            # Use the callback to pass the result back to the bridge
             if result.get("transcription") and result.get("has_voice"):
-                self._handle_transcription_result(result, clean_wav_path)
+                # Add the path to the clean WAV file for the handler
+                result["clean_wav_path"] = os.path.join(processing_dir, f"clean_chunk_{result['chunk_id']}.wav")
+                self.result_callback(result)
             else:
                 logger.debug(f"Session {self.session_id}: Segment processed but no transcription - "
                            f"Voice: {result.get('has_voice')}, "
@@ -613,48 +615,7 @@ class VADTranscriptionService:
             with self.session_lock:
                 self.processing_stats["errors"].append(f"Segment processing error: {e}")
 
-    def _handle_transcription_result(self, result: Dict[str, Any], clean_wav_path: str):
-        """
-        Handle successful transcription result by calling the canonical S3 update function.
-        """
-        logger.info(f"Session {self.session_id}: Handling transcription result for {clean_wav_path}")
-        
-        # The VAD bridge needs access to the main server's session data and lock.
-        # This is achieved by passing them through when the VAD session is created.
-        try:
-            from vad_integration_bridge import get_vad_bridge
-            from transcription_service import process_audio_segment_and_update_s3
-
-            bridge = get_vad_bridge()
-            if not bridge:
-                logger.error(f"Session {self.session_id}: VAD Bridge not available to handle transcription result.")
-                return
-
-            with bridge.bridge_lock:
-                if self.session_id not in bridge.session_metadata:
-                    logger.error(f"Session {self.session_id}: Metadata not found in VAD bridge. Cannot process transcription.")
-                    return
-                
-                # Get the necessary data and lock from the bridge's stored metadata
-                main_session_data = bridge.session_metadata[self.session_id].get("existing_session_data")
-                main_session_lock = bridge.session_metadata[self.session_id].get("session_lock")
-                
-                if not main_session_data or not main_session_lock:
-                    logger.error(f"Session {self.session_id}: Main session data or lock not found in bridge metadata.")
-                    return
-
-            # Now, call the unified processing function from transcription_service
-            # This function is thread-safe and handles all filtering, PII, and S3 appending.
-            # We pass it the path to the CLEAN audio file, which contains only voiced segments.
-            process_audio_segment_and_update_s3(
-                temp_segment_wav_path=clean_wav_path,
-                session_data=main_session_data,
-                session_lock=main_session_lock
-            )
-            logger.info(f"Session {self.session_id}: Dispatched transcription result to be processed and saved to S3.")
-
-        except ImportError:
-            logger.error(f"Session {self.session_id}: Could not import VAD bridge or transcription service to handle result.")
+    # This function is now removed. The worker will call the callback directly.
         except Exception as e:
             logger.error(f"Session {self.session_id}: Unexpected error handling transcription result: {e}", exc_info=True)
 
@@ -740,7 +701,8 @@ class VADTranscriptionManager:
         logger.info(f"VAD aggressiveness: {self.vad_aggressiveness}")
 
     def create_session(self, session_id: str, language_setting: str = "any",
-                      segment_duration_target: float = 15.0) -> "SessionAudioProcessor":
+                      segment_duration_target: float = 15.0,
+                      result_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> "SessionAudioProcessor":
         """
         Create a new transcription session.
         
@@ -748,6 +710,7 @@ class VADTranscriptionManager:
             session_id: Unique session identifier
             language_setting: Language setting for transcription
             segment_duration_target: Target segment duration in seconds
+            result_callback: Optional callback for transcription results.
             
         Returns:
             SessionAudioProcessor instance
@@ -760,11 +723,16 @@ class VADTranscriptionManager:
             # Create session temp directory
             session_temp_dir = os.path.join(self.base_temp_dir, session_id)
             
+            # Define a default no-op callback if none is provided
+            def no_op_callback(data):
+                logger.debug(f"Session {session_id}: No-op callback for result: {data.get('chunk_id')}")
+
             # Create session processor
             processor = SessionAudioProcessor(
                 session_id=session_id,
                 temp_dir=session_temp_dir,
                 vad_service=self.vad_service,
+                result_callback=result_callback or no_op_callback,
                 language_setting=language_setting,
                 segment_duration_target=segment_duration_target
             )

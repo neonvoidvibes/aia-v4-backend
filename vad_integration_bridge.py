@@ -1,23 +1,12 @@
-"""
-VAD Integration Bridge
-
-This module provides the integration layer between the existing API server
-and the new VAD-filtered transcription service. It bridges the current
-WebSocket-based audio processing with the new VAD pipeline.
-
-Key Features:
-- Seamless integration with existing session management
-- Backwards-compatible API
-- Enhanced debugging and monitoring
-- Graceful fallback strategies
-"""
-
 import os
 import logging
 import threading
 import time
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timezone
+
+# Defer import to fix circular dependency
+# from vad_transcription_service import VADTranscriptionManager, SessionAudioProcessor
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -58,7 +47,6 @@ class VADIntegrationBridge:
         # Integration state
         self.session_processors: Dict[str, "SessionAudioProcessor"] = {}
         self.session_metadata: Dict[str, Dict[str, Any]] = {}
-        self.transcription_callbacks: Dict[str, Callable] = {}
         self.bridge_lock = threading.RLock()
         
         # Statistics
@@ -73,15 +61,55 @@ class VADIntegrationBridge:
         
         logger.info("VAD Integration Bridge ready for session management")
 
-    def create_vad_session(self, session_id: str, existing_session_data: Dict[str, Any],
-                          transcription_callback: Optional[Callable] = None) -> bool:
+    def _handle_transcription_result(self, result: Dict[str, Any]):
+        """
+        Callback function to handle transcription results from the VAD pipeline.
+        This function is called by the SessionAudioProcessor.
+        """
+        session_id = result.get("session_id")
+        if not session_id:
+            logger.error("VAD Bridge: Received transcription result without a session_id.")
+            return
+
+        logger.info(f"VAD Bridge: Handling transcription result for session {session_id}")
+
+        try:
+            from transcription_service import process_audio_segment_and_update_s3
+            
+            with self.bridge_lock:
+                if session_id not in self.session_metadata:
+                    logger.error(f"VAD Bridge: Metadata not found for session {session_id}. Cannot process transcription.")
+                    return
+                
+                main_session_data = self.session_metadata[session_id].get("existing_session_data")
+                main_session_lock = self.session_metadata[session_id].get("session_lock")
+                clean_wav_path = result.get("clean_wav_path")
+
+                if not all([main_session_data, main_session_lock, clean_wav_path]):
+                    logger.error(f"VAD Bridge: Missing critical data for S3 update. Data: {main_session_data is not None}, Lock: {main_session_lock is not None}, Path: {clean_wav_path}")
+                    return
+
+            # Call the unified processing function. It's thread-safe via the lock.
+            process_audio_segment_and_update_s3(
+                temp_segment_wav_path=clean_wav_path,
+                session_data=main_session_data,
+                session_lock=main_session_lock
+            )
+            logger.info(f"VAD Bridge: Dispatched result for session {session_id} to be saved to S3.")
+
+        except ImportError:
+            logger.error(f"VAD Bridge: Failed to import process_audio_segment_and_update_s3.")
+        except Exception as e:
+            logger.error(f"VAD Bridge: Unexpected error handling transcription result: {e}", exc_info=True)
+
+
+    def create_vad_session(self, session_id: str, existing_session_data: Dict[str, Any]) -> bool:
         """
         Create a new VAD session integrated with existing session data.
         
         Args:
             session_id: Session identifier from existing system
             existing_session_data: Session data from active_sessions
-            transcription_callback: Callback function for transcription results
             
         Returns:
             True if session created successfully, False otherwise
@@ -105,7 +133,8 @@ class VADIntegrationBridge:
                 processor = self.vad_manager.create_session(
                     session_id=session_id,
                     language_setting=language_setting,
-                    segment_duration_target=segment_duration
+                    segment_duration_target=segment_duration,
+                    result_callback=self._handle_transcription_result # Pass the callback
                 )
                 
                 # Store session references
@@ -118,9 +147,6 @@ class VADIntegrationBridge:
                     "session_lock": session_locks[session_id], # Pass the specific lock for this session
                     "is_active": True
                 }
-                
-                if transcription_callback:
-                    self.transcription_callbacks[session_id] = transcription_callback
                 
                 # Start the processor
                 processor.start()
@@ -171,9 +197,6 @@ class VADIntegrationBridge:
                 # Clean up local references
                 del self.session_processors[session_id]
                 del self.session_metadata[session_id]
-                
-                if session_id in self.transcription_callbacks:
-                    del self.transcription_callbacks[session_id]
                 
                 # Update global stats
                 self.global_stats["sessions_destroyed"] += 1
@@ -353,7 +376,7 @@ class VADIntegrationBridge:
         logger.info(f"  Chunks with Voice: {final_stats.get('chunks_with_voice', 0)}")
         logger.info(f"  Chunks Transcribed: {final_stats.get('chunks_transcribed', 0)}")
         logger.info(f"  Total Processing Time: {final_stats.get('total_processing_time_ms', 0):.1f}ms")
-        logger.info(f"  Processing Errors: {len(final_stats.get('errors', []))}")
+        logger.info(f"  Errors: {len(final_stats.get('errors', []))}")
         
         # Calculate efficiency metrics
         if final_stats.get('chunks_processed', 0) > 0:
