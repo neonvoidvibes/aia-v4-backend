@@ -3,9 +3,9 @@ import logging
 import threading
 import time
 from typing import Dict, Any, Optional, Callable
-from datetime import datetime, timezone
+from collections import defaultdict
 
-# Defer import to fix circular dependency
+# Defer imports to fix circular dependency
 # from vad_transcription_service import VADTranscriptionManager, SessionAudioProcessor
 
 # Configure logging
@@ -47,6 +47,7 @@ class VADIntegrationBridge:
         # Integration state
         self.session_processors: Dict[str, "SessionAudioProcessor"] = {}
         self.session_metadata: Dict[str, Dict[str, Any]] = {}
+        self.session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
         self.bridge_lock = threading.RLock()
         
         # Statistics
@@ -82,7 +83,7 @@ class VADIntegrationBridge:
                     return
                 
                 main_session_data = self.session_metadata[session_id].get("existing_session_data")
-                main_session_lock = self.session_metadata[session_id].get("session_lock")
+                main_session_lock = self.session_locks.get(session_id) # Get lock from bridge
                 clean_wav_path = result.get("clean_wav_path")
 
                 if not all([main_session_data, main_session_lock, clean_wav_path]):
@@ -122,9 +123,6 @@ class VADIntegrationBridge:
                 return True
             
             try:
-                # Import here to avoid circular dependency issues at module level
-                from api_server import session_locks
-
                 # Extract configuration from existing session data
                 language_setting = existing_session_data.get('language_setting_from_client', 'any')
                 segment_duration = float(os.getenv('VAD_SEGMENT_DURATION', '15.0'))
@@ -144,7 +142,6 @@ class VADIntegrationBridge:
                     "language_setting": language_setting,
                     "segment_duration": segment_duration,
                     "existing_session_data": existing_session_data,
-                    "session_lock": session_locks[session_id], # Pass the specific lock for this session
                     "is_active": True
                 }
                 
@@ -197,6 +194,8 @@ class VADIntegrationBridge:
                 # Clean up local references
                 del self.session_processors[session_id]
                 del self.session_metadata[session_id]
+                if session_id in self.session_locks:
+                    del self.session_locks[session_id]
                 
                 # Update global stats
                 self.global_stats["sessions_destroyed"] += 1
@@ -454,12 +453,13 @@ def cleanup_vad_bridge():
 
 def is_vad_enabled() -> bool:
     """Check if VAD integration is enabled and available."""
-    return os.getenv('ENABLE_VAD_TRANSCRIPTION', 'false').lower() == 'true' and _vad_bridge_instance is not None
+    # This check is now just for logging/info, the server will attempt to use it if initialized.
+    return os.getenv('ENABLE_VAD_TRANSCRIPTION', 'true').lower() == 'true' and _vad_bridge_instance is not None
 
 def log_vad_configuration():
     """Log current VAD configuration for debugging."""
     logger.info("=== VAD CONFIGURATION ===")
-    logger.info(f"VAD Enabled: {is_vad_enabled()}")
+    logger.info(f"VAD Enabled Flag: {os.getenv('ENABLE_VAD_TRANSCRIPTION', 'true')}")
     logger.info(f"VAD Aggressiveness: {os.getenv('VAD_AGGRESSIVENESS', '2')}")
     logger.info(f"VAD Segment Duration: {os.getenv('VAD_SEGMENT_DURATION', '15.0')}s")
     logger.info(f"VAD Temp Directory: {os.getenv('VAD_TEMP_DIR', 'tmp_vad_audio_sessions')}")
