@@ -1475,18 +1475,19 @@ def handle_chat(user: SupabaseUser):
             final_llm_messages.extend(llm_messages_from_client)
 
             # --- Call LLM and Stream ---
-            stream = _call_anthropic_stream_with_retry(
+            stream_manager = _call_anthropic_stream_with_retry(
                 model=os.getenv("LLM_MODEL_NAME", "claude-3-haiku-20240307"),
                 max_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096)),
                 system=final_system_prompt,
                 messages=final_llm_messages
             )
 
-            for chunk in stream:
-                if chunk.type == "content_block_delta":
-                    text_delta = chunk.delta.text
-                    sse_data = json.dumps({'delta': text_delta})
-                    yield f"data: {sse_data}\n\n"
+            with stream_manager as stream:
+                for chunk in stream:
+                    if chunk.type == "content_block_delta":
+                        text_delta = chunk.delta.text
+                        sse_data = json.dumps({'delta': text_delta})
+                        yield f"data: {sse_data}\n\n"
 
             sse_done_data = json.dumps({'done': True})
             yield f"data: {sse_done_data}\n\n"
