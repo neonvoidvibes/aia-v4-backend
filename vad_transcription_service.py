@@ -180,18 +180,20 @@ class VADTranscriptionService:
         logger.error(f"Session {session_id}: All duration detection methods failed")
         return 0.0
 
-    def detect_voice_activity(self, wav_path: str, session_id: str) -> Tuple[bool, Dict[str, Any]]:
+    def detect_voice_activity(self, wav_path: str, session_id: str) -> Tuple[bytes, Dict[str, Any]]:
         """
-        Perform Voice Activity Detection on WAV file.
+        Perform Voice Activity Detection on a WAV file and extract voiced frames.
         
         Args:
             wav_path: Path to WAV file to analyze
             session_id: Session ID for logging context
             
         Returns:
-            Tuple of (has_voice: bool, vad_details: Dict[str, Any])
+            Tuple of (voiced_audio_bytes: bytes, vad_details: Dict[str, Any])
         """
-        logger.debug(f"Session {session_id}: Starting VAD analysis on {wav_path}")
+        logger.debug(f"Session {session_id}: Starting VAD analysis and extraction on {wav_path}")
+        
+        voiced_audio_data = bytearray()
         
         vad_details = {
             "total_frames": 0,
@@ -205,83 +207,47 @@ class VADTranscriptionService:
         try:
             start_time = time.time()
             
-            # Read WAV file
             with wave.open(wav_path, 'rb') as wf:
-                # Verify format compatibility
-                sample_rate = wf.getframerate()
-                channels = wf.getnchannels()
-                sample_width = wf.getsampwidth()
+                sample_rate, channels, sampwidth = wf.getframerate(), wf.getnchannels(), wf.getsampwidth()
+                logger.debug(f"Session {session_id}: WAV format - Rate: {sample_rate}Hz, Channels: {channels}, Width: {sampwidth} bytes")
                 
-                logger.debug(f"Session {session_id}: WAV format - Rate: {sample_rate}Hz, "
-                           f"Channels: {channels}, Width: {sample_width} bytes")
+                # Format checks
+                if sample_rate != self.target_sample_rate: logger.warning(f"Session {session_id}: Sample rate mismatch - Expected: {self.target_sample_rate}Hz, Got: {sample_rate}Hz")
+                if channels != self.target_channels: logger.warning(f"Session {session_id}: Channel mismatch - Expected: {self.target_channels}, Got: {channels}")
+                if sampwidth != 2: logger.warning(f"Session {session_id}: Sample width mismatch - Expected: 2 bytes (16-bit), Got: {sampwidth} bytes")
                 
-                if sample_rate != self.target_sample_rate:
-                    logger.warning(f"Session {session_id}: Sample rate mismatch - "
-                                 f"Expected: {self.target_sample_rate}Hz, Got: {sample_rate}Hz")
-                
-                if channels != self.target_channels:
-                    logger.warning(f"Session {session_id}: Channel mismatch - "
-                                 f"Expected: {self.target_channels}, Got: {channels}")
-                
-                if sample_width != 2:  # 16-bit = 2 bytes
-                    logger.warning(f"Session {session_id}: Sample width mismatch - "
-                                 f"Expected: 2 bytes (16-bit), Got: {sample_width} bytes")
-                
-                # Read all audio data
                 audio_data = wf.readframes(wf.getnframes())
             
-            # Process audio in frames for VAD
-            voiced_frames = 0
-            total_frames = 0
+            voiced_frames, total_frames = 0, 0
             
-            # Process audio in VAD-compatible frames
             for i in range(0, len(audio_data) - self.vad_frame_bytes + 1, self.vad_frame_bytes):
                 frame = audio_data[i:i + self.vad_frame_bytes]
-                
-                if len(frame) < self.vad_frame_bytes:
-                    logger.debug(f"Session {session_id}: Skipping incomplete frame at end "
-                               f"(size: {len(frame)} bytes)")
-                    continue
-                
                 total_frames += 1
                 
                 try:
-                    is_speech = self.vad.is_speech(frame, sample_rate)
-                    if is_speech:
+                    if self.vad.is_speech(frame, sample_rate):
                         voiced_frames += 1
-                        logger.debug(f"Session {session_id}: Frame {total_frames}: SPEECH detected")
-                    else:
-                        logger.debug(f"Session {session_id}: Frame {total_frames}: silence")
+                        voiced_audio_data.extend(frame)
                 except Exception as frame_error:
                     logger.warning(f"Session {session_id}: VAD error on frame {total_frames}: {frame_error}")
                     continue
             
-            processing_time = (time.time() - start_time) * 1000  # Convert to ms
-            
-            # Calculate voice activity ratio
+            processing_time = (time.time() - start_time) * 1000
             voiced_ratio = voiced_frames / total_frames if total_frames > 0 else 0.0
-            has_voice = voiced_frames > 0
             
-            # Update details
             vad_details.update({
-                "total_frames": total_frames,
-                "voiced_frames": voiced_frames,
-                "voiced_frame_ratio": voiced_ratio,
-                "processing_time_ms": processing_time
+                "total_frames": total_frames, "voiced_frames": voiced_frames,
+                "voiced_frame_ratio": voiced_ratio, "processing_time_ms": processing_time
             })
             
-            logger.info(f"Session {session_id}: VAD Analysis Complete")
-            logger.info(f"Session {session_id}: Total Frames: {total_frames}, "
-                       f"Voiced: {voiced_frames}, Ratio: {voiced_ratio:.3f}")
-            logger.info(f"Session {session_id}: Voice Detected: {has_voice}, "
-                       f"Processing Time: {processing_time:.1f}ms")
+            logger.info(f"Session {session_id}: VAD Analysis Complete. Total Frames: {total_frames}, Voiced: {voiced_frames}, Ratio: {voiced_ratio:.3f}. Extracted {len(voiced_audio_data)} voiced bytes.")
             
-            return has_voice, vad_details
+            return bytes(voiced_audio_data), vad_details
             
         except Exception as e:
             logger.error(f"Session {session_id}: VAD analysis failed: {e}", exc_info=True)
             vad_details["error"] = str(e)
-            return False, vad_details
+            return b"", vad_details
 
     def transcribe_with_whisper(self, wav_path: str, session_id: str, 
                                language_setting: str = "any") -> Optional[Dict[str, Any]]:
@@ -427,94 +393,69 @@ class VADTranscriptionService:
             Processing result dictionary with transcription and metadata
         """
         chunk_id = uuid.uuid4().hex
-        logger.info(f"Session {session_id}: Processing audio chunk {chunk_id}")
-        logger.info(f"Session {session_id}: WebM blob size: {len(webm_blob_bytes)} bytes")
+        logger.info(f"Session {session_id}: Processing audio chunk {chunk_id} ({len(webm_blob_bytes)} bytes)")
         
         processing_start_time = time.time()
-        
         result = {
-            "chunk_id": chunk_id,
-            "session_id": session_id,
-            "processing_start_time": processing_start_time,
-            "webm_blob_size_bytes": len(webm_blob_bytes),
-            "has_voice": False,
-            "transcription": None,
-            "vad_details": {},
-            "processing_times": {},
-            "errors": [],
-            "files_created": [],
-            "files_cleaned": []
+            "chunk_id": chunk_id, "session_id": session_id, "processing_start_time": processing_start_time,
+            "webm_blob_size_bytes": len(webm_blob_bytes), "has_voice": False, "transcription": None,
+            "vad_details": {}, "processing_times": {}, "errors": [], "files_created": [], "files_cleaned": []
         }
         
-        # Create unique filenames for this chunk
-        webm_filename = f"chunk_{chunk_id}.webm"
-        wav_filename = f"chunk_{chunk_id}.wav"
-        webm_path = os.path.join(temp_dir, webm_filename)
-        wav_path = os.path.join(temp_dir, wav_filename)
+        webm_path = os.path.join(temp_dir, f"chunk_{chunk_id}.webm")
+        wav_path = os.path.join(temp_dir, f"chunk_{chunk_id}.wav")
+        clean_wav_path = os.path.join(temp_dir, f"clean_chunk_{chunk_id}.wav")
         
         try:
-            # Step 1: Write WebM blob to temporary file
-            logger.debug(f"Session {session_id}: Writing WebM blob to {webm_path}")
+            # Step 1: Write WebM blob
             step_start = time.time()
-            
-            with open(webm_path, 'wb') as f:
-                f.write(webm_blob_bytes)
-            
+            with open(webm_path, 'wb') as f: f.write(webm_blob_bytes)
             result["files_created"].append(webm_path)
             result["processing_times"]["webm_write"] = (time.time() - step_start) * 1000
-            logger.debug(f"Session {session_id}: WebM blob written in {result['processing_times']['webm_write']:.1f}ms")
             
             # Step 2: Convert WebM to WAV
-            logger.debug(f"Session {session_id}: Converting WebM to WAV")
             step_start = time.time()
-            
             conversion_success, duration = self.process_webm_blob_to_wav(webm_path, wav_path, session_id)
-            
             result["processing_times"]["webm_to_wav"] = (time.time() - step_start) * 1000
-            
             if not conversion_success:
-                error_msg = "WebM to WAV conversion failed"
-                logger.error(f"Session {session_id}: {error_msg}")
-                result["errors"].append(error_msg)
-                return result
-            
+                raise RuntimeError("WebM to WAV conversion failed")
             result["files_created"].append(wav_path)
             result["audio_duration_seconds"] = duration
-            logger.info(f"Session {session_id}: WebM to WAV conversion completed in {result['processing_times']['webm_to_wav']:.1f}ms")
             
-            # Step 3: Voice Activity Detection
-            logger.debug(f"Session {session_id}: Performing VAD analysis")
+            # Step 3: VAD analysis and extraction
             step_start = time.time()
-            
-            has_voice, vad_details = self.detect_voice_activity(wav_path, session_id)
-            
+            voiced_audio_bytes, vad_details = self.detect_voice_activity(wav_path, session_id)
             result["processing_times"]["vad_analysis"] = (time.time() - step_start) * 1000
-            result["has_voice"] = has_voice
+            result["has_voice"] = len(voiced_audio_bytes) > 0
             result["vad_details"] = vad_details
             
-            logger.info(f"Session {session_id}: VAD analysis completed in {result['processing_times']['vad_analysis']:.1f}ms")
-            
-            if not has_voice:
+            if not result["has_voice"]:
                 logger.info(f"Session {session_id}: No voice detected - skipping Whisper transcription")
                 result["skip_reason"] = "no_voice_detected"
             else:
-                # Step 4: Whisper Transcription (only if voice detected)
-                logger.debug(f"Session {session_id}: Voice detected - proceeding with transcription")
+                # Step 4: Write clean WAV and transcribe
                 step_start = time.time()
-                
-                transcription = self.transcribe_with_whisper(wav_path, session_id, language_setting)
-                
+                try:
+                    with wave.open(clean_wav_path, 'wb') as wf:
+                        wf.setnchannels(self.target_channels)
+                        wf.setsampwidth(2) # 16-bit
+                        wf.setframerate(self.target_sample_rate)
+                        wf.writeframes(voiced_audio_bytes)
+                    result["files_created"].append(clean_wav_path)
+                    logger.info(f"Session {session_id}: Created clean WAV with voiced audio at {clean_wav_path}")
+                except Exception as wave_error:
+                    raise RuntimeError(f"Failed to write clean WAV file: {wave_error}") from wave_error
+
+                transcription = self.transcribe_with_whisper(clean_wav_path, session_id, language_setting)
                 result["processing_times"]["whisper_transcription"] = (time.time() - step_start) * 1000
                 result["transcription"] = transcription
                 
                 if transcription:
-                    logger.info(f"Session {session_id}: Whisper transcription completed in {result['processing_times']['whisper_transcription']:.1f}ms")
-                    if 'segments' in transcription:
-                        logger.info(f"Session {session_id}: Transcription produced {len(transcription['segments'])} segments")
+                    logger.info(f"Session {session_id}: Whisper transcription completed in {result['processing_times']['whisper_transcription']:.1f}ms with {len(transcription.get('segments',[]))} segments.")
                 else:
-                    logger.warning(f"Session {session_id}: Whisper transcription failed or returned no results")
-                    result["errors"].append("Whisper transcription failed")
-            
+                    logger.warning(f"Session {session_id}: Whisper returned no results for voiced audio.")
+                    result["errors"].append("Whisper transcription failed or returned no results")
+
         except Exception as e:
             error_msg = f"Unexpected error during chunk processing: {e}"
             logger.error(f"Session {session_id}: {error_msg}", exc_info=True)
@@ -522,139 +463,23 @@ class VADTranscriptionService:
         
         finally:
             # Step 5: Cleanup temporary files
-            logger.debug(f"Session {session_id}: Cleaning up temporary files")
             cleanup_start = time.time()
-            
-            for file_path in [webm_path, wav_path]:
+            for file_path in [webm_path, wav_path, clean_wav_path]:
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)
                         result["files_cleaned"].append(file_path)
-                        logger.debug(f"Session {session_id}: Cleaned up {file_path}")
                     except Exception as cleanup_error:
                         logger.warning(f"Session {session_id}: Failed to clean up {file_path}: {cleanup_error}")
-            
             result["processing_times"]["cleanup"] = (time.time() - cleanup_start) * 1000
         
-        # Calculate total processing time
         total_processing_time = (time.time() - processing_start_time) * 1000
         result["processing_times"]["total"] = total_processing_time
         result["processing_end_time"] = time.time()
         
-        logger.info(f"Session {session_id}: Chunk {chunk_id} processing completed in {total_processing_time:.1f}ms")
-        logger.info(f"Session {session_id}: Voice detected: {result['has_voice']}, "
-                   f"Transcription: {'Success' if result['transcription'] else 'None/Failed'}")
+        logger.info(f"Session {session_id}: Chunk {chunk_id} processing completed in {total_processing_time:.1f}ms. Voice: {result['has_voice']}, Transcription: {'Success' if result['transcription'] else 'None/Failed'}")
         
         return result
-
-
-class SessionAudioProcessor:
-    """
-    Manages per-session audio processing with producer-consumer pattern for real-time performance.
-    Handles WebM blob accumulation, segmentation, and threaded processing.
-    """
-    
-    def __init__(self, session_id: str, temp_dir: str, vad_service: VADTranscriptionService,
-                 language_setting: str = "any", segment_duration_target: float = 15.0):
-        """
-        Initialize session audio processor.
-        
-        Args:
-            session_id: Unique session identifier
-            temp_dir: Temporary directory for this session's files
-            vad_service: VAD transcription service instance
-            language_setting: Language setting for transcription
-            segment_duration_target: Target duration for audio segments in seconds
-        """
-        self.session_id = session_id
-        self.temp_dir = temp_dir
-        self.vad_service = vad_service
-        self.language_setting = language_setting
-        self.segment_duration_target = segment_duration_target
-        
-        # Producer-consumer components
-        self.audio_queue = queue.Queue()
-        self.processing_thread = None
-        self.is_active = False
-        self.session_lock = threading.RLock()
-        
-        # Session state
-        self.current_segment_bytes = bytearray()
-        self.accumulated_duration = 0.0
-        self.webm_global_header = None
-        self.is_first_blob = True
-        self.processing_stats = {
-            "chunks_received": 0,
-            "chunks_processed": 0,
-            "chunks_with_voice": 0,
-            "chunks_transcribed": 0,
-            "total_processing_time_ms": 0,
-            "errors": []
-        }
-        
-        # Create session temp directory
-        os.makedirs(self.temp_dir, exist_ok=True)
-        
-        logger.info(f"Session {self.session_id}: Audio processor initialized")
-        logger.info(f"Session {self.session_id}: Temp dir: {self.temp_dir}")
-        logger.info(f"Session {self.session_id}: Language: {self.language_setting}")
-        logger.info(f"Session {self.session_id}: Target segment duration: {self.segment_duration_target}s")
-
-    def start(self):
-        """Start the session processing thread."""
-        with self.session_lock:
-            if self.is_active:
-                logger.warning(f"Session {self.session_id}: Processor already active")
-                return
-            
-            self.is_active = True
-            self.processing_thread = threading.Thread(
-                target=self._processing_worker,
-                name=f"AudioProcessor-{self.session_id}",
-                daemon=True
-            )
-            self.processing_thread.start()
-            
-            logger.info(f"Session {self.session_id}: Processing thread started")
-
-    def stop(self):
-        """Stop the session processing thread and clean up."""
-        with self.session_lock:
-            if not self.is_active:
-                logger.info(f"Session {self.session_id}: Processor already stopped")
-                return
-            
-            self.is_active = False
-            
-            # Signal the processing thread to stop
-            self.audio_queue.put(None)  # Sentinel value
-            
-            logger.info(f"Session {self.session_id}: Stopping processor")
-        
-        # Wait for thread to finish (outside lock to avoid deadlock)
-        if self.processing_thread and self.processing_thread.is_alive():
-            self.processing_thread.join(timeout=10)
-            if self.processing_thread.is_alive():
-                logger.warning(f"Session {self.session_id}: Processing thread did not stop gracefully")
-        
-        # Process any remaining audio data
-        self._process_final_segment()
-        
-        # Cleanup
-        self._cleanup_session()
-        
-        logger.info(f"Session {self.session_id}: Processor stopped and cleaned up")
-
-    def add_audio_blob(self, webm_blob_bytes: bytes):
-        """
-        Add a WebM audio blob to the processing queue.
-        
-        Args:
-            webm_blob_bytes: Raw WebM blob data from client
-        """
-        if not self.is_active:
-            logger.warning(f"Session {self.session_id}: Received audio blob but processor is not active")
-            return
         
         logger.debug(f"Session {self.session_id}: Received audio blob ({len(webm_blob_bytes)} bytes)")
         
