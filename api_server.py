@@ -22,7 +22,7 @@ from gotrue.errors import AuthApiError
 from gotrue.types import User as SupabaseUser 
 
 from utils.retrieval_handler import RetrievalHandler
-from utils.transcript_utils import TranscriptState, read_new_transcript_content, read_all_transcripts_in_folder
+from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
@@ -177,9 +177,6 @@ try:
         logger.info("Supabase client initialized successfully.")
 except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}", exc_info=True)
-
-transcript_state_cache: Dict[Tuple[str, str], TranscriptState] = {} 
-transcript_state_lock = threading.Lock() 
 
 try:
     anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -1458,7 +1455,9 @@ def handle_chat(user: SupabaseUser):
         transcript_load_start_time = time.time()
         if transcript_listen_mode == 'all':
             logger.info(f"Transcript Listen Mode 'all': Reading all transcripts for {agent_name}/{event_id}.")
+            
             all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
+            
             if all_transcripts_content:
                 full_transcript_message_content = (
                     f"IMPORTANT CONTEXT: The following is the FULL transcript history for this meeting, provided because 'Listen: All' mode is active.\n\n"
@@ -1466,139 +1465,41 @@ def handle_chat(user: SupabaseUser):
                     f"{all_transcripts_content}\n"
                     f"=== END ALL TRANSCRIPTS FOR THIS TURN ==="
                 )
-                # Prepend this single block of all transcripts to the user messages that will be sent to LLM
-                # This ensures it's part of the immediate conversational context for this turn.
                 final_llm_messages.append({'role': 'user', 'content': full_transcript_message_content})
                 logger.info(f"Prepended all transcript content (length {len(all_transcripts_content)}) to messages due to 'Listen: All' mode.")
             else:
                 logger.info(f"Transcript Listen Mode 'all': No transcript content found for {agent_name}/{event_id}.")
             
-            # Extend with client messages after adding all transcripts
             final_llm_messages.extend(llm_messages_from_client)
 
         elif transcript_listen_mode == 'latest': # Default behavior
-            logger.info(f"Transcript Listen Mode 'latest': Using delta/stateful transcript loading for {agent_name}/{event_id}.")
-            state_key = (agent_name, event_id)
-            with transcript_state_lock:
-                if state_key not in transcript_state_cache:
-                    transcript_state_cache[state_key] = TranscriptState()
-                    logger.info(f"New TranscriptState created for {agent_name}/{event_id}")
-                current_transcript_state = transcript_state_cache[state_key]
-                
-                # Removed the reset of initial_full_transcript_content and current_latest_key here.
-                # These should persist across requests for 'latest' mode to correctly track deltas
-                # and avoid re-reading all historical transcripts unnecessarily on each turn.
-                # An explicit "new chat" action on the frontend should clear this server-side state if needed,
-                # or a new (agent_name, event_id) key will naturally get a fresh TranscriptState.
-                logger.debug(f"Using existing/new TranscriptState for {agent_name}/{event_id} for 'latest' mode.")
+            logger.info(f"Transcript Listen Mode 'latest': Reading latest transcript for {agent_name}/{event_id}.")
 
-            try:
-                transcript_data_from_s3, was_initial_load_attempt = read_new_transcript_content(
-                    current_transcript_state, agent_name, event_id
+            transcript_content_from_s3, was_load_attempt_successful = read_new_transcript_content(
+                agent_name, event_id
+            )
+
+            if transcript_content_from_s3:
+                transcript_message_content = (
+                    f"IMPORTANT CONTEXT: The following is the content of the latest transcript file. "
+                    f"Refer to this as the most current information available.\n\n"
+                    f"=== BEGIN LATEST TRANSCRIPT ===\n"
+                    f"{transcript_content_from_s3}\n"
+                    f"=== END LATEST TRANSCRIPT ==="
                 )
-                
-                # Correctly handle initial load vs delta content.
-                if transcript_data_from_s3 and was_initial_load_attempt:
-                    initial_transcript_message_content = (
-                        f"IMPORTANT CONTEXT: The following is the full meeting transcript up to this point. "
-                        f"Refer to this as the primary source for historical information throughout our conversation.\n\n"
-                        f"=== BEGIN FULL MEETING TRANSCRIPT ===\n"
-                        f"{transcript_data_from_s3}\n"
-                        f"=== END FULL MEETING TRANSCRIPT ==="
-                    )
-                    final_llm_messages.append({'role': 'user', 'content': initial_transcript_message_content})
-                    logger.info(f"Prepended initial full transcript (length {len(transcript_data_from_s3)}) to current API call's messages.")
-                elif not transcript_data_from_s3 and was_initial_load_attempt:
-                    logger.info(f"Initial transcript load for {agent_name}/{event_id} resulted in no data. No initial transcript message added.")
-                
-                # Always add the client's messages for this turn
-                final_llm_messages.extend(llm_messages_from_client)
+                final_llm_messages.append({'role': 'user', 'content': transcript_message_content})
+                logger.info(f"Prepended latest transcript (length {len(transcript_content_from_s3)}) to messages.")
+            elif was_load_attempt_successful:
+                 logger.info("Latest transcript was checked, but no content was found or file was empty.")
+            else: # load attempt failed
+                 logger.warning("Attempt to load latest transcript failed.")
 
-                # Then, handle a subsequent delta update if one was found
-                if transcript_data_from_s3 and not was_initial_load_attempt:
-                    label = "[Meeting Transcript Update (from S3)]"
-                    transcript_delta_to_add = f"{label}\n{transcript_data_from_s3}"
-                    
-                    # Insert the delta before the last user message, as it provides context for their message.
-                    insert_idx_for_delta = len(final_llm_messages)
-                    for i in range(len(final_llm_messages) - 1, -1, -1):
-                        is_special_transcript_message = (
-                            final_llm_messages[i]['content'].startswith("IMPORTANT CONTEXT:") or
-                            final_llm_messages[i]['content'].startswith("[Meeting Transcript Update (from S3)]")
-                        )
-                        # We want to insert just before the last *actual* user message, not before system/transcript messages.
-                        if final_llm_messages[i]['role'] == 'user' and not is_special_transcript_message:
-                            insert_idx_for_delta = i
-                            break
-                    
-                    final_llm_messages.insert(insert_idx_for_delta, {'role': 'user', 'content': transcript_delta_to_add})
-                    logger.info(f"Inserted transcript DELTA (length {len(transcript_data_from_s3)}) into LLM messages at index {insert_idx_for_delta}.")
-                
-                elif not transcript_data_from_s3 and not was_initial_load_attempt:
-                     logger.info(f"No new transcript delta to add for {agent_name}/{event_id} for this turn.")
-
-            except Exception as e:
-                logger.error(f"Error reading/processing transcript updates from S3: {e}", exc_info=True)
-        else: # transcript_listen_mode is not 'all' or 'latest' (should not happen with defaults)
-            logger.warning(f"Unknown transcript_listen_mode: {transcript_listen_mode}. Defaulting to no transcript loading for this turn.")
+            # Always add the client's messages for this turn
             final_llm_messages.extend(llm_messages_from_client)
-        transcript_load_time = time.time() - transcript_load_start_time
-        logger.info(f"[PERF] Transcript loading took {transcript_load_time:.4f}s")
-        
-        now_utc = datetime.now(timezone.utc); time_str = now_utc.strftime('%A, %Y-%m-%d %H:%M:%S %Z')
-        final_system_prompt += f"\nCurrent Time Context: {time_str}" 
-        # NOTE: claude-sonnet-4-20250514 is a VALID model name - do not change without verification
-        llm_model_name = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514"); llm_max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
-        
-        if not final_llm_messages: 
-            logger.error("No messages to send to LLM after all processing. Aborting call.")
-            return jsonify({"error": "No content to process for LLM."}), 400
 
-        pre_llm_call_time = time.time() - request_start_time
-        logger.info(f"[PERF] Total pre-request processing time: {pre_llm_call_time:.4f}s")
-
-        def generate_stream():
-            response_content = ""; stream_error = None
-            try:
-                with _call_anthropic_stream_with_retry(model=llm_model_name, max_tokens=llm_max_tokens, system=final_system_prompt, messages=final_llm_messages) as stream:
-                    for text in stream.text_stream: 
-                        response_content += text
-                        sse_data = json.dumps({'delta': text})
-                        yield f"data: {sse_data}\n\n"
-                anthropic_circuit_breaker.record_success() # Success! Reset the breaker.
-            except CircuitBreakerOpen as e:
-                stream_error = str(e)
-                logger.error(f"CircuitBreaker is OPEN. Rejecting request immediately. Message: {stream_error}")
-            except RetryError as e: 
-                stream_error = "Assistant is currently unavailable. Please try again in a moment."
-                logger.error(f"RetryError during Anthropic stream after all retries: {e}. Tripping circuit breaker.")
-                anthropic_circuit_breaker.record_failure()
-            except APIStatusError as e:
-                error_body_str = "Unknown API error structure"
-                try:
-                    error_detail_json = e.response.json()
-                    error_body_str = json.dumps(error_detail_json) 
-                except json.JSONDecodeError:
-                    error_body_str = e.response.text if hasattr(e.response, 'text') else "Non-JSON error response"
-                except Exception: pass
-                stream_error = f"API Error: Status {e.status_code} - {error_body_str}"
-                logger.error(f"APIStatusError during Anthropic stream: Status {e.status_code}, Body: {error_body_str}", exc_info=True)
-                anthropic_circuit_breaker.record_failure()
-            except APIConnectionError as e:
-                stream_error = "A network error occurred while connecting to the assistant. Please check your connection and try again."
-                logger.error(f"APIConnectionError during Anthropic stream: {e}", exc_info=True)
-                anthropic_circuit_breaker.record_failure()
-            except AnthropicError as e: 
-                stream_error = f"An unexpected error occurred with the assistant: {str(e)}"
-                logger.error(f"AnthropicError during Anthropic stream: {e}", exc_info=True)
-            except Exception as e: 
-                stream_error = f"An unexpected server error occurred during stream generation: {str(e)}"
-                logger.error(f"Generic Exception during Anthropic stream: {e}", exc_info=True)
-            
-            if stream_error: 
-                sse_error_data = json.dumps({'error': stream_error}); 
-                yield f"data: {sse_error_data}\n\n"
-            
+        else: # transcript_listen_mode is 'none'
+            logger.info("Transcript Listen Mode is 'none'. No transcript loading for this turn.")
+            final_llm_messages.extend(llm_messages_from_client)
             sse_done_data = json.dumps({'done': True}); 
             yield f"data: {sse_done_data}\n\n"
             
