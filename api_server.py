@@ -889,20 +889,9 @@ def audio_stream_socket(ws, session_id: str):
                                 vad_bridge.process_audio_blob(session_id, bytes_to_process)
                                 logger.debug(f"Session {session_id}: Dispatched {len(bytes_to_process)} bytes to VAD bridge.")
                                 
-                                # Atomically update the total processed duration here.
-                                session_data['current_total_audio_duration_processed_seconds'] += duration_of_this_segment
-                                logger.info(f"Updated session {session_id} processed duration to ~{session_data['current_total_audio_duration_processed_seconds']:.2f}s")
-
-                            except Exception as e:
-                                logger.error(f"Session {session_id}: Error dispatching audio to VAD bridge: {e}", exc_info=True)
-                            try:
-                                # The bridge will now receive a complete, valid WebM blob
-                                vad_bridge.process_audio_blob(session_id, bytes_to_process)
-                                logger.debug(f"Session {session_id}: Dispatched {len(bytes_to_process)} bytes to VAD bridge.")
-                                
-                                # Atomically update the total processed duration here.
-                                session_data['current_total_audio_duration_processed_seconds'] += duration_of_this_segment
-                                logger.info(f"Updated session {session_id} processed duration to ~{session_data['current_total_audio_duration_processed_seconds']:.2f}s")
+                                # NOTE: Duration update moved to transcription_service after actual measurement
+                                # This fixes the timestamp issue where estimated duration (3s) != actual duration (~1.5s)
+                                logger.debug(f"Session {session_id}: Duration update deferred to transcription_service for accuracy")
 
                             except Exception as e:
                                 logger.error(f"Session {session_id}: Error dispatching audio to VAD bridge: {e}", exc_info=True)

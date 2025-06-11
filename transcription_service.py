@@ -684,8 +684,14 @@ def process_audio_segment_and_update_s3(
                 s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
                 logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
         
-        # The total processed duration is now updated in the main api_server thread,
-        # so we no longer update it here.
+        # CRITICAL FIX: Update total processed duration with ACTUAL measured duration
+        # This fixes the timestamp issue where estimated duration (3s) != actual duration (~1.5s)
+        actual_segment_duration = session_data.get('actual_segment_duration_seconds', 0.0)
+        if actual_segment_duration > 0:
+            session_data['current_total_audio_duration_processed_seconds'] += actual_segment_duration
+            logger.info(f"Updated session {session_id_for_log} processed duration with ACTUAL duration: +{actual_segment_duration:.2f}s = {session_data['current_total_audio_duration_processed_seconds']:.2f}s total")
+        else:
+            logger.warning(f"Session {session_id_for_log}: No actual segment duration available, skipping duration update to prevent timestamp errors")
         
         logger.debug(f"SESSION_LOCK_RELEASED for session {session_id_for_log}")
 
