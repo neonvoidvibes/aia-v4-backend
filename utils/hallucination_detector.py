@@ -123,13 +123,13 @@ class HallucinationDetector:
     Detects hallucinated content by analyzing similarity patterns and repetition.
     """
     
-    def __init__(self, similarity_threshold: float = 0.7, min_transcript_length: int = 3):
+    def __init__(self, similarity_threshold: float = 0.5, min_transcript_length: int = 2):
         """
-        Initialize the hallucination detector.
+        Initialize the hallucination detector - AGGRESSIVE ROBUSTNESS MODE.
         
         Args:
-            similarity_threshold: Threshold for considering text as similar (0.0-1.0) - lowered from 0.8 to 0.7 for stricter detection
-            min_transcript_length: Minimum number of words to consider for detection
+            similarity_threshold: Threshold for considering text as similar (0.0-1.0) - AGGRESSIVE: lowered to 0.5 for maximum robustness
+            min_transcript_length: Minimum number of words to consider for detection - AGGRESSIVE: lowered to 2 words
         """
         self.similarity_threshold = similarity_threshold
         self.min_transcript_length = min_transcript_length
@@ -312,16 +312,16 @@ class HallucinationManager:
     Main manager class that coordinates transcript history and hallucination detection.
     """
     
-    def __init__(self, session_id: str, similarity_threshold: float = 0.8, 
-                 max_history: int = 5, min_transcript_length: int = 3):
+    def __init__(self, session_id: str, similarity_threshold: float = 0.5, 
+                 max_history: int = 5, min_transcript_length: int = 2):
         """
-        Initialize the hallucination manager for a session.
+        Initialize the hallucination manager for a session - AGGRESSIVE ROBUSTNESS MODE.
         
         Args:
             session_id: Unique session identifier
-            similarity_threshold: Similarity threshold for hallucination detection
+            similarity_threshold: AGGRESSIVE: Default 0.5 for maximum robustness (was 0.8)
             max_history: Maximum number of transcripts to keep in history
-            min_transcript_length: Minimum words required for valid transcript
+            min_transcript_length: AGGRESSIVE: Default 2 words (was 3) to filter more aggressively
         """
         self.session_id = session_id
         self.history_manager = TranscriptHistoryManager(max_history)

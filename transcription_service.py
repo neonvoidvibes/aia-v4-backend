@@ -511,11 +511,11 @@ def process_audio_segment_and_update_s3(
                 consecutive_fails = session_data.get("consecutive_context_failures", 0) + 1
                 session_data["consecutive_context_failures"] = consecutive_fails
                 
-                # Emergency context reset if rate is too high or too many consecutive failures
+                # AGGRESSIVE EMERGENCY RESET - Much lower thresholds for maximum robustness
                 should_reset_context = (
-                    stats['hallucination_rate'] > 0.6 or  # 60% hallucination rate
-                    consecutive_fails >= 3 or  # 3 consecutive failures with same context
-                    (stats['hallucinations_detected'] > 5 and stats['hallucination_rate'] > 0.5)  # 50% rate with 5+ hallucinations
+                    consecutive_fails >= 2 or  # 2 consecutive failures (was 3)
+                    stats['hallucination_rate'] > 0.35 or  # 35% hallucination rate (was 60%)
+                    (stats['hallucinations_detected'] > 3 and stats['hallucination_rate'] > 0.25)  # 25% rate with 3+ hallucinations (was 50% with 5+)
                 )
                 
                 if should_reset_context:
@@ -526,11 +526,15 @@ def process_audio_segment_and_update_s3(
                         session_data['context_blacklist'].add(current_context.strip().lower())
                         logger.warning(f"Session {session_id}: Context '{current_context}' blacklisted due to repeated hallucinations")
                     
-                    # Emergency context reset
+                    # AGGRESSIVE EMERGENCY RESET - Clear everything
                     session_data["last_successful_transcript"] = ""
                     session_data["consecutive_context_failures"] = 0
                     session_data["segments_since_context_reset"] = 0
-                    logger.error(f"Session {session_id}: EMERGENCY CONTEXT RESET - Hallucination rate: {stats['hallucination_rate']:.1%}, Consecutive failures: {consecutive_fails}")
+                    
+                    # CRITICAL: Clear hallucination statistics to reset rate to 0%
+                    hallucination_manager.clear_session()
+                    
+                    logger.error(f"Session {session_id}: AGGRESSIVE EMERGENCY RESET - Hallucination rate: {stats['hallucination_rate']:.1%}, Consecutive failures: {consecutive_fails} - STATS CLEARED")
 
             # Clean up the WAV file and exit early
             if os.path.exists(temp_segment_wav_path):
