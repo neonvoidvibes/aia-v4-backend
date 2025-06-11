@@ -123,12 +123,12 @@ class HallucinationDetector:
     Detects hallucinated content by analyzing similarity patterns and repetition.
     """
     
-    def __init__(self, similarity_threshold: float = 0.8, min_transcript_length: int = 3):
+    def __init__(self, similarity_threshold: float = 0.7, min_transcript_length: int = 3):
         """
         Initialize the hallucination detector.
         
         Args:
-            similarity_threshold: Threshold for considering text as similar (0.0-1.0)
+            similarity_threshold: Threshold for considering text as similar (0.0-1.0) - lowered from 0.8 to 0.7 for stricter detection
             min_transcript_length: Minimum number of words to consider for detection
         """
         self.similarity_threshold = similarity_threshold

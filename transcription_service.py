@@ -285,6 +285,50 @@ def filter_hallucinations(text: str) -> str:
             
     return text
 
+def is_prompt_echo(new_text: str, prompt_text: str, threshold: float = 0.7) -> bool:
+    """
+    Detect if new text is too similar to the prompt, indicating a feedback loop.
+    
+    Args:
+        new_text: The newly transcribed text
+        prompt_text: The prompt that was sent to Whisper
+        threshold: Similarity threshold (0.0-1.0)
+        
+    Returns:
+        True if the text appears to be echoing the prompt
+    """
+    if not prompt_text or not new_text:
+        return False
+    
+    new_text_lower = new_text.lower().strip()
+    prompt_text_lower = prompt_text.lower().strip()
+    
+    # Check if prompt appears at start of new text (exact substring match)
+    if new_text_lower.startswith(prompt_text_lower):
+        logger.debug(f"Prompt echo detected: New text starts with prompt. New: '{new_text[:100]}...', Prompt: '{prompt_text}'")
+        return True
+    
+    # Check if new text is contained in prompt (reverse echo)
+    if prompt_text_lower.startswith(new_text_lower) and len(new_text_lower) > 5:
+        logger.debug(f"Reverse prompt echo detected: Prompt starts with new text. New: '{new_text}', Prompt: '{prompt_text}'")
+        return True
+    
+    # Check overall similarity using sequence matcher
+    from difflib import SequenceMatcher
+    similarity = SequenceMatcher(None, new_text_lower, prompt_text_lower).ratio()
+    if similarity > threshold:
+        logger.debug(f"High similarity prompt echo detected: similarity={similarity:.3f}, threshold={threshold}. New: '{new_text}', Prompt: '{prompt_text}'")
+        return True
+    
+    # Check if all words from prompt appear in new text (word-level echo)
+    prompt_words = set(prompt_text_lower.split())
+    new_words = set(new_text_lower.split())
+    if len(prompt_words) >= 2 and prompt_words.issubset(new_words):
+        logger.debug(f"Word-level prompt echo detected: All prompt words found in new text. New: '{new_text}', Prompt: '{prompt_text}'")
+        return True
+    
+    return False
+
 def is_valid_transcription(text: str) -> bool:
     if not text: return False
     if re.fullmatch(r'[^\w\s]+', text): return False 
@@ -312,9 +356,9 @@ def _transcribe_audio_segment_openai(
                 'model': 'whisper-1',
                 'response_format': 'verbose_json', 
                 'temperature': 0.0,
-                'no_speech_threshold': 0.9,        # Increased from 0.85 to 0.9 (stricter)
-                'logprob_threshold': -0.5,         # Increased from -0.7 to -0.5 (stricter)
-                'compression_ratio_threshold': 1.8, # Decreased from 2.0 to 1.8 (stricter)
+                'no_speech_threshold': 0.95,        # Increased from 0.9 to 0.95 (much stricter)
+                'logprob_threshold': -0.3,          # Increased from -0.5 to -0.3 (much stricter)
+                'compression_ratio_threshold': 1.5, # Decreased from 1.8 to 1.5 (much stricter)
             }
 
             # Handle language setting from client
@@ -328,20 +372,20 @@ def _transcribe_audio_segment_openai(
                 logger.info(f"Whisper: Language setting '{language_setting_from_client}' unrecognized, defaulting to auto-detect.")
                 # No 'language' key added for auto-detect
 
-            # Use the rolling context as the primary prompt to prevent repetition.
-            # Fallback to a generic prompt only if no context is available.
-            if rolling_context_prompt:
-                initial_prompt_text = rolling_context_prompt
-                logger.info(f"Whisper: Using rolling context as initial_prompt: '{initial_prompt_text[-150:]}'")
+            # CRITICAL FIX: Minimize or eliminate context prompt to prevent feedback loops
+            # Only use minimal context (2-3 words max) to avoid hallucination propagation
+            if rolling_context_prompt and len(rolling_context_prompt.strip()) > 0:
+                # Use only the last 2-3 words to minimize feedback loop risk
+                context_words = rolling_context_prompt.strip().split()[-2:]
+                minimal_context = " ".join(context_words)
+                if len(minimal_context) > 3:  # Only use if meaningful
+                    data_payload['prompt'] = minimal_context
+                    logger.info(f"Whisper: Using minimal context (2-3 words): '{minimal_context}'")
+                else:
+                    logger.info("Whisper: Context too short, using no prompt to prevent hallucinations.")
             else:
-                initial_prompt_text_base = (
-                    "This is the first segment of a professional business meeting. Please focus on transcribing accurately. "
-                    "The primary languages are English and Swedish."
-                )
-                initial_prompt_text = initial_prompt_text_base
-                logger.info("Whisper: No rolling context available, using generic initial prompt.")
-
-            data_payload['prompt'] = initial_prompt_text # Use 'prompt' which is the recommended parameter
+                logger.info("Whisper: No context provided, using no prompt to prevent hallucination feedback loops.")
+                # No prompt parameter added - let Whisper work without context bias
 
 
             # === DYNAMIC MIME TYPE DETECTION ===
@@ -504,8 +548,16 @@ def process_audio_segment_and_update_s3(
         logger.debug(f"After all filtering, {len(final_filtered_segments)} segments remain for processing.")
 
         processed_transcript_lines = []
+        current_prompt = session_data.get("last_successful_transcript", "")
+        
         for segment in final_filtered_segments:
             raw_text = segment.get('text', '').strip()
+            
+            # CRITICAL FIX: Check for prompt echo before other filtering
+            if current_prompt and is_prompt_echo(raw_text, current_prompt, threshold=0.6):
+                logger.warning(f"Session {session_id_for_log}: Prompt echo detected, filtering segment: '{raw_text}' (prompt was: '{current_prompt}')")
+                continue
+            
             filtered_text = filter_hallucinations(raw_text)
             
             if is_valid_transcription(filtered_text):
@@ -534,17 +586,39 @@ def process_audio_segment_and_update_s3(
         lines_to_append_to_s3.extend(processed_transcript_lines)
         
         # --- Update rolling context for next API call ---
+        # CRITICAL FIX: Use minimal or no context to prevent hallucination feedback loops
         if processed_transcript_lines:
-            # Get the text from the last valid segment to use as context.
-            last_line_text = processed_transcript_lines[-1].split("] ", 1)[-1]
+            # Track segments since last context reset to implement periodic resets
+            segments_since_reset = session_data.get("segments_since_context_reset", 0) + 1
+            session_data["segments_since_context_reset"] = segments_since_reset
             
-            # To prevent Whisper from repeating the prompt, only use the last few
-            # words as context. This guides the model without being overly prescriptive.
-            words = last_line_text.split()
-            context_words = " ".join(words[-10:])
-            
-            session_data["last_successful_transcript"] = context_words
-            logger.debug(f"Updated rolling context for session {session_id_for_log} with last 10 words: '{context_words}'")
+            # Reset context every 8 segments to break potential feedback loops
+            if segments_since_reset >= 8:
+                session_data["last_successful_transcript"] = ""
+                session_data["segments_since_context_reset"] = 0
+                logger.info(f"Session {session_id_for_log}: Context reset after {segments_since_reset} segments to prevent hallucination loops")
+            else:
+                # Use minimal context (2-3 words max) to reduce feedback loop risk
+                last_line_text = processed_transcript_lines[-1].split("] ", 1)[-1]
+                words = last_line_text.split()
+                
+                # Only use 2-3 words from the end, and only if they're meaningful
+                if len(words) >= 3:
+                    context_words = " ".join(words[-2:])  # Use only last 2 words
+                    # Additional safety: avoid using context if it contains repetitive patterns
+                    if len(set(context_words.lower().split())) > 1:  # Ensure at least 2 unique words
+                        session_data["last_successful_transcript"] = context_words
+                        logger.debug(f"Updated rolling context for session {session_id_for_log} with minimal context (2 words): '{context_words}'")
+                    else:
+                        session_data["last_successful_transcript"] = ""
+                        logger.debug(f"Session {session_id_for_log}: Skipped repetitive context, using no context")
+                else:
+                    # Not enough words for meaningful context
+                    session_data["last_successful_transcript"] = ""
+                    logger.debug(f"Session {session_id_for_log}: Insufficient words for context, using no context")
+        else:
+            # No processed lines, don't update context
+            logger.debug(f"Session {session_id_for_log}: No processed lines, keeping existing context")
         # --- End context update ---
 
         # Perform S3 append if there's new content
