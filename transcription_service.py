@@ -472,12 +472,18 @@ def process_audio_segment_and_update_s3(
             logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update.")
             stats = hallucination_manager.get_statistics()
             logger.info(f"Session {session_id} hallucination stats - Total: {stats['total_transcripts']}, Valid: {stats['valid_transcripts']}, Hallucinations: {stats['hallucinations_detected']}, Rate: {stats['hallucination_rate']:.1%}")
+            
+            # CRITICAL FIX: Clear the last successful transcript to prevent a feedback loop.
+            with session_lock:
+                session_data["last_successful_transcript"] = ""
+            logger.warning(f"Session {session_id}: Cleared rolling context due to hallucination.")
+
             # Clean up the WAV file and exit early
             if os.path.exists(temp_segment_wav_path):
                 try: os.remove(temp_segment_wav_path)
                 except OSError as e_del: logger.error(f"Error deleting hallucinated temp WAV {temp_segment_wav_path}: {e_del}")
             return True # Return True as the "error" was handled (by not processing a hallucination)
-    # === End Hallucination Detection ===
+    # === End Hallucination Detection & Context Update
 
     # Pre-process segments that don't depend on the atomic offset
     filtered_segments_pre_lock = []
@@ -505,10 +511,13 @@ def process_audio_segment_and_update_s3(
         session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION")
         logger.debug(f"SESSION_LOCK_ACQUIRED for session {session_id_for_log}")
 
-        # Update the actual duration in the main session data object
+        # Correctly update the shared session_data object with the duration for this segment.
         session_data['actual_segment_duration_seconds'] = segment_actual_duration
         
         # ATOMIC READ of current offset
+        segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
+        
+        # Run filters that depend on session state/offset
         segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
         
         # Run filters that depend on session state/offset

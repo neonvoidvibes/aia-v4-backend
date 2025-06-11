@@ -229,17 +229,14 @@ class VADTranscriptionService:
                     wf.setframerate(self.target_sample_rate)
                     wf.writeframes(voiced_audio_bytes)
                 
-                # Create a copy of the session data to pass to the thread, 
-                # ensuring the duration is set correctly for this specific task.
-                task_session_data = session_data.copy()
-                task_session_data['actual_segment_duration_seconds'] = duration_seconds
-                
                 logger.info(f"Session {session_id}: Submitting transcription for {clean_wav_path} to executor.")
                 from transcription_service import process_audio_segment_and_update_s3
+                
+                # Pass the original session_data. The duration will be set inside the worker.
                 current_app.executor.submit(
                     process_audio_segment_and_update_s3,
                     temp_segment_wav_path=clean_wav_path,
-                    session_data=task_session_data, # Pass the copy with updated duration
+                    session_data=session_data,
                     session_lock=session_lock
                 )
         
