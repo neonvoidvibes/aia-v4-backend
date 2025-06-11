@@ -454,6 +454,7 @@ def process_audio_segment_and_update_s3(
         return False
         
     # Transcribe audio (slow network call), passing in the rolling context
+    # Note: last_transcript is accessed here, before the lock, which is fine.
     last_transcript = session_data.get("last_successful_transcript", "")
     transcription_result = _transcribe_audio_segment_openai(
         temp_segment_wav_path,
@@ -504,6 +505,9 @@ def process_audio_segment_and_update_s3(
         session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION")
         logger.debug(f"SESSION_LOCK_ACQUIRED for session {session_id_for_log}")
 
+        # Update the actual duration in the main session data object
+        session_data['actual_segment_duration_seconds'] = segment_actual_duration
+        
         # ATOMIC READ of current offset
         segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
         
