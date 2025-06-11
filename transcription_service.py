@@ -500,18 +500,47 @@ def process_audio_segment_and_update_s3(
         hallucination_manager = get_hallucination_manager(session_id)
         is_valid, reason = hallucination_manager.process_transcript(transcription_result.get("text", "").strip())
         if not is_valid:
-            logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update and preserving last good context.")
+            logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update and analyzing context health.")
             stats = hallucination_manager.get_statistics()
             logger.info(f"Session {session_id} hallucination stats - Total: {stats['total_transcripts']}, Valid: {stats['valid_transcripts']}, Hallucinations: {stats['hallucinations_detected']}, Rate: {stats['hallucination_rate']:.1%}")
             
-            # By not updating `last_successful_transcript`, we prevent the hallucination spiral.
-            # The next transcription will use the last *valid* context.
+            # CRITICAL FIX: Context poisoning prevention
+            with session_lock:
+                # Track consecutive hallucinations for this context
+                current_context = session_data.get("last_successful_transcript", "")
+                consecutive_fails = session_data.get("consecutive_context_failures", 0) + 1
+                session_data["consecutive_context_failures"] = consecutive_fails
+                
+                # Emergency context reset if rate is too high or too many consecutive failures
+                should_reset_context = (
+                    stats['hallucination_rate'] > 0.6 or  # 60% hallucination rate
+                    consecutive_fails >= 3 or  # 3 consecutive failures with same context
+                    (stats['hallucinations_detected'] > 5 and stats['hallucination_rate'] > 0.5)  # 50% rate with 5+ hallucinations
+                )
+                
+                if should_reset_context:
+                    # Blacklist this context to prevent reuse
+                    if 'context_blacklist' not in session_data:
+                        session_data['context_blacklist'] = set()
+                    if current_context:
+                        session_data['context_blacklist'].add(current_context.strip().lower())
+                        logger.warning(f"Session {session_id}: Context '{current_context}' blacklisted due to repeated hallucinations")
+                    
+                    # Emergency context reset
+                    session_data["last_successful_transcript"] = ""
+                    session_data["consecutive_context_failures"] = 0
+                    session_data["segments_since_context_reset"] = 0
+                    logger.error(f"Session {session_id}: EMERGENCY CONTEXT RESET - Hallucination rate: {stats['hallucination_rate']:.1%}, Consecutive failures: {consecutive_fails}")
 
             # Clean up the WAV file and exit early
             if os.path.exists(temp_segment_wav_path):
                 try: os.remove(temp_segment_wav_path)
                 except OSError as e_del: logger.error(f"Error deleting hallucinated temp WAV {temp_segment_wav_path}: {e_del}")
             return True # Return True as the "error" was handled (by not processing a hallucination)
+        else:
+            # Reset consecutive failures counter on successful transcription
+            with session_lock:
+                session_data["consecutive_context_failures"] = 0
     # === End Hallucination Detection & Context Update
 
     # Pre-process segments that don't depend on the atomic offset
@@ -605,13 +634,22 @@ def process_audio_segment_and_update_s3(
                 # Only use 2-3 words from the end, and only if they're meaningful
                 if len(words) >= 3:
                     context_words = " ".join(words[-2:])  # Use only last 2 words
-                    # Additional safety: avoid using context if it contains repetitive patterns
-                    if len(set(context_words.lower().split())) > 1:  # Ensure at least 2 unique words
+                    context_words_lower = context_words.strip().lower()
+                    
+                    # Check against blacklist to prevent reuse of problematic contexts
+                    blacklist = session_data.get('context_blacklist', set())
+                    is_blacklisted = context_words_lower in blacklist
+                    
+                    # Additional safety: avoid using context if it contains repetitive patterns or is blacklisted
+                    if (len(set(context_words.lower().split())) > 1 and not is_blacklisted):  # Ensure at least 2 unique words and not blacklisted
                         session_data["last_successful_transcript"] = context_words
                         logger.debug(f"Updated rolling context for session {session_id_for_log} with minimal context (2 words): '{context_words}'")
                     else:
                         session_data["last_successful_transcript"] = ""
-                        logger.debug(f"Session {session_id_for_log}: Skipped repetitive context, using no context")
+                        if is_blacklisted:
+                            logger.debug(f"Session {session_id_for_log}: Skipped blacklisted context '{context_words}', using no context")
+                        else:
+                            logger.debug(f"Session {session_id_for_log}: Skipped repetitive context, using no context")
                 else:
                     # Not enough words for meaningful context
                     session_data["last_successful_transcript"] = ""
