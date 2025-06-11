@@ -23,6 +23,7 @@ from flask import current_app
 
 # Try to import audio processing libraries
 try:
+    from scipy import signal
     from scipy.io import wavfile
     SCIPY_AVAILABLE = True
 except ImportError:
@@ -67,9 +68,9 @@ class VADTranscriptionService:
             ]
             
             process = subprocess.Popen(
-                ffmpeg_cmd, 
-                stdin=subprocess.PIPE, 
-                stdout=subprocess.PIPE, 
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
             stdout, stderr = process.communicate(input=webm_blob_bytes)
@@ -170,14 +171,12 @@ class VADTranscriptionService:
 
             logger.info(f"Session {session_id}: Submitting clean WAV {clean_wav_path} to executor.")
             
-            # Use a copy to avoid race conditions with the main session dict
-            task_session_data = session_data.copy()
-            
+            # Pass the original session_data. The offset is now managed correctly in the main thread.
             from transcription_service import process_audio_segment_and_update_s3
             current_app.executor.submit(
                 process_audio_segment_and_update_s3,
                 temp_segment_wav_path=clean_wav_path,
-                session_data=task_session_data,
+                session_data=session_data,
                 session_lock=session_lock
             )
         except Exception as e:
@@ -207,10 +206,8 @@ class VADTranscriptionService:
             return
 
         # Let the session data know the duration of the full chunk for offset calculations
-        with session_lock:
-             duration_seconds = len(audio_data_np) / self.sample_rate
-             session_data['actual_segment_duration_seconds'] = duration_seconds
-             logger.debug(f"Session {session_id}: Setting segment duration to {duration_seconds:.2f}s")
+        # NOTE: This update now happens in the main thread in api_server.py *before* this function is called.
+        # This function can now rely on `current_total_audio_duration_processed_seconds` being correct.
         
         # Segment the audio based on voice activity and submit to workers
         self.segment_and_submit_audio(

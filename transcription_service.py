@@ -435,10 +435,6 @@ def process_audio_segment_and_update_s3(
              except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path} after pre-check fail: {e_del}")
         return False
     
-    # The duration of the original audio chunk is now set in session_data before this worker is called.
-    # The actual duration of the *voiced* segment is not what we want for the offset calculation.
-    segment_actual_duration = session_data.get('actual_segment_duration_seconds', 15.0) # Fallback to 15s
-
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
         logger.error("OpenAI API key not found. Cannot transcribe.")
@@ -502,10 +498,7 @@ def process_audio_segment_and_update_s3(
         session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION")
         logger.debug(f"SESSION_LOCK_ACQUIRED for session {session_id_for_log}")
 
-        # ATOMIC READ of current offset
-        segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
-        
-        # Run filters that depend on session state/offset
+        # ATOMIC READ of current offset. This is now the definitive offset.
         segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
         
         # Run filters that depend on session state/offset
@@ -571,10 +564,8 @@ def process_audio_segment_and_update_s3(
                 s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
                 logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
         
-        # ATOMIC WRITE of new total duration, happens regardless of whether content was written
-        # as long as the segment was processed.
-        session_data['current_total_audio_duration_processed_seconds'] = segment_offset_seconds + segment_actual_duration
-        logger.info(f"Updated session {session_id_for_log} processed duration to {session_data['current_total_audio_duration_processed_seconds']:.2f}s")
+        # The total processed duration is now updated in the main api_server thread,
+        # so we no longer update it here.
         
         logger.debug(f"SESSION_LOCK_RELEASED for session {session_id_for_log}")
 
