@@ -842,52 +842,45 @@ def audio_stream_socket(ws, session_id: str):
                     vad_enabled = session_data.get("vad_enabled", False)
                     
                     if vad_enabled and VAD_IMPORT_SUCCESS and vad_bridge:
-                        # VAD Processing Path - Now with header management and accumulation
+                        # VAD Processing Path with robust header and data accumulation
                         if not session_data.get("is_first_blob_received", False):
+                            # The first blob contains the header AND the first audio chunk.
                             session_data["webm_global_header_bytes"] = bytes(message)
                             session_data["is_first_blob_received"] = True
-                            logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
-                            # The first blob is the header, don't add it to the segment bytes yet.
-                        else:
-                            # For subsequent blobs, just append the data.
+                            logger.info(f"Session {session_id}: Captured first blob as global WebM header and initial data ({len(message)} bytes).")
+                            # Add the full first blob to the segment.
                             session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
-
-                        logger.debug(f"Session {session_id}: Appended {len(message)} bytes to raw_bytes buffer. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
+                        else:
+                            # Subsequent blobs are just audio data, append them.
+                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
                         
-                        # Use a simple duration estimate, as before
+                        logger.debug(f"Session {session_id}: Appended {len(message)} bytes. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
+                        
                         session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0
 
                         if not session_data["is_backend_processing_paused"] and \
                            session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
                             
                             logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment.")
-                            
-                            current_fragment_bytes = bytes(session_data["current_segment_raw_bytes"])
+
+                            bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
                             global_header_bytes = session_data.get("webm_global_header_bytes", b'')
-                            
-                            # Correctly combine the header with the accumulated data
-                            if global_header_bytes and current_fragment_bytes:
-                                bytes_to_process = global_header_bytes + current_fragment_bytes
-                            else:
-                                logger.warning(f"Session {session_id}: Missing header or data to process. Header: {len(global_header_bytes)}, Data: {len(current_fragment_bytes)}")
-                                bytes_to_process = b''
 
-                            # Reset buffers for the next segment
-                            session_data["current_segment_raw_bytes"] = bytearray()
+                            # For the next segment, we will start with just the header.
+                            # This prevents re-processing the audio from the first blob.
+                            session_data["current_segment_raw_bytes"] = bytearray(global_header_bytes)
                             session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
-
+                            
                             if not bytes_to_process:
-                                logger.warning(f"Session {session_id}: Combined byte stream is empty, skipping VAD processing call.")
+                                logger.warning(f"Session {session_id}: Buffer is empty, skipping VAD processing call.")
                                 continue
 
                             try:
-                                # The bridge will now receive a complete, valid WebM blob
                                 vad_bridge.process_audio_blob(session_id, bytes_to_process)
                                 logger.debug(f"Session {session_id}: Dispatched {len(bytes_to_process)} bytes to VAD bridge.")
                             except Exception as e:
                                 logger.error(f"Session {session_id}: Error dispatching audio to VAD bridge: {e}", exc_info=True)
-
-                        # Continue to the next WebSocket message
+                        
                         continue
                     
                     # Original Processing Path (fallback or when VAD not enabled)
