@@ -13,7 +13,7 @@ import uuid
 import time
 import threading
 import subprocess
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 import wave
 import numpy as np
 from collections import deque
