@@ -4,6 +4,7 @@ import logging
 from flask import Flask, jsonify, request, Response, stream_with_context, g
 from dotenv import load_dotenv
 import threading 
+from concurrent.futures import ThreadPoolExecutor
 import time
 import json
 from datetime import datetime, timezone, timedelta # Ensure datetime, timezone, timedelta are imported
@@ -80,7 +81,19 @@ except ImportError as e:
 app = Flask(__name__)
 CORS(app) 
 sock = Sock(app) 
+# Create a global thread pool for handling slow transcription tasks.
+# The number of workers can be tuned based on server resources.
+app.executor = ThreadPoolExecutor(max_workers=(os.cpu_count() or 1) * 2)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
+
+def on_shutdown():
+    """Ensure the executor is shut down gracefully when the app exits."""
+    logger.info("Shutting down ThreadPoolExecutor...")
+    app.executor.shutdown(wait=True)
+    logger.info("Executor shut down successfully.")
+
+import atexit
+atexit.register(on_shutdown)
 
 UPLOAD_FOLDER = 'tmp/uploaded_transcriptions/'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)

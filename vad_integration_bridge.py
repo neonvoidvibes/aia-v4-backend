@@ -4,12 +4,13 @@ import threading
 import time
 from typing import Dict, Any, Optional, Callable
 from collections import defaultdict
+from flask import current_app # Import to access the global executor
 
 # Defer imports to fix circular dependency
-# from vad_transcription_service import VADTranscriptionManager, SessionAudioProcessor
+# from vad_transcription_service import VADTranscriptionManager
 
-# Import hallucination detection
-from utils.hallucination_detector import get_hallucination_manager, cleanup_session_manager
+# Import hallucination detection cleanup
+from utils.hallucination_detector import cleanup_session_manager
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ class VADIntegrationBridge:
     """
     Bridge class that integrates VAD transcription service with the existing API server.
     Manages the lifecycle of VAD sessions and coordinates with existing session data.
+    This version is refactored to remove internal threading and use a global executor.
     """
     
     def __init__(self, openai_api_key: str, base_temp_dir: str = "tmp_vad_audio_sessions"):
@@ -34,7 +36,7 @@ class VADIntegrationBridge:
         self.base_temp_dir = base_temp_dir
         
         # Initialize VAD transcription manager
-        vad_aggressiveness = int(os.getenv('VAD_AGGRESSIVENESS', '2'))  # Default to level 2
+        vad_aggressiveness = int(os.getenv('VAD_AGGRESSIVENESS', '2'))
         
         try:
             self.vad_manager = VADTranscriptionManager(
@@ -44,121 +46,27 @@ class VADIntegrationBridge:
             )
             logger.info(f"VAD Integration Bridge initialized with aggressiveness {vad_aggressiveness}")
         except Exception as e:
-            logger.error(f"Failed to initialize VAD manager: {e}")
+            logger.error(f"Failed to initialize VAD manager: {e}", exc_info=True)
             raise RuntimeError(f"VAD Integration Bridge initialization failed: {e}")
         
         # Integration state
-        self.session_processors: Dict[str, "SessionAudioProcessor"] = {}
         self.session_metadata: Dict[str, Dict[str, Any]] = {}
-        self.session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
         self.bridge_lock = threading.RLock()
         
         # Statistics
         self.global_stats = {
             "sessions_created": 0,
             "sessions_destroyed": 0,
-            "total_audio_chunks_processed": 0,
-            "total_chunks_with_voice": 0,
-            "total_chunks_transcribed": 0,
+            "audio_blobs_processed": 0,
             "bridge_start_time": time.time()
         }
         
-        logger.info("VAD Integration Bridge ready for session management")
-
-    def _handle_transcription_result(self, result: Dict[str, Any]):
-        """
-        Callback function to handle transcription results from the VAD pipeline.
-        Enhanced with hallucination detection before S3 processing.
-        This function is called by the SessionAudioProcessor.
-        """
-        session_id = result.get("session_id")
-        if not session_id:
-            logger.error("VAD Bridge: Received transcription result without a session_id.")
-            return
-
-        logger.info(f"VAD Bridge: Handling transcription result for session {session_id}")
-
-        try:
-            from transcription_service import process_audio_segment_and_update_s3
-            
-            # Extract transcription text for hallucination detection
-            transcription = result.get("transcription")
-            if not transcription or not transcription.get("text"):
-                logger.warning(f"VAD Bridge: No transcription text found for session {session_id}")
-                return
-            
-            transcript_text = transcription.get("text", "").strip()
-            if not transcript_text:
-                logger.warning(f"VAD Bridge: Empty transcription text for session {session_id}")
-                return
-            
-            # Perform hallucination detection
-            hallucination_manager = get_hallucination_manager(session_id)
-            is_valid, reason = hallucination_manager.process_transcript(transcript_text)
-            
-            if not is_valid:
-                logger.warning(f"VAD Bridge: Hallucination detected for session {session_id} - '{transcript_text}' (reason: {reason})")
-                
-                # Log hallucination statistics
-                stats = hallucination_manager.get_statistics()
-                logger.info(f"VAD Bridge: Session {session_id} hallucination stats - "
-                           f"Total: {stats['total_transcripts']}, "
-                           f"Valid: {stats['valid_transcripts']}, "
-                           f"Hallucinations: {stats['hallucinations_detected']}, "
-                           f"Rate: {stats['hallucination_rate']:.1%}")
-                
-                # Clean up the clean WAV file (skip S3 processing for hallucinations)
-                clean_wav_path = result.get("clean_wav_path")
-                if clean_wav_path and os.path.exists(clean_wav_path):
-                    try:
-                        os.remove(clean_wav_path)
-                        logger.debug(f"VAD Bridge: Cleaned up clean WAV file after hallucination detection: {clean_wav_path}")
-                    except Exception as cleanup_e:
-                        logger.warning(f"VAD Bridge: Failed to clean up clean WAV file {clean_wav_path}: {cleanup_e}")
-                
-                return  # Skip S3 processing for hallucinations
-            
-            logger.info(f"VAD Bridge: Valid transcription for session {session_id} - '{transcript_text[:100]}...'")
-            
-            with self.bridge_lock:
-                if session_id not in self.session_metadata:
-                    logger.error(f"VAD Bridge: Metadata not found for session {session_id}. Cannot process transcription.")
-                    return
-                
-                main_session_data = self.session_metadata[session_id].get("existing_session_data")
-                main_session_lock = self.session_metadata[session_id].get("main_session_lock")  # Get from stored metadata
-                clean_wav_path = result.get("clean_wav_path")
-
-                if not all([main_session_data, main_session_lock, clean_wav_path]):
-                    logger.error(f"VAD Bridge: Missing critical data for S3 update. Data: {main_session_data is not None}, Lock: {main_session_lock is not None}, Path: {clean_wav_path}")
-                    return
-
-            # Call the unified processing function. It's thread-safe via the lock.
-            process_audio_segment_and_update_s3(
-                temp_segment_wav_path=clean_wav_path,
-                session_data=main_session_data,
-                session_lock=main_session_lock
-            )
-            logger.info(f"VAD Bridge: Dispatched result for session {session_id} to be saved to S3.")
-            
-            # Clean up the clean WAV file after processing
-            try:
-                if os.path.exists(clean_wav_path):
-                    os.remove(clean_wav_path)
-                    logger.debug(f"VAD Bridge: Cleaned up clean WAV file: {clean_wav_path}")
-            except Exception as cleanup_e:
-                logger.warning(f"VAD Bridge: Failed to clean up clean WAV file {clean_wav_path}: {cleanup_e}")
-
-        except ImportError:
-            logger.error(f"VAD Bridge: Failed to import process_audio_segment_and_update_s3.")
-        except Exception as e:
-            logger.error(f"VAD Bridge: Unexpected error handling transcription result: {e}", exc_info=True)
-
+        logger.info("VAD Integration Bridge (Executor Model) ready for session management")
 
     def create_vad_session(self, session_id: str, existing_session_data: Dict[str, Any], 
                           main_session_lock: threading.RLock) -> bool:
         """
-        Create a new VAD session integrated with existing session data.
+        Create (register) a new VAD session. This no longer starts threads.
         
         Args:
             session_id: Session identifier from existing system
@@ -166,52 +74,35 @@ class VADIntegrationBridge:
             main_session_lock: Session lock from the main system
             
         Returns:
-            True if session created successfully, False otherwise
+            True if session registered successfully, False otherwise
         """
-        logger.info(f"Creating VAD session for {session_id}")
+        logger.info(f"Registering VAD session for {session_id}")
         
         with self.bridge_lock:
-            if session_id in self.session_processors:
-                logger.warning(f"VAD session {session_id} already exists")
+            if session_id in self.session_metadata:
+                logger.warning(f"VAD session {session_id} already registered")
                 return True
             
             try:
-                # Extract configuration from existing session data
-                language_setting = existing_session_data.get('language_setting_from_client', 'any')
-                segment_duration = float(os.getenv('VAD_SEGMENT_DURATION', '15.0'))
+                # Create the session temporary directory
+                session_temp_dir = self.vad_manager.get_session_temp_dir(session_id)
+                os.makedirs(session_temp_dir, exist_ok=True)
                 
-                # Create VAD session processor
-                processor = self.vad_manager.create_session(
-                    session_id=session_id,
-                    language_setting=language_setting,
-                    segment_duration_target=segment_duration,
-                    result_callback=self._handle_transcription_result # Pass the callback
-                )
-                
-                # Store session references
-                self.session_processors[session_id] = processor
+                # Store session metadata
                 self.session_metadata[session_id] = {
                     "created_at": time.time(),
-                    "language_setting": language_setting,
-                    "segment_duration": segment_duration,
                     "existing_session_data": existing_session_data,
-                    "main_session_lock": main_session_lock,  # Store the lock from main system
+                    "main_session_lock": main_session_lock,
+                    "temp_dir": session_temp_dir,
                     "is_active": True
                 }
                 
-                # Start the processor
-                processor.start()
-                
-                # Update global stats
                 self.global_stats["sessions_created"] += 1
-                
-                logger.info(f"VAD session {session_id} created and started successfully")
-                logger.info(f"Session config - Language: {language_setting}, Segment Duration: {segment_duration}s")
-                
+                logger.info(f"VAD session {session_id} registered successfully")
                 return True
                 
             except Exception as e:
-                logger.error(f"Failed to create VAD session {session_id}: {e}", exc_info=True)
+                logger.error(f"Failed to register VAD session {session_id}: {e}", exc_info=True)
                 return False
 
     def destroy_vad_session(self, session_id: str) -> bool:
@@ -227,36 +118,21 @@ class VADIntegrationBridge:
         logger.info(f"Destroying VAD session {session_id}")
         
         with self.bridge_lock:
-            if session_id not in self.session_processors:
+            if session_id not in self.session_metadata:
                 logger.warning(f"VAD session {session_id} not found for destruction")
                 return False
             
             try:
-                # Get final statistics before destroying
-                processor = self.session_processors[session_id]
-                final_stats = processor.get_statistics()
-                
-                # Log session summary
-                self._log_session_summary(session_id, final_stats)
-                
-                # Update global statistics
-                self._update_global_stats_from_session(final_stats)
-                
-                # Destroy the session
-                self.vad_manager.destroy_session(session_id)
-                
-                # Clean up hallucination manager
+                # Clean up hallucination manager for the session
                 cleanup_session_manager(session_id)
                 
+                # Clean up session temporary directory
+                self.vad_manager.cleanup_session_directory(session_id)
+                
                 # Clean up local references
-                del self.session_processors[session_id]
                 del self.session_metadata[session_id]
-                if session_id in self.session_locks:
-                    del self.session_locks[session_id]
                 
-                # Update global stats
                 self.global_stats["sessions_destroyed"] += 1
-                
                 logger.info(f"VAD session {session_id} destroyed successfully")
                 return True
                 
@@ -266,7 +142,8 @@ class VADIntegrationBridge:
 
     def process_audio_blob(self, session_id: str, webm_blob_bytes: bytes) -> bool:
         """
-        Process an audio blob through the VAD pipeline.
+        Process an audio blob through the VAD pipeline's fast path and submit
+        the slow path (transcription) to the global executor.
         
         Args:
             session_id: Session identifier
@@ -278,108 +155,31 @@ class VADIntegrationBridge:
         logger.debug(f"Processing audio blob for session {session_id} ({len(webm_blob_bytes)} bytes)")
         
         with self.bridge_lock:
-            if session_id not in self.session_processors:
+            if session_id not in self.session_metadata:
                 logger.error(f"VAD session {session_id} not found for audio processing")
                 return False
             
-            processor = self.session_processors[session_id]
-            
-            if not self.session_metadata[session_id].get("is_active", False):
+            session_meta = self.session_metadata[session_id]
+            if not session_meta.get("is_active", False):
                 logger.warning(f"VAD session {session_id} is not active, skipping audio blob")
                 return False
         
         try:
-            # Process through VAD pipeline
-            processor.add_audio_blob(webm_blob_bytes)
-            
-            logger.debug(f"Audio blob queued for VAD processing in session {session_id}")
+            # This is a direct, synchronous call to the VAD service's fast path.
+            # It will perform VAD and submit the transcription task to the app's executor.
+            self.vad_manager.vad_service.process_audio_chunk(
+                webm_blob_bytes=webm_blob_bytes,
+                session_id=session_id,
+                temp_dir=session_meta["temp_dir"],
+                language_setting=session_meta["existing_session_data"].get('language_setting_from_client', 'any'),
+                session_data=session_meta["existing_session_data"],
+                session_lock=session_meta["main_session_lock"]
+            )
+            self.global_stats["audio_blobs_processed"] += 1
             return True
-            
         except Exception as e:
             logger.error(f"Failed to process audio blob for session {session_id}: {e}", exc_info=True)
             return False
-
-    def pause_session(self, session_id: str) -> bool:
-        """
-        Pause audio processing for a session.
-        
-        Args:
-            session_id: Session identifier
-            
-        Returns:
-            True if paused successfully, False otherwise
-        """
-        logger.info(f"Pausing VAD session {session_id}")
-        
-        with self.bridge_lock:
-            if session_id not in self.session_metadata:
-                logger.warning(f"VAD session {session_id} not found for pausing")
-                return False
-            
-            self.session_metadata[session_id]["is_active"] = False
-            logger.info(f"VAD session {session_id} paused")
-            return True
-
-    def resume_session(self, session_id: str) -> bool:
-        """
-        Resume audio processing for a session.
-        
-        Args:
-            session_id: Session identifier
-            
-        Returns:
-            True if resumed successfully, False otherwise
-        """
-        logger.info(f"Resuming VAD session {session_id}")
-        
-        with self.bridge_lock:
-            if session_id not in self.session_metadata:
-                logger.warning(f"VAD session {session_id} not found for resuming")
-                return False
-            
-            self.session_metadata[session_id]["is_active"] = True
-            logger.info(f"VAD session {session_id} resumed")
-            return True
-
-    def get_session_statistics(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get statistics for a specific session.
-        
-        Args:
-            session_id: Session identifier
-            
-        Returns:
-            Session statistics dictionary or None if session not found
-        """
-        with self.bridge_lock:
-            if session_id not in self.session_processors:
-                return None
-            
-            processor = self.session_processors[session_id]
-            stats = processor.get_statistics()
-            
-            # Add bridge-specific metadata
-            metadata = self.session_metadata.get(session_id, {})
-            stats.update({
-                "bridge_metadata": {
-                    "created_at": metadata.get("created_at"),
-                    "language_setting": metadata.get("language_setting"),
-                    "segment_duration": metadata.get("segment_duration"),
-                    "is_active": metadata.get("is_active")
-                }
-            })
-            
-            return stats
-
-    def get_all_session_statistics(self) -> Dict[str, Dict[str, Any]]:
-        """Get statistics for all active VAD sessions."""
-        with self.bridge_lock:
-            all_stats = {}
-            for session_id in self.session_processors:
-                stats = self.get_session_statistics(session_id)
-                if stats:
-                    all_stats[session_id] = stats
-            return all_stats
 
     def get_global_statistics(self) -> Dict[str, Any]:
         """Get global bridge statistics."""
@@ -389,69 +189,24 @@ class VADIntegrationBridge:
             return {
                 **self.global_stats,
                 "runtime_seconds": runtime,
-                "active_sessions": len(self.session_processors),
+                "active_sessions": len(self.session_metadata),
                 "vad_manager_stats": {
                     "base_temp_dir": self.vad_manager.base_temp_dir,
                     "vad_aggressiveness": self.vad_manager.vad_aggressiveness
                 }
             }
 
-    def is_session_active(self, session_id: str) -> bool:
-        """Check if a VAD session is active."""
-        with self.bridge_lock:
-            return (session_id in self.session_processors and 
-                   self.session_metadata.get(session_id, {}).get("is_active", False))
-
     def cleanup_all_sessions(self):
         """Clean up all VAD sessions."""
         logger.info("Cleaning up all VAD sessions")
         
         with self.bridge_lock:
-            session_ids = list(self.session_processors.keys())
+            session_ids = list(self.session_metadata.keys())
         
         for session_id in session_ids:
             self.destroy_vad_session(session_id)
         
         logger.info(f"All {len(session_ids)} VAD sessions cleaned up")
-
-    def _log_session_summary(self, session_id: str, final_stats: Dict[str, Any]):
-        """Log a comprehensive session summary."""
-        logger.info(f"=== VAD SESSION SUMMARY: {session_id} ===")
-        
-        metadata = self.session_metadata.get(session_id, {})
-        created_at = metadata.get("created_at", 0)
-        session_duration = time.time() - created_at
-        
-        logger.info(f"Session Duration: {session_duration:.1f}s")
-        logger.info(f"Language Setting: {metadata.get('language_setting', 'unknown')}")
-        logger.info(f"Segment Duration Target: {metadata.get('segment_duration', 'unknown')}s")
-        
-        logger.info(f"Audio Processing Statistics:")
-        logger.info(f"  Chunks Received: {final_stats.get('chunks_received', 0)}")
-        logger.info(f"  Chunks Processed: {final_stats.get('chunks_processed', 0)}")
-        logger.info(f"  Chunks with Voice: {final_stats.get('chunks_with_voice', 0)}")
-        logger.info(f"  Chunks Transcribed: {final_stats.get('chunks_transcribed', 0)}")
-        logger.info(f"  Total Processing Time: {final_stats.get('total_processing_time_ms', 0):.1f}ms")
-        logger.info(f"  Errors: {len(final_stats.get('errors', []))}")
-        
-        # Calculate efficiency metrics
-        if final_stats.get('chunks_processed', 0) > 0:
-            voice_detection_rate = (final_stats.get('chunks_with_voice', 0) / 
-                                   final_stats.get('chunks_processed', 1)) * 100
-            transcription_success_rate = (final_stats.get('chunks_transcribed', 0) / 
-                                        final_stats.get('chunks_with_voice', 1)) * 100
-            
-            logger.info(f"Efficiency Metrics:")
-            logger.info(f"  Voice Detection Rate: {voice_detection_rate:.1f}%")
-            logger.info(f"  Transcription Success Rate: {transcription_success_rate:.1f}%")
-        
-        logger.info(f"=== END SESSION SUMMARY: {session_id} ===")
-
-    def _update_global_stats_from_session(self, session_stats: Dict[str, Any]):
-        """Update global statistics with session data."""
-        self.global_stats["total_audio_chunks_processed"] += session_stats.get("chunks_processed", 0)
-        self.global_stats["total_chunks_with_voice"] += session_stats.get("chunks_with_voice", 0)
-        self.global_stats["total_chunks_transcribed"] += session_stats.get("chunks_transcribed", 0)
 
 
 # Global VAD bridge instance
@@ -510,7 +265,6 @@ def cleanup_vad_bridge():
 
 def is_vad_enabled() -> bool:
     """Check if VAD integration is enabled and available."""
-    # This check is now just for logging/info, the server will attempt to use it if initialized.
     return os.getenv('ENABLE_VAD_TRANSCRIPTION', 'true').lower() == 'true' and _vad_bridge_instance is not None
 
 def log_vad_configuration():

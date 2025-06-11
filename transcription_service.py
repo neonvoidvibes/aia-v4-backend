@@ -15,6 +15,8 @@ import threading # For s3_lock type hint
 import subprocess # For ffprobe fallback
 import mimetypes # Import the mimetypes library
 
+from utils.hallucination_detector import get_hallucination_manager # For hallucination detection
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -424,13 +426,18 @@ def process_audio_segment_and_update_s3(
     ) -> bool:
     
     # --- Part 1: Setup and Slow Operations (outside lock) ---
+    session_id = session_data.get("session_id")
     s3_transcript_key = session_data.get('s3_transcript_key')
     session_start_time_utc = session_data.get('session_start_time_utc')
     language_setting_from_client = session_data.get('language_setting_from_client', 'any')
     language_hint_fallback = 'en' # Used if language is 'any'
 
-    if not all([temp_segment_wav_path, s3_transcript_key, isinstance(session_start_time_utc, datetime)]):
-        logger.error("Missing critical data for processing segment (path, S3 key, or start time).")
+    if not all([session_id, temp_segment_wav_path, s3_transcript_key, isinstance(session_start_time_utc, datetime)]):
+        logger.error("Missing critical data for processing segment (session_id, path, S3 key, or start time).")
+        # Clean up the temp file even on failure to prevent disk fill
+        if temp_segment_wav_path and os.path.exists(temp_segment_wav_path):
+             try: os.remove(temp_segment_wav_path)
+             except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path} after pre-check fail: {e_del}")
         return False
     
     # Determine segment duration (can be slow if ffprobe is needed)
@@ -453,6 +460,22 @@ def process_audio_segment_and_update_s3(
         
     # Transcribe audio (slow network call)
     transcription_result = _transcribe_audio_segment_openai(temp_segment_wav_path, openai_api_key, language_setting_from_client)
+
+    # === Hallucination Detection ===
+    # Check for hallucinations before further processing
+    if transcription_result and transcription_result.get("text"):
+        hallucination_manager = get_hallucination_manager(session_id)
+        is_valid, reason = hallucination_manager.process_transcript(transcription_result.get("text", "").strip())
+        if not is_valid:
+            logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update.")
+            stats = hallucination_manager.get_statistics()
+            logger.info(f"Session {session_id} hallucination stats - Total: {stats['total_transcripts']}, Valid: {stats['valid_transcripts']}, Hallucinations: {stats['hallucinations_detected']}, Rate: {stats['hallucination_rate']:.1%}")
+            # Clean up the WAV file and exit early
+            if os.path.exists(temp_segment_wav_path):
+                try: os.remove(temp_segment_wav_path)
+                except OSError as e_del: logger.error(f"Error deleting hallucinated temp WAV {temp_segment_wav_path}: {e_del}")
+            return True # Return True as the "error" was handled (by not processing a hallucination)
+    # === End Hallucination Detection ===
 
     # Pre-process segments that don't depend on the atomic offset
     filtered_segments_pre_lock = []
