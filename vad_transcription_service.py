@@ -222,9 +222,18 @@ class VADTranscriptionService:
             logger.error(f"Session {session_id}: Failed to convert WebM to WAV, skipping segment.")
             return
 
-        # Let the session data know the duration of the full chunk for offset calculations
-        # NOTE: This update now happens in the main thread in api_server.py *before* this function is called.
-        # This function can now rely on `current_total_audio_duration_processed_seconds` being correct.
+        # CRITICAL FIX: Calculate actual duration and update session total immediately
+        # This fixes the frozen timestamp issue in VAD mode
+        actual_duration_seconds = len(audio_data_np) / self.sample_rate
+        
+        with session_lock:
+            # Read current offset before updating (for any existing segments)
+            current_offset = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
+            
+            # Update the total processed duration with actual measured duration
+            session_data['current_total_audio_duration_processed_seconds'] += actual_duration_seconds
+            
+            logger.info(f"VAD Session {session_id}: Updated duration with ACTUAL measured duration: +{actual_duration_seconds:.2f}s = {session_data['current_total_audio_duration_processed_seconds']:.2f}s total")
         
         # Segment the audio based on voice activity and submit to workers
         self.segment_and_submit_audio(

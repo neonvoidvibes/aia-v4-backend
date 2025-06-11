@@ -573,8 +573,23 @@ def process_audio_segment_and_update_s3(
         session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION")
         logger.debug(f"SESSION_LOCK_ACQUIRED for session {session_id_for_log}")
 
-        # ATOMIC READ of current offset. This is now the definitive offset.
+        # CRITICAL FIX: Update duration BEFORE timestamp calculation to fix frozen timestamps
+        # Get actual duration and update the total processed duration first
+        actual_segment_duration = session_data.get('actual_segment_duration_seconds', 0.0)
+        
+        # ATOMIC READ of current offset for this segment's timestamps
         segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
+        
+        # Update total duration immediately after reading the offset for timestamps
+        if actual_segment_duration > 0:
+            session_data['current_total_audio_duration_processed_seconds'] += actual_segment_duration
+            logger.info(f"Updated session {session_id_for_log} processed duration with ACTUAL duration: +{actual_segment_duration:.2f}s = {session_data['current_total_audio_duration_processed_seconds']:.2f}s total")
+        else:
+            # Fallback: if no actual duration available, use a conservative estimate
+            # This can happen in VAD path or if ffprobe fails
+            estimated_fallback_duration = 1.5  # Conservative estimate based on observation
+            session_data['current_total_audio_duration_processed_seconds'] += estimated_fallback_duration
+            logger.warning(f"Session {session_id_for_log}: No actual segment duration available, using fallback estimate of {estimated_fallback_duration:.2f}s")
         
         # Run filters that depend on session state/offset
         final_filtered_segments = detect_single_word_loops(filtered_segments_pre_lock, session_data, segment_offset_seconds)
@@ -683,15 +698,6 @@ def process_audio_segment_and_update_s3(
                 
                 s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
                 logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
-        
-        # CRITICAL FIX: Update total processed duration with ACTUAL measured duration
-        # This fixes the timestamp issue where estimated duration (3s) != actual duration (~1.5s)
-        actual_segment_duration = session_data.get('actual_segment_duration_seconds', 0.0)
-        if actual_segment_duration > 0:
-            session_data['current_total_audio_duration_processed_seconds'] += actual_segment_duration
-            logger.info(f"Updated session {session_id_for_log} processed duration with ACTUAL duration: +{actual_segment_duration:.2f}s = {session_data['current_total_audio_duration_processed_seconds']:.2f}s total")
-        else:
-            logger.warning(f"Session {session_id_for_log}: No actual segment duration available, skipping duration update to prevent timestamp errors")
         
         logger.debug(f"SESSION_LOCK_RELEASED for session {session_id_for_log}")
 
