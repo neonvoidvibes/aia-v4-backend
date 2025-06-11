@@ -841,31 +841,44 @@ def audio_stream_socket(ws, session_id: str):
                     vad_enabled = session_data.get("vad_enabled", False)
                     
                     if vad_enabled and VAD_IMPORT_SUCCESS and vad_bridge:
-                        # VAD Processing Path
-                        logger.debug(f"Session {session_id}: Processing audio blob via VAD pipeline ({len(message)} bytes)")
-                        
-                        if not session_data["is_backend_processing_paused"]:
-                            # Send audio blob directly to VAD processing
-                            try:
-                                vad_success = vad_bridge.process_audio_blob(session_id, bytes(message))
-                                if not vad_success:
-                                    # If VAD processing fails, we explicitly set vad_enabled to False
-                                    # so the fallback logic below can take over for THIS blob.
-                                    logger.error(f"Session {session_id}: VAD audio processing failed, falling back to original method for this chunk.")
-                                    vad_enabled = False
-                                    session_data["vad_enabled"] = False
-                                else:
-                                    # If VAD processing was successful, skip the original logic path.
-                                    logger.debug(f"Session {session_id}: Audio blob successfully queued for VAD processing.")
-                                    continue # This is the key fix to prevent duplicate processing
-                            except Exception as e:
-                                logger.error(f"Session {session_id}: Error during VAD processing: {e}", exc_info=True)
-                                logger.warning(f"Session {session_id}: VAD processing failed, falling back to original method for this chunk.")
-                                vad_enabled = False
-                                session_data["vad_enabled"] = False
+                        # VAD Processing Path - Now with header management and accumulation
+                        if not session_data.get("is_first_blob_received", False):
+                            session_data["webm_global_header_bytes"] = bytes(message)
+                            session_data["is_first_blob_received"] = True
+                            logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
+                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
                         else:
-                            logger.debug(f"Session {session_id}: Backend processing paused, skipping VAD processing.")
-                            continue
+                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+
+                        logger.debug(f"Session {session_id}: Appended {len(message)} bytes to raw_bytes buffer. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
+                        
+                        # Use a simple duration estimate, as before
+                        session_data["accumulated_audio_duration_for_current_segment_seconds"] += 3.0
+
+                        if not session_data["is_backend_processing_paused"] and \
+                           session_data["accumulated_audio_duration_for_current_segment_seconds"] >= AUDIO_SEGMENT_DURATION_SECONDS_TARGET:
+                            
+                            logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment.")
+                            
+                            bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
+                            
+                            # Reset buffers for the next segment
+                            session_data["current_segment_raw_bytes"] = bytearray()
+                            session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
+
+                            if not bytes_to_process:
+                                logger.warning(f"Session {session_id}: Buffer is empty, skipping VAD processing call.")
+                                continue
+
+                            try:
+                                # The bridge will now receive a complete, valid WebM blob
+                                vad_bridge.process_audio_blob(session_id, bytes_to_process)
+                                logger.debug(f"Session {session_id}: Dispatched {len(bytes_to_process)} bytes to VAD bridge.")
+                            except Exception as e:
+                                logger.error(f"Session {session_id}: Error dispatching audio to VAD bridge: {e}", exc_info=True)
+
+                        # Continue to the next WebSocket message
+                        continue
                     
                     # Original Processing Path (fallback or when VAD not enabled)
                     if not vad_enabled:

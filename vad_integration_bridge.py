@@ -167,7 +167,7 @@ class VADIntegrationBridge:
         try:
             # This is a direct, synchronous call to the VAD service's fast path.
             # It will perform VAD and submit the transcription task to the app's executor.
-            self.vad_manager.vad_service.process_audio_chunk(
+            self.vad_manager.vad_service.process_audio_segment(
                 webm_blob_bytes=webm_blob_bytes,
                 session_id=session_id,
                 temp_dir=session_meta["temp_dir"],

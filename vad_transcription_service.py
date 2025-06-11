@@ -1,14 +1,3 @@
-"""
-VAD-Filtered Real-Time Transcription Service
-
-This module implements the robust VAD-filtered transcription pipeline as outlined in the research document.
-It provides real-time Voice Activity Detection to prevent Whisper hallucinations on silent audio.
-
-This refactored version removes internal queuing and threading. It performs the "fast path"
-(ffmpeg, VAD, enhancement) synchronously and offloads the "slow path" (Whisper API)
-to a global executor managed by the main application.
-"""
-
 import os
 import logging
 import uuid
@@ -86,28 +75,58 @@ class VADTranscriptionService:
         
         return 0.0
 
-    def process_webm_to_wav(self, webm_blob_path: str, output_wav_path: str, session_id: str) -> Tuple[bool, float]:
-        """Convert WebM blob to WAV using ffmpeg."""
-        if not os.path.exists(webm_blob_path):
-            logger.error(f"Session {session_id}: WebM blob file not found: {webm_blob_path}")
-            return False, 0.0
+    def process_webm_to_wav(self, webm_blob_bytes: bytes, output_wav_path: str, 
+                                session_id: str) -> Tuple[bool, float]:
+        """
+        Convert WebM blob bytes to WAV using ffmpeg via stdin pipe.
+        
+        Args:
+            webm_blob_bytes: The complete WebM data as bytes.
+            output_wav_path: Path where WAV output should be saved.
+            session_id: Session ID for logging context.
             
+        Returns:
+            Tuple of (success: bool, duration_seconds: float)
+        """
+        logger.debug(f"Session {session_id}: Starting WebM to WAV conversion via pipe")
+        
         try:
-            ffmpeg_cmd = ["ffmpeg", "-y", "-i", webm_blob_path, "-ac", str(self.target_channels), "-ar", str(self.target_sample_rate), "-acodec", "pcm_s16le", "-f", "wav", output_wav_path]
-            logger.info(f"Session {session_id}: Executing ffmpeg: {' '.join(ffmpeg_cmd)}")
-            subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+            # ffmpeg command that reads from stdin
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-i", "pipe:0",  # Read from stdin
+                "-ac", str(self.target_channels),
+                "-ar", str(self.target_sample_rate),
+                "-acodec", "pcm_s16le",
+                "-f", "wav",
+                output_wav_path
+            ]
+            
+            logger.info(f"Session {session_id}: Executing ffmpeg via pipe: {' '.join(ffmpeg_cmd)}")
+            
+            process = subprocess.Popen(
+                ffmpeg_cmd, 
+                stdin=subprocess.PIPE, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = process.communicate(input=webm_blob_bytes)
+
+            if process.returncode != 0:
+                logger.error(f"Session {session_id}: ffmpeg pipe conversion failed. RC: {process.returncode}")
+                logger.error(f"Session {session_id}: ffmpeg stderr: {stderr.decode('utf-8', 'ignore')}")
+                return False, 0.0
+
             duration = self._get_audio_duration(output_wav_path, session_id)
             if duration > 0:
-                logger.info(f"Session {session_id}: WAV file created successfully - Duration: {duration:.2f}s")
+                logger.info(f"Session {session_id}: WAV file created successfully from pipe - Duration: {duration:.2f}s")
                 return True, duration
             else:
-                logger.warning(f"Session {session_id}: WAV file created but duration detection failed")
+                logger.warning(f"Session {session_id}: WAV file created from pipe but duration detection failed")
                 return True, 0.0
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Session {session_id}: ffmpeg conversion failed. Stderr: {e.stderr}")
-            return False, 0.0
+                
         except Exception as e:
-            logger.error(f"Session {session_id}: Unexpected error during conversion: {e}", exc_info=True)
+            logger.error(f"Session {session_id}: Unexpected error during piped conversion: {e}", exc_info=True)
             return False, 0.0
 
     def detect_voice_activity(self, wav_path: str, session_id: str) -> Tuple[bytes, Dict[str, Any]]:
@@ -174,33 +193,35 @@ class VADTranscriptionService:
             logger.warning(f"Session {session_id}: Spectral filtering failed: {e}")
             return audio_data, False
 
-    def process_audio_chunk(self, webm_blob_bytes: bytes, session_id: str, temp_dir: str,
-                            language_setting: str, session_data: Dict, session_lock: threading.Lock):
+    def process_audio_segment(self, webm_blob_bytes: bytes, session_id: str, 
+                             temp_dir: str, language_setting: str, session_data: Dict, session_lock: threading.Lock):
         """
-        Process a single audio chunk through the fast path and offload the slow path.
+        Process a single audio segment through the fast path and offload the slow path.
+        This version receives a complete WebM blob and pipes it to ffmpeg.
         """
-        chunk_id = uuid.uuid4().hex
+        segment_id = uuid.uuid4().hex
         processing_start_time = time.time()
         
-        webm_path = os.path.join(temp_dir, f"chunk_{chunk_id}.webm")
-        wav_path = os.path.join(temp_dir, f"chunk_{chunk_id}.wav")
-        clean_wav_path = os.path.join(temp_dir, f"clean_chunk_{chunk_id}.wav")
+        # Define paths for intermediate and final files
+        wav_path = os.path.join(temp_dir, f"segment_{segment_id}.wav")
+        clean_wav_path = os.path.join(temp_dir, f"clean_segment_{segment_id}.wav")
         
-        files_to_cleanup = [webm_path, wav_path]
-        
+        files_to_cleanup = [wav_path]
+
         try:
-            with open(webm_path, 'wb') as f: f.write(webm_blob_bytes)
-            
-            conversion_success, _ = self.process_webm_to_wav(webm_path, wav_path, session_id)
-            if not conversion_success: raise RuntimeError("WebM to WAV conversion failed")
+            # Convert WebM bytes to WAV file via pipe
+            conversion_success, _ = self.process_webm_to_wav(webm_blob_bytes, wav_path, session_id)
+            if not conversion_success:
+                raise RuntimeError("WebM to WAV conversion via pipe failed")
             
             enhanced_wav_path = self.apply_audio_enhancement(wav_path, session_id)
-            if enhanced_wav_path != wav_path: files_to_cleanup.append(enhanced_wav_path)
+            if enhanced_wav_path != wav_path:
+                files_to_cleanup.append(enhanced_wav_path)
             
             voiced_audio_bytes, _ = self.detect_voice_activity(enhanced_wav_path, session_id)
             
-            if len(voiced_audio_bytes) < (self.vad_frame_bytes * 10): # Require at least 300ms of voice
-                logger.info(f"Session {session_id}: Insufficient voice detected ({len(voiced_audio_bytes)} bytes). Skipping transcription.")
+            if len(voiced_audio_bytes) < (self.vad_frame_bytes * 10):
+                logger.info(f"Session {session_id}: Insufficient voice detected in segment. Skipping transcription.")
             else:
                 with wave.open(clean_wav_path, 'wb') as wf:
                     wf.setnchannels(self.target_channels)
@@ -218,17 +239,20 @@ class VADTranscriptionService:
                 )
         
         except Exception as e:
-            logger.error(f"Session {session_id}: Error in fast-path processing for chunk {chunk_id}: {e}", exc_info=True)
-            # If an error occurs here, we might have created a clean_wav file that won't be processed. Clean it up.
-            if os.path.exists(clean_wav_path): files_to_cleanup.append(clean_wav_path)
-
+            logger.error(f"Session {session_id}: Error in fast-path processing for segment {segment_id}: {e}", exc_info=True)
+            if os.path.exists(clean_wav_path):
+                files_to_cleanup.append(clean_wav_path)
+        
         finally:
+            # Clean up intermediate files (the clean_wav_path is cleaned up by the worker thread)
             for file_path in files_to_cleanup:
                 if os.path.exists(file_path):
-                    try: os.remove(file_path)
-                    except Exception as cleanup_error: logger.warning(f"Session {session_id}: Failed to clean up {file_path}: {cleanup_error}")
+                    try:
+                        os.remove(file_path)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Session {session_id}: Failed to clean up {file_path}: {cleanup_error}")
             
-            logger.debug(f"Session {session_id}: Fast-path processing for chunk {chunk_id} completed in {(time.time() - processing_start_time)*1000:.1f}ms.")
+            logger.debug(f"Session {session_id}: Fast-path processing for segment {segment_id} completed in {(time.time() - processing_start_time)*1000:.1f}ms.")
 
 class VADTranscriptionManager:
     """
