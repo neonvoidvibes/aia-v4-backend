@@ -435,18 +435,9 @@ def process_audio_segment_and_update_s3(
              except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path} after pre-check fail: {e_del}")
         return False
     
-    # Determine segment duration (can be slow if ffprobe is needed)
-    segment_actual_duration = session_data.get('actual_segment_duration_seconds', 0.0)
-    if segment_actual_duration <= 0:
-        logger.warning(f"Segment duration from session_data is {segment_actual_duration:.2f}s for {temp_segment_wav_path}. Attempting ffprobe locally.")
-        try:
-            ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', temp_segment_wav_path]
-            duration_result = subprocess.run(ffprobe_command, capture_output=True, text=True, check=True)
-            segment_actual_duration = float(duration_result.stdout.strip())
-            logger.info(f"Local ffprobe successful for {temp_segment_wav_path}: duration {segment_actual_duration:.2f}s")
-        except Exception as e_ffprobe:
-            logger.error(f"Local ffprobe failed for {temp_segment_wav_path}: {e_ffprobe}. Using fallback duration.")
-            segment_actual_duration = 15.0 # Fallback to a reasonable default if ffprobe fails
+    # The duration of the original audio chunk is now set in session_data before this worker is called.
+    # The actual duration of the *voiced* segment is not what we want for the offset calculation.
+    segment_actual_duration = session_data.get('actual_segment_duration_seconds', 15.0) # Fallback to 15s
 
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
@@ -511,9 +502,6 @@ def process_audio_segment_and_update_s3(
         session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION")
         logger.debug(f"SESSION_LOCK_ACQUIRED for session {session_id_for_log}")
 
-        # Correctly update the shared session_data object with the duration for this segment.
-        session_data['actual_segment_duration_seconds'] = segment_actual_duration
-        
         # ATOMIC READ of current offset
         segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
         
