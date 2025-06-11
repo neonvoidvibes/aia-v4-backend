@@ -441,6 +441,7 @@ def start_recording_route(user: SupabaseUser):
         "webm_global_header_bytes": None, 
         "is_first_blob_received": False,
         "vad_enabled": False,  # Will be set to True if VAD session is created successfully
+        "last_successful_transcript": "", # For providing rolling context to Whisper
     }
     logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")

@@ -294,8 +294,8 @@ def is_valid_transcription(text: str) -> bool:
 def _transcribe_audio_segment_openai(
     audio_file_path: str, 
     openai_api_key: str, 
-    language_setting_from_client: Optional[str] = "any" # Changed default from None to "any"
-    # chunk_duration: float = 15.0 # chunk_duration is not used by Whisper file API
+    language_setting_from_client: Optional[str] = "any",
+    rolling_context_prompt: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
     if not openai_api_key:
         logger.error("OpenAI API key not provided for transcription.")
@@ -328,25 +328,20 @@ def _transcribe_audio_segment_openai(
                 logger.info(f"Whisper: Language setting '{language_setting_from_client}' unrecognized, defaulting to auto-detect.")
                 # No 'language' key added for auto-detect
 
-            # Construct initial_prompt
-            initial_prompt_text_base = (
-                "Please focus on transcribing professional business discourse accurately. "
-                "Avoid common conversational filler phrases if they obscure meaning. "
-                "Do not transcribe generic social media phrases, common video outros like 'subscribe to my channel' "
-                "or 'thanks for watching', or phrases in languages clearly unrelated to a business meeting context "
-                "unless they are direct quotes or proper nouns. If unsure, prioritize clear speech over interpreting noise."
-            )
-            
-            initial_prompt_text = ""
-            if language_setting_from_client == "en":
-                initial_prompt_text = "The primary language is English. " + initial_prompt_text_base
-            elif language_setting_from_client == "sv":
-                initial_prompt_text = "The primary language is Swedish. " + initial_prompt_text_base
-            else: # "any" or default/unrecognized
-                initial_prompt_text = "The primary languages expected are English and Swedish. " + initial_prompt_text_base
-            
-            data_payload['initial_prompt'] = initial_prompt_text
-            logger.info(f"Whisper: Using initial_prompt: '{initial_prompt_text[:100]}...'")
+            # Use the rolling context as the primary prompt to prevent repetition.
+            # Fallback to a generic prompt only if no context is available.
+            if rolling_context_prompt:
+                initial_prompt_text = rolling_context_prompt
+                logger.info(f"Whisper: Using rolling context as initial_prompt: '{initial_prompt_text[-150:]}'")
+            else:
+                initial_prompt_text_base = (
+                    "This is the first segment of a professional business meeting. Please focus on transcribing accurately. "
+                    "The primary languages are English and Swedish."
+                )
+                initial_prompt_text = initial_prompt_text_base
+                logger.info("Whisper: No rolling context available, using generic initial prompt.")
+
+            data_payload['prompt'] = initial_prompt_text # Use 'prompt' which is the recommended parameter
 
 
             # === DYNAMIC MIME TYPE DETECTION ===
@@ -458,10 +453,16 @@ def process_audio_segment_and_update_s3(
         logger.error("OpenAI API key not found. Cannot transcribe.")
         return False
         
-    # Transcribe audio (slow network call)
-    transcription_result = _transcribe_audio_segment_openai(temp_segment_wav_path, openai_api_key, language_setting_from_client)
+    # Transcribe audio (slow network call), passing in the rolling context
+    last_transcript = session_data.get("last_successful_transcript", "")
+    transcription_result = _transcribe_audio_segment_openai(
+        temp_segment_wav_path,
+        openai_api_key,
+        language_setting_from_client,
+        rolling_context_prompt=last_transcript
+    )
 
-    # === Hallucination Detection ===
+    # === Hallucination Detection & Context Update
     # Check for hallucinations before further processing
     if transcription_result and transcription_result.get("text"):
         hallucination_manager = get_hallucination_manager(session_id)
@@ -540,6 +541,14 @@ def process_audio_segment_and_update_s3(
 
         lines_to_append_to_s3.extend(processed_transcript_lines)
         
+        # --- Update rolling context for next API call ---
+        if processed_transcript_lines:
+            # Get the text from the last valid segment to use as context
+            last_line_text = processed_transcript_lines[-1].split("] ", 1)[-1]
+            session_data["last_successful_transcript"] = last_line_text
+            logger.debug(f"Updated rolling context for session {session_id_for_log}: '{last_line_text}'")
+        # --- End context update ---
+
         # Perform S3 append if there's new content
         if lines_to_append_to_s3:
             s3 = get_s3_client()
