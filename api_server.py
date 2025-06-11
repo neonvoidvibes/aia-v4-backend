@@ -846,8 +846,9 @@ def audio_stream_socket(ws, session_id: str):
                             session_data["webm_global_header_bytes"] = bytes(message)
                             session_data["is_first_blob_received"] = True
                             logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
-                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                            # The first blob is the header, don't add it to the segment bytes yet.
                         else:
+                            # For subsequent blobs, just append the data.
                             session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
 
                         logger.debug(f"Session {session_id}: Appended {len(message)} bytes to raw_bytes buffer. Total buffer: {len(session_data['current_segment_raw_bytes'])}")
@@ -860,14 +861,22 @@ def audio_stream_socket(ws, session_id: str):
                             
                             logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment.")
                             
-                            bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
+                            current_fragment_bytes = bytes(session_data["current_segment_raw_bytes"])
+                            global_header_bytes = session_data.get("webm_global_header_bytes", b'')
                             
+                            # Correctly combine the header with the accumulated data
+                            if global_header_bytes and current_fragment_bytes:
+                                bytes_to_process = global_header_bytes + current_fragment_bytes
+                            else:
+                                logger.warning(f"Session {session_id}: Missing header or data to process. Header: {len(global_header_bytes)}, Data: {len(current_fragment_bytes)}")
+                                bytes_to_process = b''
+
                             # Reset buffers for the next segment
                             session_data["current_segment_raw_bytes"] = bytearray()
                             session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
 
                             if not bytes_to_process:
-                                logger.warning(f"Session {session_id}: Buffer is empty, skipping VAD processing call.")
+                                logger.warning(f"Session {session_id}: Combined byte stream is empty, skipping VAD processing call.")
                                 continue
 
                             try:
