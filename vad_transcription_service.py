@@ -462,9 +462,9 @@ class VADTranscriptionService:
             result["errors"].append(error_msg)
         
         finally:
-            # Step 5: Cleanup temporary files
+            # Step 5: Cleanup temporary files (but keep clean_wav_path for callback)
             cleanup_start = time.time()
-            for file_path in [webm_path, wav_path, clean_wav_path]:
+            for file_path in [webm_path, wav_path]:  # Don't clean up clean_wav_path yet
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)
@@ -480,6 +480,122 @@ class VADTranscriptionService:
         logger.info(f"Session {session_id}: Chunk {chunk_id} processing completed in {total_processing_time:.1f}ms. Voice: {result['has_voice']}, Transcription: {'Success' if result['transcription'] else 'None/Failed'}")
         
         return result
+
+
+class SessionAudioProcessor:
+    """
+    Manages audio processing for a single VAD transcription session.
+    Handles audio blob accumulation, segmentation, and VAD pipeline coordination.
+    """
+    
+    def __init__(self, session_id: str, temp_dir: str, vad_service: VADTranscriptionService,
+                 result_callback: Callable[[Dict[str, Any]], None],
+                 language_setting: str = "any", segment_duration_target: float = 15.0):
+        """
+        Initialize session audio processor.
+        
+        Args:
+            session_id: Unique session identifier
+            temp_dir: Session temporary directory
+            vad_service: VAD transcription service instance
+            result_callback: Callback for transcription results
+            language_setting: Language setting for transcription
+            segment_duration_target: Target segment duration in seconds
+        """
+        self.session_id = session_id
+        self.temp_dir = temp_dir
+        self.vad_service = vad_service
+        self.result_callback = result_callback
+        self.language_setting = language_setting
+        self.segment_duration_target = segment_duration_target
+        
+        # Create session temp directory
+        os.makedirs(self.temp_dir, exist_ok=True)
+        
+        # Audio accumulation state
+        self.webm_global_header = b""
+        self.current_segment_bytes = bytearray()
+        self.accumulated_duration = 0.0
+        self.is_first_blob = True
+        
+        # Processing queue and threading
+        self.audio_queue = queue.Queue(maxsize=10)  # Limit queue size
+        self.processing_thread: Optional[threading.Thread] = None
+        self.session_lock = threading.RLock()
+        self.is_active = False
+        
+        # Processing statistics
+        self.processing_stats = {
+            "chunks_received": 0,
+            "chunks_processed": 0,
+            "chunks_with_voice": 0,
+            "chunks_transcribed": 0,
+            "total_processing_time_ms": 0,
+            "errors": [],
+            "session_start_time": time.time()
+        }
+        
+        logger.info(f"Session {self.session_id}: Audio processor initialized")
+        logger.info(f"Session {self.session_id}: Temp dir: {self.temp_dir}")
+        logger.info(f"Session {self.session_id}: Language: {self.language_setting}, Target duration: {self.segment_duration_target}s")
+
+    def start(self):
+        """Start the audio processing worker thread."""
+        with self.session_lock:
+            if self.is_active:
+                logger.warning(f"Session {self.session_id}: Already started")
+                return
+            
+            self.is_active = True
+            self.processing_thread = threading.Thread(
+                target=self._processing_worker,
+                name=f"VAD-Worker-{self.session_id[:8]}"
+            )
+            self.processing_thread.start()
+            
+        logger.info(f"Session {self.session_id}: Audio processor started")
+
+    def stop(self):
+        """Stop the audio processor and clean up resources."""
+        logger.info(f"Session {self.session_id}: Stopping audio processor")
+        
+        with self.session_lock:
+            if not self.is_active:
+                logger.info(f"Session {self.session_id}: Already stopped")
+                return
+            
+            self.is_active = False
+        
+        # Process any remaining audio
+        self._process_final_segment()
+        
+        # Signal worker thread to stop
+        try:
+            self.audio_queue.put(None, timeout=5.0)  # Sentinel value
+        except queue.Full:
+            logger.warning(f"Session {self.session_id}: Queue full when stopping")
+        
+        # Wait for worker thread to complete
+        if self.processing_thread and self.processing_thread.is_alive():
+            self.processing_thread.join(timeout=10.0)
+            if self.processing_thread.is_alive():
+                logger.error(f"Session {self.session_id}: Worker thread did not stop gracefully")
+        
+        # Clean up session
+        self._cleanup_session()
+        
+        logger.info(f"Session {self.session_id}: Audio processor stopped")
+
+    def add_audio_blob(self, webm_blob_bytes: bytes):
+        """
+        Add an audio blob for processing.
+        
+        Args:
+            webm_blob_bytes: Raw WebM audio data
+        """
+        if not self.is_active:
+            logger.warning(f"Session {self.session_id}: Received audio blob but processor not active")
+            return
         
         logger.debug(f"Session {self.session_id}: Received audio blob ({len(webm_blob_bytes)} bytes)")
         
@@ -567,7 +683,7 @@ class VADTranscriptionService:
         logger.info(f"Session {self.session_id}: Processing worker thread stopped")
 
     def _process_segment(self, item: Dict[str, Any]):
-        """Process a single audio segment."""
+        """Process a single audio segment with timeout protection."""
         segment_bytes = item["segment_bytes"]
         
         logger.info(f"Session {self.session_id}: Processing segment - "
@@ -577,47 +693,101 @@ class VADTranscriptionService:
         processing_dir = os.path.join(self.temp_dir, "processing")
         os.makedirs(processing_dir, exist_ok=True)
         
+        # Thread-based timeout protection
+        result = None
+        timeout_occurred = threading.Event()
+        processing_completed = threading.Event()
+        timeout_seconds = 60  # 60-second timeout
+        
+        def processing_task():
+            """Task that performs the actual processing."""
+            nonlocal result
+            try:
+                result = self.vad_service.process_audio_chunk(
+                    webm_blob_bytes=segment_bytes,
+                    session_id=self.session_id,
+                    temp_dir=processing_dir,
+                    language_setting=self.language_setting
+                )
+                processing_completed.set()
+            except Exception as e:
+                logger.error(f"Session {self.session_id}: Error in processing task: {e}", exc_info=True)
+                with self.session_lock:
+                    self.processing_stats["errors"].append(f"Processing task error: {e}")
+                processing_completed.set()
+        
+        def timeout_handler():
+            """Handler that sets timeout flag after delay."""
+            timeout_occurred.set()
+            logger.error(f"Session {self.session_id}: Segment processing timed out after {timeout_seconds}s")
+        
         try:
-            # Process through VAD pipeline
-            result = self.vad_service.process_audio_chunk(
-                webm_blob_bytes=segment_bytes,
-                session_id=self.session_id,
-                temp_dir=processing_dir,
-                language_setting=self.language_setting
-            )
+            # Start processing task in a separate thread
+            processing_thread = threading.Thread(target=processing_task, name=f"Process-{self.session_id[:8]}")
+            processing_thread.start()
             
-            # Update statistics
-            with self.session_lock:
-                self.processing_stats["chunks_processed"] += 1
-                self.processing_stats["total_processing_time_ms"] += result.get("processing_times", {}).get("total", 0)
-                
-                if result.get("has_voice"):
-                    self.processing_stats["chunks_with_voice"] += 1
+            # Start timeout timer
+            timeout_timer = threading.Timer(timeout_seconds, timeout_handler)
+            timeout_timer.start()
+            
+            # Wait for either processing completion or timeout
+            processing_completed.wait(timeout=timeout_seconds + 5)  # Extra 5s grace period
+            
+            # Cancel timeout timer if processing completed
+            timeout_timer.cancel()
+            
+            # Check results
+            if timeout_occurred.is_set():
+                logger.error(f"Session {self.session_id}: Segment processing timed out - worker thread may be blocked")
+                with self.session_lock:
+                    self.processing_stats["errors"].append(f"Segment timeout after {timeout_seconds}s")
+                return
+            
+            if not processing_completed.is_set():
+                logger.warning(f"Session {self.session_id}: Processing thread did not complete within grace period")
+                with self.session_lock:
+                    self.processing_stats["errors"].append("Processing thread hung - grace period exceeded")
+                return
+            
+            # Wait for processing thread to finish (should be immediate at this point)
+            processing_thread.join(timeout=2.0)
+            if processing_thread.is_alive():
+                logger.error(f"Session {self.session_id}: Processing thread still alive after completion signal")
+            
+            # Process results if we have them
+            if result:
+                # Update statistics
+                with self.session_lock:
+                    self.processing_stats["chunks_processed"] += 1
+                    self.processing_stats["total_processing_time_ms"] += result.get("processing_times", {}).get("total", 0)
                     
-                if result.get("transcription"):
-                    self.processing_stats["chunks_transcribed"] += 1
+                    if result.get("has_voice"):
+                        self.processing_stats["chunks_with_voice"] += 1
+                        
+                    if result.get("transcription"):
+                        self.processing_stats["chunks_transcribed"] += 1
+                    
+                    if result.get("errors"):
+                        self.processing_stats["errors"].extend(result["errors"])
                 
-                if result.get("errors"):
-                    self.processing_stats["errors"].extend(result["errors"])
-            
-            # Use the callback to pass the result back to the bridge
-            if result.get("transcription") and result.get("has_voice"):
-                # Add the path to the clean WAV file for the handler
-                result["clean_wav_path"] = os.path.join(processing_dir, f"clean_chunk_{result['chunk_id']}.wav")
-                self.result_callback(result)
+                # Use the callback to pass the result back to the bridge
+                if result.get("transcription") and result.get("has_voice"):
+                    # Add the path to the clean WAV file for the handler
+                    result["clean_wav_path"] = os.path.join(processing_dir, f"clean_chunk_{result['chunk_id']}.wav")
+                    self.result_callback(result)
+                else:
+                    logger.debug(f"Session {self.session_id}: Segment processed but no transcription - "
+                               f"Voice: {result.get('has_voice')}, "
+                               f"Skip reason: {result.get('skip_reason', 'unknown')}")
             else:
-                logger.debug(f"Session {self.session_id}: Segment processed but no transcription - "
-                           f"Voice: {result.get('has_voice')}, "
-                           f"Skip reason: {result.get('skip_reason', 'unknown')}")
+                logger.warning(f"Session {self.session_id}: Processing completed but no result returned")
+                with self.session_lock:
+                    self.processing_stats["errors"].append("Processing completed but no result")
         
         except Exception as e:
-            logger.error(f"Session {self.session_id}: Error processing segment: {e}", exc_info=True)
+            logger.error(f"Session {self.session_id}: Error in timeout-protected processing: {e}", exc_info=True)
             with self.session_lock:
-                self.processing_stats["errors"].append(f"Segment processing error: {e}")
-
-    # This function is now removed. The worker will call the callback directly.
-        except Exception as e:
-            logger.error(f"Session {self.session_id}: Unexpected error handling transcription result: {e}", exc_info=True)
+                self.processing_stats["errors"].append(f"Timeout protection error: {e}")
 
     def _process_final_segment(self):
         """Process any remaining audio data when stopping."""

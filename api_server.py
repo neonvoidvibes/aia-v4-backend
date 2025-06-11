@@ -437,7 +437,8 @@ def start_recording_route(user: SupabaseUser):
         try:
             vad_success = vad_bridge.create_vad_session(
                 session_id=session_id,
-                existing_session_data=active_sessions[session_id]
+                existing_session_data=active_sessions[session_id],
+                main_session_lock=session_locks[session_id]
             )
             if vad_success:
                 active_sessions[session_id]["vad_enabled"] = True
@@ -746,12 +747,12 @@ def audio_stream_socket(ws, session_id: str):
 
     if session_id not in active_sessions:
         logger.warning(f"WebSocket: Session {session_id} not found. Closing.")
-        ws.close(code=1008, reason='Session not found or not initialized')
+        ws.close()
         return
     
     if active_sessions[session_id].get("websocket_connection") is not None:
         logger.warning(f"WebSocket: Session {session_id} already has a WebSocket connection. Closing new one.")
-        ws.close(code=1008, reason='Session already has an active stream')
+        ws.close()
         return
 
     active_sessions[session_id]["websocket_connection"] = ws

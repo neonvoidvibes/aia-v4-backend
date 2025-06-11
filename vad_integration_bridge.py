@@ -83,7 +83,7 @@ class VADIntegrationBridge:
                     return
                 
                 main_session_data = self.session_metadata[session_id].get("existing_session_data")
-                main_session_lock = self.session_locks.get(session_id) # Get lock from bridge
+                main_session_lock = self.session_metadata[session_id].get("main_session_lock")  # Get from stored metadata
                 clean_wav_path = result.get("clean_wav_path")
 
                 if not all([main_session_data, main_session_lock, clean_wav_path]):
@@ -97,6 +97,14 @@ class VADIntegrationBridge:
                 session_lock=main_session_lock
             )
             logger.info(f"VAD Bridge: Dispatched result for session {session_id} to be saved to S3.")
+            
+            # Clean up the clean WAV file after processing
+            try:
+                if os.path.exists(clean_wav_path):
+                    os.remove(clean_wav_path)
+                    logger.debug(f"VAD Bridge: Cleaned up clean WAV file: {clean_wav_path}")
+            except Exception as cleanup_e:
+                logger.warning(f"VAD Bridge: Failed to clean up clean WAV file {clean_wav_path}: {cleanup_e}")
 
         except ImportError:
             logger.error(f"VAD Bridge: Failed to import process_audio_segment_and_update_s3.")
@@ -104,13 +112,15 @@ class VADIntegrationBridge:
             logger.error(f"VAD Bridge: Unexpected error handling transcription result: {e}", exc_info=True)
 
 
-    def create_vad_session(self, session_id: str, existing_session_data: Dict[str, Any]) -> bool:
+    def create_vad_session(self, session_id: str, existing_session_data: Dict[str, Any], 
+                          main_session_lock: threading.RLock) -> bool:
         """
         Create a new VAD session integrated with existing session data.
         
         Args:
             session_id: Session identifier from existing system
             existing_session_data: Session data from active_sessions
+            main_session_lock: Session lock from the main system
             
         Returns:
             True if session created successfully, False otherwise
@@ -142,6 +152,7 @@ class VADIntegrationBridge:
                     "language_setting": language_setting,
                     "segment_duration": segment_duration,
                     "existing_session_data": existing_session_data,
+                    "main_session_lock": main_session_lock,  # Store the lock from main system
                     "is_active": True
                 }
                 
