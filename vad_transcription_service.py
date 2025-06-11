@@ -93,53 +93,70 @@ class VADTranscriptionService:
         session_lock: threading.Lock
     ):
         """
-        Analyzes audio frame-by-frame, buffers voiced segments, and submits them for transcription.
+        Analyzes audio frame-by-frame, buffers voiced segments based on silence detection,
+        and submits clean speech segments for transcription. This version uses frame counting
+        for silence detection, which is robust for processing pre-recorded chunks.
         """
-        padding_duration_ms = 300  # Add 300ms padding before and after speech
-        min_speech_duration_ms = 1000 # Minimum speech duration to transcribe
-        silence_timeout_ms = 800 # Process buffer after this much silence
+        padding_duration_ms = 300
+        min_speech_duration_ms = 1000
+        # A segment is terminated after this duration of silence.
+        silence_timeout_ms = 800
 
+        # Convert millisecond settings to frame counts
         padding_frames = padding_duration_ms // self.frame_duration_ms
+        min_speech_frames = min_speech_duration_ms // self.frame_duration_ms
+        silence_timeout_frames = silence_timeout_ms // self.frame_duration_ms
+
         ring_buffer = deque(maxlen=padding_frames)
         
         voiced_frames = []
+        silent_frames_count = 0
         triggered = False
-        last_voiced_frame_time = time.time()
         
         frames = self._frame_generator(audio_data_np)
 
-        for i, (frame, is_speech) in enumerate(frames):
+        for frame, is_speech in frames:
             if is_speech:
-                last_voiced_frame_time = time.time()
+                silent_frames_count = 0 # Reset silence counter on speech
+            else:
+                silent_frames_count += 1 # Increment silence counter
 
-            if not triggered:
+            if not triggered: # Waiting for speech to start
                 ring_buffer.append((frame, is_speech))
                 if is_speech:
                     triggered = True
-                    voiced_frames.extend([f for f, s in ring_buffer if s])
+                    # Add all frames from the ring buffer (including padding) to start the segment
+                    voiced_frames.extend(f for f, s in ring_buffer)
                     ring_buffer.clear()
-            else:
+            else: # Actively collecting a speech segment
                 voiced_frames.append(frame)
                 ring_buffer.append((frame, is_speech))
-                
-                # Check for silence timeout
-                if not is_speech and (time.time() - last_voiced_frame_time) * 1000 > silence_timeout_ms:
-                    # End of a speech segment due to silence
-                    speech_segment = b''.join(voiced_frames)
-                    if len(speech_segment) > (min_speech_duration_ms / 1000) * self.sample_rate * 2:
-                        logger.info(f"Submitting segment of {len(speech_segment)} bytes due to silence timeout.")
-                        self._submit_voiced_segment(speech_segment, session_id, temp_dir, session_data, session_lock)
+
+                # Check if speech segment has ended due to silence
+                if silent_frames_count > silence_timeout_frames:
+                    # We have a complete speech segment ending in silence.
+                    # The voiced_frames buffer contains speech + padding + trailing silence.
+                    # Trim the trailing silence before submitting.
+                    speech_segment_bytes = b''.join(voiced_frames[:-silent_frames_count])
                     
+                    if len(speech_segment_bytes) >= (min_speech_duration_ms / 1000 * self.sample_rate * 2):
+                        logger.info(f"Submitting voiced segment of {len(speech_segment_bytes)} bytes due to silence timeout.")
+                        self._submit_voiced_segment(speech_segment_bytes, session_id, temp_dir, session_data, session_lock)
+
+                    # Reset for the next speech segment
                     triggered = False
                     voiced_frames = []
                     ring_buffer.clear()
+                    silent_frames_count = 0
         
-        # Process any remaining buffered audio at the end
+        # After the loop, process any remaining buffered audio. This handles cases
+        # where the 15-second chunk ends mid-speech.
         if voiced_frames:
-            speech_segment = b''.join(voiced_frames)
-            if len(speech_segment) > (min_speech_duration_ms / 1000) * self.sample_rate * 2:
-                logger.info(f"Submitting final buffered segment of {len(speech_segment)} bytes.")
-                self._submit_voiced_segment(speech_segment, session_id, temp_dir, session_data, session_lock)
+            speech_segment_bytes = b''.join(voiced_frames)
+            # Only submit if it's a meaningful amount of audio
+            if len(speech_segment_bytes) >= (min_speech_duration_ms / 1000 * self.sample_rate * 2):
+                logger.info(f"Submitting final buffered audio segment of {len(speech_segment_bytes)} bytes at end of chunk.")
+                self._submit_voiced_segment(speech_segment_bytes, session_id, temp_dir, session_data, session_lock)
 
     def _frame_generator(self, audio_data: np.ndarray):
         """Generator that yields audio frames and VAD decision."""
