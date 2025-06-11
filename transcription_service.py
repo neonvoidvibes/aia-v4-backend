@@ -511,11 +511,11 @@ def process_audio_segment_and_update_s3(
                 consecutive_fails = session_data.get("consecutive_context_failures", 0) + 1
                 session_data["consecutive_context_failures"] = consecutive_fails
                 
-                # AGGRESSIVE EMERGENCY RESET - Much lower thresholds for maximum robustness
+                # ROBUST EMERGENCY RESET - Balanced thresholds for stability + protection
                 should_reset_context = (
-                    consecutive_fails >= 2 or  # 2 consecutive failures (was 3)
-                    stats['hallucination_rate'] > 0.35 or  # 35% hallucination rate (was 60%)
-                    (stats['hallucinations_detected'] > 3 and stats['hallucination_rate'] > 0.25)  # 25% rate with 3+ hallucinations (was 50% with 5+)
+                    consecutive_fails >= 2 or  # 2 consecutive failures with same context
+                    (stats['total_transcripts'] >= 10 and stats['hallucination_rate'] > 0.45) or  # 45% rate with 10+ segments
+                    (stats['hallucinations_detected'] >= 5 and stats['hallucination_rate'] > 0.6)  # 60% rate with 5+ hallucinations
                 )
                 
                 if should_reset_context:
