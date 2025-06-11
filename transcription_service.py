@@ -456,14 +456,12 @@ def process_audio_segment_and_update_s3(
         hallucination_manager = get_hallucination_manager(session_id)
         is_valid, reason = hallucination_manager.process_transcript(transcription_result.get("text", "").strip())
         if not is_valid:
-            logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update.")
+            logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update and preserving last good context.")
             stats = hallucination_manager.get_statistics()
             logger.info(f"Session {session_id} hallucination stats - Total: {stats['total_transcripts']}, Valid: {stats['valid_transcripts']}, Hallucinations: {stats['hallucinations_detected']}, Rate: {stats['hallucination_rate']:.1%}")
             
-            # CRITICAL FIX: Clear the last successful transcript to prevent a feedback loop.
-            with session_lock:
-                session_data["last_successful_transcript"] = ""
-            logger.warning(f"Session {session_id}: Cleared rolling context due to hallucination.")
+            # By not updating `last_successful_transcript`, we prevent the hallucination spiral.
+            # The next transcription will use the last *valid* context.
 
             # Clean up the WAV file and exit early
             if os.path.exists(temp_segment_wav_path):
@@ -537,10 +535,16 @@ def process_audio_segment_and_update_s3(
         
         # --- Update rolling context for next API call ---
         if processed_transcript_lines:
-            # Get the text from the last valid segment to use as context
+            # Get the text from the last valid segment to use as context.
             last_line_text = processed_transcript_lines[-1].split("] ", 1)[-1]
-            session_data["last_successful_transcript"] = last_line_text
-            logger.debug(f"Updated rolling context for session {session_id_for_log}: '{last_line_text}'")
+            
+            # To prevent Whisper from repeating the prompt, only use the last few
+            # words as context. This guides the model without being overly prescriptive.
+            words = last_line_text.split()
+            context_words = " ".join(words[-10:])
+            
+            session_data["last_successful_transcript"] = context_words
+            logger.debug(f"Updated rolling context for session {session_id_for_log} with last 10 words: '{context_words}'")
         # --- End context update ---
 
         # Perform S3 append if there's new content

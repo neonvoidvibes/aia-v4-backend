@@ -36,7 +36,8 @@ class VADIntegrationBridge:
         self.base_temp_dir = base_temp_dir
         
         # Initialize VAD transcription manager
-        vad_aggressiveness = int(os.getenv('VAD_AGGRESSIVENESS', '2'))
+        # Mode 3 is the most aggressive and recommended for filtering out non-speech to prevent hallucinations.
+        vad_aggressiveness = int(os.getenv('VAD_AGGRESSIVENESS', '3'))
         
         try:
             self.vad_manager = VADTranscriptionManager(
