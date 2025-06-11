@@ -24,10 +24,20 @@ import queue
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple, Callable
 import wave
+import numpy as np
 
 import webrtcvad
 import openai
 import requests
+
+# Try to import audio processing libraries
+try:
+    from scipy import signal
+    from scipy.io import wavfile
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    logger.warning("scipy not available - advanced audio filtering disabled")
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -183,6 +193,7 @@ class VADTranscriptionService:
     def detect_voice_activity(self, wav_path: str, session_id: str) -> Tuple[bytes, Dict[str, Any]]:
         """
         Perform Voice Activity Detection on a WAV file and extract voiced frames.
+        Enhanced with minimum duration filtering and voice continuity checks.
         
         Args:
             wav_path: Path to WAV file to analyze
@@ -191,9 +202,13 @@ class VADTranscriptionService:
         Returns:
             Tuple of (voiced_audio_bytes: bytes, vad_details: Dict[str, Any])
         """
-        logger.debug(f"Session {session_id}: Starting VAD analysis and extraction on {wav_path}")
+        logger.debug(f"Session {session_id}: Starting enhanced VAD analysis and extraction on {wav_path}")
         
         voiced_audio_data = bytearray()
+        
+        # Enhanced VAD configuration
+        MIN_SEGMENT_DURATION_SECONDS = float(os.getenv('VAD_MIN_SEGMENT_DURATION', '1.0'))
+        MIN_CONTINUITY_FRAMES = int(os.getenv('VAD_CONTINUITY_THRESHOLD', '10'))
         
         vad_details = {
             "total_frames": 0,
@@ -201,7 +216,13 @@ class VADTranscriptionService:
             "voiced_frame_ratio": 0.0,
             "processing_time_ms": 0,
             "frame_duration_ms": self.vad_frame_duration_ms,
-            "aggressiveness": self.vad_aggressiveness
+            "aggressiveness": self.vad_aggressiveness,
+            "min_duration_seconds": MIN_SEGMENT_DURATION_SECONDS,
+            "min_continuity_frames": MIN_CONTINUITY_FRAMES,
+            "longest_voice_run_frames": 0,
+            "voice_fragmentation_score": 0.0,
+            "minimum_duration_rejected": False,
+            "continuity_rejected": False
         }
         
         try:
@@ -218,29 +239,79 @@ class VADTranscriptionService:
                 
                 audio_data = wf.readframes(wf.getnframes())
             
+            # First pass: analyze frame-by-frame voice activity
             voiced_frames, total_frames = 0, 0
+            voice_decisions = []  # Track voice decisions for continuity analysis
             
             for i in range(0, len(audio_data) - self.vad_frame_bytes + 1, self.vad_frame_bytes):
                 frame = audio_data[i:i + self.vad_frame_bytes]
                 total_frames += 1
                 
                 try:
-                    if self.vad.is_speech(frame, sample_rate):
+                    is_voice = self.vad.is_speech(frame, sample_rate)
+                    voice_decisions.append(is_voice)
+                    if is_voice:
                         voiced_frames += 1
-                        voiced_audio_data.extend(frame)
                 except Exception as frame_error:
                     logger.warning(f"Session {session_id}: VAD error on frame {total_frames}: {frame_error}")
+                    voice_decisions.append(False)
                     continue
             
             processing_time = (time.time() - start_time) * 1000
             voiced_ratio = voiced_frames / total_frames if total_frames > 0 else 0.0
             
+            # Calculate total voiced duration
+            voiced_duration_seconds = (voiced_frames * self.vad_frame_duration_ms) / 1000.0
+            
+            # Analyze voice continuity
+            voice_runs = self._analyze_voice_continuity(voice_decisions)
+            longest_run = max(voice_runs) if voice_runs else 0
+            fragmentation_score = self._calculate_fragmentation_score(voice_decisions, voiced_frames)
+            
             vad_details.update({
-                "total_frames": total_frames, "voiced_frames": voiced_frames,
-                "voiced_frame_ratio": voiced_ratio, "processing_time_ms": processing_time
+                "total_frames": total_frames,
+                "voiced_frames": voiced_frames,
+                "voiced_frame_ratio": voiced_ratio,
+                "processing_time_ms": processing_time,
+                "voiced_duration_seconds": voiced_duration_seconds,
+                "longest_voice_run_frames": longest_run,
+                "voice_fragmentation_score": fragmentation_score,
+                "voice_runs": voice_runs
             })
             
-            logger.info(f"Session {session_id}: VAD Analysis Complete. Total Frames: {total_frames}, Voiced: {voiced_frames}, Ratio: {voiced_ratio:.3f}. Extracted {len(voiced_audio_data)} voiced bytes.")
+            # Enhanced filtering checks
+            
+            # Check 1: Minimum duration filter
+            if voiced_duration_seconds < MIN_SEGMENT_DURATION_SECONDS:
+                vad_details["minimum_duration_rejected"] = True
+                logger.info(f"Session {session_id}: VAD rejected - insufficient voiced duration {voiced_duration_seconds:.2f}s < {MIN_SEGMENT_DURATION_SECONDS}s")
+                return b"", vad_details
+            
+            # Check 2: Voice continuity filter
+            if longest_run < MIN_CONTINUITY_FRAMES:
+                vad_details["continuity_rejected"] = True
+                logger.info(f"Session {session_id}: VAD rejected - insufficient voice continuity. Longest run: {longest_run} < {MIN_CONTINUITY_FRAMES} frames")
+                return b"", vad_details
+            
+            # Check 3: Fragmentation filter (too scattered voice)
+            if fragmentation_score > 0.7:  # High fragmentation
+                vad_details["fragmentation_rejected"] = True
+                logger.info(f"Session {session_id}: VAD rejected - high voice fragmentation score: {fragmentation_score:.3f}")
+                return b"", vad_details
+            
+            # All checks passed - extract voiced audio
+            frame_index = 0
+            for i in range(0, len(audio_data) - self.vad_frame_bytes + 1, self.vad_frame_bytes):
+                if frame_index < len(voice_decisions) and voice_decisions[frame_index]:
+                    frame = audio_data[i:i + self.vad_frame_bytes]
+                    voiced_audio_data.extend(frame)
+                frame_index += 1
+            
+            logger.info(f"Session {session_id}: Enhanced VAD Analysis Complete. "
+                       f"Total: {total_frames}, Voiced: {voiced_frames}, Ratio: {voiced_ratio:.3f}, "
+                       f"Duration: {voiced_duration_seconds:.2f}s, Longest Run: {longest_run}, "
+                       f"Fragmentation: {fragmentation_score:.3f}. "
+                       f"Extracted {len(voiced_audio_data)} voiced bytes.")
             
             return bytes(voiced_audio_data), vad_details
             
@@ -248,6 +319,316 @@ class VADTranscriptionService:
             logger.error(f"Session {session_id}: VAD analysis failed: {e}", exc_info=True)
             vad_details["error"] = str(e)
             return b"", vad_details
+    
+    def _analyze_voice_continuity(self, voice_decisions: List[bool]) -> List[int]:
+        """
+        Analyze voice continuity by finding consecutive voice runs.
+        
+        Args:
+            voice_decisions: List of boolean voice decisions for each frame
+            
+        Returns:
+            List of voice run lengths (in frames)
+        """
+        runs = []
+        current_run = 0
+        
+        for is_voice in voice_decisions:
+            if is_voice:
+                current_run += 1
+            else:
+                if current_run > 0:
+                    runs.append(current_run)
+                    current_run = 0
+        
+        # Add final run if it was ongoing
+        if current_run > 0:
+            runs.append(current_run)
+        
+        return runs
+    
+    def _calculate_fragmentation_score(self, voice_decisions: List[bool], voiced_frames: int) -> float:
+        """
+        Calculate voice fragmentation score (0.0 = continuous, 1.0 = highly fragmented).
+        
+        Args:
+            voice_decisions: List of boolean voice decisions
+            voiced_frames: Total number of voiced frames
+            
+        Returns:
+            Fragmentation score between 0.0 and 1.0
+        """
+        if voiced_frames == 0 or len(voice_decisions) == 0:
+            return 1.0
+        
+        # Count voice transitions (voice -> silence or silence -> voice)
+        transitions = 0
+        for i in range(1, len(voice_decisions)):
+            if voice_decisions[i] != voice_decisions[i-1]:
+                transitions += 1
+        
+        # Normalize by the number of voiced frames
+        # More transitions relative to voiced content = higher fragmentation
+        if voiced_frames == 0:
+            return 1.0
+        
+        fragmentation = transitions / (2 * voiced_frames)  # Divide by 2 since each voice segment has at most 2 transitions
+        return min(fragmentation, 1.0)  # Cap at 1.0
+
+    def apply_audio_enhancement_pipeline(self, wav_path: str, session_id: str) -> Tuple[str, Dict[str, Any]]:
+        """
+        Apply audio quality enhancement pipeline to WAV file.
+        
+        Args:
+            wav_path: Path to input WAV file
+            session_id: Session ID for logging context
+            
+        Returns:
+            Tuple of (enhanced_wav_path, enhancement_details)
+        """
+        enhancement_details = {
+            "original_file": wav_path,
+            "noise_gate_applied": False,
+            "spectral_filter_applied": False,
+            "compression_applied": False,
+            "enhancement_time_ms": 0,
+            "rms_before": 0.0,
+            "rms_after": 0.0,
+            "dynamic_range_before": 0.0,
+            "dynamic_range_after": 0.0,
+            "scipy_available": SCIPY_AVAILABLE
+        }
+        
+        if not SCIPY_AVAILABLE:
+            logger.warning(f"Session {session_id}: Audio enhancement skipped - scipy not available")
+            return wav_path, enhancement_details
+        
+        try:
+            start_time = time.time()
+            
+            # Read original audio
+            sample_rate, audio_data = wavfile.read(wav_path)
+            
+            if audio_data.dtype != np.int16:
+                logger.warning(f"Session {session_id}: Converting audio from {audio_data.dtype} to int16")
+                audio_data = audio_data.astype(np.int16)
+            
+            # Calculate original metrics
+            enhancement_details["rms_before"] = self._calculate_rms(audio_data)
+            enhancement_details["dynamic_range_before"] = self._calculate_dynamic_range(audio_data)
+            
+            logger.debug(f"Session {session_id}: Original audio - RMS: {enhancement_details['rms_before']:.3f}, "
+                        f"Dynamic Range: {enhancement_details['dynamic_range_before']:.1f}dB")
+            
+            # Step 1: Apply noise gate
+            audio_data, gate_applied = self._apply_noise_gate(audio_data, session_id)
+            enhancement_details["noise_gate_applied"] = gate_applied
+            
+            # Step 2: Apply spectral filtering
+            audio_data, filter_applied = self._apply_spectral_filter(audio_data, sample_rate, session_id)
+            enhancement_details["spectral_filter_applied"] = filter_applied
+            
+            # Step 3: Apply dynamic range compression
+            audio_data, compression_applied = self._apply_compression(audio_data, session_id)
+            enhancement_details["compression_applied"] = compression_applied
+            
+            # Calculate enhanced metrics
+            enhancement_details["rms_after"] = self._calculate_rms(audio_data)
+            enhancement_details["dynamic_range_after"] = self._calculate_dynamic_range(audio_data)
+            
+            # Write enhanced audio to new file
+            enhanced_path = wav_path.replace('.wav', '_enhanced.wav')
+            wavfile.write(enhanced_path, sample_rate, audio_data)
+            
+            enhancement_details["enhancement_time_ms"] = (time.time() - start_time) * 1000
+            enhancement_details["enhanced_file"] = enhanced_path
+            
+            logger.info(f"Session {session_id}: Audio enhancement complete in {enhancement_details['enhancement_time_ms']:.1f}ms. "
+                       f"RMS: {enhancement_details['rms_before']:.3f} → {enhancement_details['rms_after']:.3f}, "
+                       f"Dynamic Range: {enhancement_details['dynamic_range_before']:.1f}dB → {enhancement_details['dynamic_range_after']:.1f}dB")
+            
+            return enhanced_path, enhancement_details
+            
+        except Exception as e:
+            logger.error(f"Session {session_id}: Audio enhancement failed: {e}", exc_info=True)
+            enhancement_details["error"] = str(e)
+            return wav_path, enhancement_details
+    
+    def _apply_noise_gate(self, audio_data: np.ndarray, session_id: str) -> Tuple[np.ndarray, bool]:
+        """Apply noise gate to remove low-level background noise."""
+        try:
+            # Configuration
+            gate_threshold = float(os.getenv('AUDIO_NOISE_GATE_THRESHOLD', '0.03'))
+            fade_duration_samples = int(0.01 * 16000)  # 10ms fade
+            
+            # Calculate threshold in absolute terms
+            max_amplitude = np.max(np.abs(audio_data))
+            threshold = int(max_amplitude * gate_threshold)
+            
+            # Apply gate with smooth transitions
+            gated_audio = audio_data.copy()
+            below_threshold = np.abs(audio_data) < threshold
+            
+            # Find regions to gate
+            gate_regions = []
+            in_gate_region = False
+            start_idx = 0
+            
+            for i, below in enumerate(below_threshold):
+                if below and not in_gate_region:
+                    start_idx = i
+                    in_gate_region = True
+                elif not below and in_gate_region:
+                    gate_regions.append((start_idx, i))
+                    in_gate_region = False
+            
+            # Add final region if needed
+            if in_gate_region:
+                gate_regions.append((start_idx, len(audio_data)))
+            
+            # Apply gating with fades
+            gates_applied = 0
+            for start, end in gate_regions:
+                if end - start > fade_duration_samples * 2:  # Only gate if region is long enough
+                    # Fade out
+                    fade_out_end = min(start + fade_duration_samples, end)
+                    fade_factor = np.linspace(1.0, 0.0, fade_out_end - start)
+                    gated_audio[start:fade_out_end] = (gated_audio[start:fade_out_end] * fade_factor).astype(np.int16)
+                    
+                    # Gate middle section
+                    if fade_out_end < end - fade_duration_samples:
+                        gated_audio[fade_out_end:end - fade_duration_samples] = 0
+                    
+                    # Fade in
+                    fade_in_start = max(end - fade_duration_samples, start)
+                    if fade_in_start < end:
+                        fade_factor = np.linspace(0.0, 1.0, end - fade_in_start)
+                        gated_audio[fade_in_start:end] = (gated_audio[fade_in_start:end] * fade_factor).astype(np.int16)
+                    
+                    gates_applied += 1
+            
+            logger.debug(f"Session {session_id}: Noise gate applied {gates_applied} regions with threshold {gate_threshold}")
+            return gated_audio, gates_applied > 0
+            
+        except Exception as e:
+            logger.warning(f"Session {session_id}: Noise gate failed: {e}")
+            return audio_data, False
+    
+    def _apply_spectral_filter(self, audio_data: np.ndarray, sample_rate: int, session_id: str) -> Tuple[np.ndarray, bool]:
+        """Apply spectral filtering to remove noise outside speech range."""
+        try:
+            # Configuration
+            highpass_freq = 80  # Remove rumble below 80Hz
+            lowpass_freq = 8000  # Remove noise above 8kHz
+            notch_freqs = [50, 60]  # Power line noise
+            
+            # Convert to float for processing
+            audio_float = audio_data.astype(np.float32)
+            nyquist = sample_rate / 2
+            
+            # High-pass filter (remove rumble)
+            if highpass_freq < nyquist:
+                sos_hp = signal.butter(4, highpass_freq / nyquist, btype='high', output='sos')
+                audio_float = signal.sosfilt(sos_hp, audio_float)
+            
+            # Low-pass filter (remove high-frequency noise)
+            if lowpass_freq < nyquist:
+                sos_lp = signal.butter(4, lowpass_freq / nyquist, btype='low', output='sos')
+                audio_float = signal.sosfilt(sos_lp, audio_float)
+            
+            # Notch filters for power line noise
+            for notch_freq in notch_freqs:
+                if notch_freq < nyquist:
+                    # Create notch filter with Q factor of 30
+                    sos_notch = signal.iirnotch(notch_freq / nyquist, Q=30, output='sos')
+                    audio_float = signal.sosfilt(sos_notch, audio_float)
+            
+            # Convert back to int16
+            filtered_audio = np.clip(audio_float, -32768, 32767).astype(np.int16)
+            
+            logger.debug(f"Session {session_id}: Spectral filtering applied - "
+                        f"HP: {highpass_freq}Hz, LP: {lowpass_freq}Hz, Notch: {notch_freqs}")
+            return filtered_audio, True
+            
+        except Exception as e:
+            logger.warning(f"Session {session_id}: Spectral filtering failed: {e}")
+            return audio_data, False
+    
+    def _apply_compression(self, audio_data: np.ndarray, session_id: str) -> Tuple[np.ndarray, bool]:
+        """Apply dynamic range compression to normalize voice levels."""
+        try:
+            # Configuration
+            ratio = 3.0  # 3:1 compression ratio
+            threshold_db = -20.0  # Threshold in dB
+            attack_samples = int(0.005 * 16000)  # 5ms attack
+            release_samples = int(0.05 * 16000)  # 50ms release
+            makeup_gain_db = 6.0  # Makeup gain
+            
+            # Convert to float and normalize
+            audio_float = audio_data.astype(np.float32) / 32768.0
+            
+            # Calculate envelope using peak detection
+            envelope = np.abs(audio_float)
+            
+            # Smooth envelope with attack/release
+            smoothed_envelope = envelope.copy()
+            gain_reduction = np.ones_like(envelope)
+            
+            for i in range(1, len(envelope)):
+                if envelope[i] > smoothed_envelope[i-1]:
+                    # Attack
+                    alpha = 1.0 - np.exp(-1.0 / attack_samples)
+                else:
+                    # Release
+                    alpha = 1.0 - np.exp(-1.0 / release_samples)
+                
+                smoothed_envelope[i] = alpha * envelope[i] + (1.0 - alpha) * smoothed_envelope[i-1]
+            
+            # Apply compression
+            threshold_linear = 10.0 ** (threshold_db / 20.0)
+            
+            for i, env_val in enumerate(smoothed_envelope):
+                if env_val > threshold_linear:
+                    # Calculate gain reduction
+                    env_db = 20.0 * np.log10(max(env_val, 1e-10))
+                    over_threshold_db = env_db - threshold_db
+                    compressed_db = threshold_db + (over_threshold_db / ratio)
+                    gain_reduction[i] = 10.0 ** ((compressed_db - env_db) / 20.0)
+            
+            # Apply gain reduction and makeup gain
+            compressed_audio = audio_float * gain_reduction
+            makeup_gain_linear = 10.0 ** (makeup_gain_db / 20.0)
+            compressed_audio *= makeup_gain_linear
+            
+            # Convert back to int16 with clipping
+            compressed_audio = np.clip(compressed_audio * 32768.0, -32768, 32767).astype(np.int16)
+            
+            logger.debug(f"Session {session_id}: Compression applied - "
+                        f"Ratio: {ratio}:1, Threshold: {threshold_db}dB, Makeup: {makeup_gain_db}dB")
+            return compressed_audio, True
+            
+        except Exception as e:
+            logger.warning(f"Session {session_id}: Compression failed: {e}")
+            return audio_data, False
+    
+    def _calculate_rms(self, audio_data: np.ndarray) -> float:
+        """Calculate RMS (Root Mean Square) of audio data."""
+        try:
+            return float(np.sqrt(np.mean(audio_data.astype(np.float32) ** 2)) / 32768.0)
+        except:
+            return 0.0
+    
+    def _calculate_dynamic_range(self, audio_data: np.ndarray) -> float:
+        """Calculate dynamic range in dB."""
+        try:
+            audio_float = audio_data.astype(np.float32) / 32768.0
+            max_val = np.max(np.abs(audio_float))
+            min_val = np.percentile(np.abs(audio_float[np.abs(audio_float) > 0]), 5)  # 5th percentile as noise floor
+            if min_val > 0 and max_val > 0:
+                return 20.0 * np.log10(max_val / min_val)
+            return 0.0
+        except:
+            return 0.0
 
     def transcribe_with_whisper(self, wav_path: str, session_id: str, 
                                language_setting: str = "any") -> Optional[Dict[str, Any]]:
@@ -422,9 +803,20 @@ class VADTranscriptionService:
             result["files_created"].append(wav_path)
             result["audio_duration_seconds"] = duration
             
+            # Step 2.5: Apply audio enhancement pipeline
+            step_start = time.time()
+            enhanced_wav_path, enhancement_details = self.apply_audio_enhancement_pipeline(wav_path, session_id)
+            result["processing_times"]["audio_enhancement"] = (time.time() - step_start) * 1000
+            result["enhancement_details"] = enhancement_details
+            if enhanced_wav_path != wav_path:
+                result["files_created"].append(enhanced_wav_path)
+            
+            # Use enhanced audio for VAD analysis
+            vad_input_path = enhanced_wav_path
+            
             # Step 3: VAD analysis and extraction
             step_start = time.time()
-            voiced_audio_bytes, vad_details = self.detect_voice_activity(wav_path, session_id)
+            voiced_audio_bytes, vad_details = self.detect_voice_activity(vad_input_path, session_id)
             result["processing_times"]["vad_analysis"] = (time.time() - step_start) * 1000
             result["has_voice"] = len(voiced_audio_bytes) > 0
             result["vad_details"] = vad_details
@@ -464,7 +856,15 @@ class VADTranscriptionService:
         finally:
             # Step 5: Cleanup temporary files (but keep clean_wav_path for callback)
             cleanup_start = time.time()
-            for file_path in [webm_path, wav_path]:  # Don't clean up clean_wav_path yet
+            cleanup_files = [webm_path, wav_path]
+            
+            # Add enhanced WAV file to cleanup if it was created
+            enhanced_wav_path = result.get("enhancement_details", {}).get("enhanced_file")
+            if enhanced_wav_path and enhanced_wav_path != wav_path:
+                cleanup_files.append(enhanced_wav_path)
+            
+            # Don't clean up clean_wav_path yet - it's needed for the callback
+            for file_path in cleanup_files:
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)

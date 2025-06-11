@@ -8,6 +8,9 @@ from collections import defaultdict
 # Defer imports to fix circular dependency
 # from vad_transcription_service import VADTranscriptionManager, SessionAudioProcessor
 
+# Import hallucination detection
+from utils.hallucination_detector import get_hallucination_manager, cleanup_session_manager
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -65,6 +68,7 @@ class VADIntegrationBridge:
     def _handle_transcription_result(self, result: Dict[str, Any]):
         """
         Callback function to handle transcription results from the VAD pipeline.
+        Enhanced with hallucination detection before S3 processing.
         This function is called by the SessionAudioProcessor.
         """
         session_id = result.get("session_id")
@@ -76,6 +80,45 @@ class VADIntegrationBridge:
 
         try:
             from transcription_service import process_audio_segment_and_update_s3
+            
+            # Extract transcription text for hallucination detection
+            transcription = result.get("transcription")
+            if not transcription or not transcription.get("text"):
+                logger.warning(f"VAD Bridge: No transcription text found for session {session_id}")
+                return
+            
+            transcript_text = transcription.get("text", "").strip()
+            if not transcript_text:
+                logger.warning(f"VAD Bridge: Empty transcription text for session {session_id}")
+                return
+            
+            # Perform hallucination detection
+            hallucination_manager = get_hallucination_manager(session_id)
+            is_valid, reason = hallucination_manager.process_transcript(transcript_text)
+            
+            if not is_valid:
+                logger.warning(f"VAD Bridge: Hallucination detected for session {session_id} - '{transcript_text}' (reason: {reason})")
+                
+                # Log hallucination statistics
+                stats = hallucination_manager.get_statistics()
+                logger.info(f"VAD Bridge: Session {session_id} hallucination stats - "
+                           f"Total: {stats['total_transcripts']}, "
+                           f"Valid: {stats['valid_transcripts']}, "
+                           f"Hallucinations: {stats['hallucinations_detected']}, "
+                           f"Rate: {stats['hallucination_rate']:.1%}")
+                
+                # Clean up the clean WAV file (skip S3 processing for hallucinations)
+                clean_wav_path = result.get("clean_wav_path")
+                if clean_wav_path and os.path.exists(clean_wav_path):
+                    try:
+                        os.remove(clean_wav_path)
+                        logger.debug(f"VAD Bridge: Cleaned up clean WAV file after hallucination detection: {clean_wav_path}")
+                    except Exception as cleanup_e:
+                        logger.warning(f"VAD Bridge: Failed to clean up clean WAV file {clean_wav_path}: {cleanup_e}")
+                
+                return  # Skip S3 processing for hallucinations
+            
+            logger.info(f"VAD Bridge: Valid transcription for session {session_id} - '{transcript_text[:100]}...'")
             
             with self.bridge_lock:
                 if session_id not in self.session_metadata:
@@ -201,6 +244,9 @@ class VADIntegrationBridge:
                 
                 # Destroy the session
                 self.vad_manager.destroy_session(session_id)
+                
+                # Clean up hallucination manager
+                cleanup_session_manager(session_id)
                 
                 # Clean up local references
                 del self.session_processors[session_id]
