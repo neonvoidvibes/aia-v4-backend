@@ -17,6 +17,7 @@ import subprocess
 from werkzeug.utils import secure_filename # Added for file uploads
 
 from flask_sock import Sock 
+from simple_websocket.errors import ConnectionClosed
 
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError
@@ -1042,6 +1043,8 @@ def audio_stream_socket(ws, session_id: str):
                     except Exception as e_close: logger.error(f"Error closing WebSocket for externally stopped session {session_id}: {e_close}")
                 break
 
+    except ConnectionClosed as e:
+        logger.info(f"WebSocket for session {session_id} (user {user.id}): Connection closed by client. Code: {e.code}, Reason: {e.reason}")
     except ConnectionResetError:
         logger.warning(f"WebSocket for session {session_id} (user {user.id}): Connection reset by client.")
     except Exception as e:
