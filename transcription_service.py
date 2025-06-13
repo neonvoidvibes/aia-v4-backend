@@ -464,6 +464,28 @@ def process_audio_segment_and_update_s3(
     session_lock: threading.Lock # Renamed from s3_lock for clarity
     ) -> bool:
     
+    # --- Part 1a: Calculate actual duration before anything else ---
+    # This is now the authoritative source of duration for the segment.
+    actual_duration_from_ffprobe = 0.0
+    try:
+        ffprobe_command = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', temp_segment_wav_path]
+        duration_result = subprocess.run(ffprobe_command, capture_output=True, text=True, check=True)
+        actual_duration_from_ffprobe = float(duration_result.stdout.strip())
+        logger.info(f"ffprobe successful for {os.path.basename(temp_segment_wav_path)}: duration {actual_duration_from_ffprobe:.2f}s")
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as ffprobe_err:
+        logger.error(f"ffprobe failed for {temp_segment_wav_path}: {ffprobe_err}. Estimating duration from file size.")
+        try:
+            file_size_bytes = os.path.getsize(temp_segment_wav_path)
+            # For 16-bit mono 16kHz WAV
+            bytes_per_second = 16000 * 2
+            if bytes_per_second > 0:
+                actual_duration_from_ffprobe = file_size_bytes / bytes_per_second
+                logger.warning(f"Using estimated duration from file size: {actual_duration_from_ffprobe:.2f}s")
+        except Exception as size_err:
+             logger.error(f"Could not get file size for fallback duration estimation: {size_err}")
+             actual_duration_from_ffprobe = 1.5 # Final fallback
+
+
     # --- Part 1: Setup and Slow Operations (outside lock) ---
     session_id = session_data.get("session_id")
     s3_transcript_key = session_data.get('s3_transcript_key')
@@ -574,8 +596,8 @@ def process_audio_segment_and_update_s3(
         logger.debug(f"SESSION_LOCK_ACQUIRED for session {session_id_for_log}")
 
         # CRITICAL FIX: Update duration BEFORE timestamp calculation to fix frozen timestamps
-        # Get actual duration and update the total processed duration first
-        actual_segment_duration = session_data.get('actual_segment_duration_seconds', 0.0)
+        # Use the duration calculated at the start of this function. This is the key fix.
+        actual_segment_duration = actual_duration_from_ffprobe
         
         # ATOMIC READ of current offset for this segment's timestamps
         segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
@@ -583,13 +605,11 @@ def process_audio_segment_and_update_s3(
         # Update total duration immediately after reading the offset for timestamps
         if actual_segment_duration > 0:
             session_data['current_total_audio_duration_processed_seconds'] += actual_segment_duration
-            logger.info(f"Updated session {session_id_for_log} processed duration with ACTUAL duration: +{actual_segment_duration:.2f}s = {session_data['current_total_audio_duration_processed_seconds']:.2f}s total")
+            # Logged at a higher level of INFO because this is a critical value for correct timestamps.
+            logger.info(f"Updated session {session_id_for_log} total processed duration: +{actual_segment_duration:.2f}s = {session_data['current_total_audio_duration_processed_seconds']:.2f}s total")
         else:
-            # Fallback: if no actual duration available, use a conservative estimate
-            # This can happen in VAD path or if ffprobe fails
-            estimated_fallback_duration = 1.5  # Conservative estimate based on observation
-            session_data['current_total_audio_duration_processed_seconds'] += estimated_fallback_duration
-            logger.warning(f"Session {session_id_for_log}: No actual segment duration available, using fallback estimate of {estimated_fallback_duration:.2f}s")
+            # This case should now be rare due to ffprobe fallback logic, but it's safe to keep.
+            logger.warning(f"Session {session_id_for_log}: actual_segment_duration was 0. Timestamps might not advance.")
         
         # Run filters that depend on session state/offset
         final_filtered_segments = detect_single_word_loops(filtered_segments_pre_lock, session_data, segment_offset_seconds)
