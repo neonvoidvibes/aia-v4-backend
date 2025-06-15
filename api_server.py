@@ -1529,7 +1529,7 @@ def handle_chat(user: SupabaseUser):
 
             # --- Call LLM and Stream ---
             stream_manager = _call_anthropic_stream_with_retry(
-                model=os.getenv("LLM_MODEL_NAME", "claude-3-haiku-20240307"),
+                model=os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514"),
                 max_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096)),
                 system=final_system_prompt,
                 messages=final_llm_messages
