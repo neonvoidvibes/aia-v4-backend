@@ -40,7 +40,8 @@ class RetrievalHandler:
         session_id: Optional[str] = None,
         event_id: Optional[str] = None,
         top_k: int = 10, # Keep moderate top_k for now
-        anthropic_client: Optional[Anthropic] = None # Expect client instance
+        anthropic_client: Optional[Anthropic] = None, # Expect client instance
+        openai_api_key: Optional[str] = None # Agent-specific key
     ):
         """Initialize retrieval handler."""
         if not agent_name: raise ValueError("agent_name required")
@@ -55,7 +56,11 @@ class RetrievalHandler:
         self.anthropic_client = anthropic_client # Store client instance
 
         try:
-            self.embeddings = OpenAIEmbeddings(model=self.embedding_model_name)
+            # Initialize embeddings with the provided key. If None, it will fall back to the env var.
+            self.embeddings = OpenAIEmbeddings(
+                model=self.embedding_model_name,
+                api_key=openai_api_key
+            )
             logger.info(f"Retriever: Initialized Embeddings model '{self.embedding_model_name}'.")
         except Exception as e: raise RuntimeError("Failed Embeddings init") from e
 

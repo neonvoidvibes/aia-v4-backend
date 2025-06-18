@@ -188,13 +188,18 @@ class VADTranscriptionService:
 
             logger.info(f"Session {session_id}: Submitting clean WAV {clean_wav_path} to executor.")
             
-            # Pass the original session_data. The offset is now managed correctly in the main thread.
+            # Retrieve keys from session data to pass to the processing function
+            openai_key = session_data.get("openai_api_key")
+            anthropic_key = session_data.get("anthropic_api_key")
+
             from transcription_service import process_audio_segment_and_update_s3
             current_app.executor.submit(
                 process_audio_segment_and_update_s3,
                 temp_segment_wav_path=clean_wav_path,
                 session_data=session_data,
-                session_lock=session_lock
+                session_lock=session_lock,
+                openai_api_key=openai_key,
+                anthropic_api_key=anthropic_key
             )
         except Exception as e:
             logger.error(f"Session {session_id}: Failed to save and submit voiced segment: {e}", exc_info=True)

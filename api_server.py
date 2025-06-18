@@ -16,6 +16,7 @@ from collections import defaultdict
 import subprocess 
 from werkzeug.utils import secure_filename # Added for file uploads
 
+from utils.api_key_manager import get_api_key # Import the new key manager
 from flask_sock import Sock 
 from simple_websocket.errors import ConnectionClosed
 
@@ -346,11 +347,21 @@ def supabase_auth_required(agent_required: bool = True):
     return decorator
 
 @retry_strategy
-def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
+def _call_anthropic_stream_with_retry(model, max_tokens, system, messages, api_key: str):
     if anthropic_circuit_breaker.is_open():
         raise CircuitBreakerOpen("Assistant is temporarily unavailable due to upstream issues. Please try again in a moment.")
 
-    if not anthropic_client: raise RuntimeError("Anthropic client not initialized.")
+    if not api_key:
+        logger.error("Anthropic call failed: No API key was provided.")
+        raise ValueError("API key for Anthropic is missing.")
+    
+    # Initialize a transient client with the provided key for this specific call
+    try:
+        transient_anthropic_client = Anthropic(api_key=api_key)
+    except Exception as e:
+        logger.error(f"Failed to initialize transient Anthropic client: {e}", exc_info=True)
+        raise RuntimeError("Failed to initialize transient Anthropic client") from e
+
     # Enhanced logging for API call payload
     logger.info("="*15 + " ANTHROPIC API CALL (STREAM) " + "="*15)
     logger.info(f"Model: {model}, MaxTokens: {max_tokens}")
@@ -371,7 +382,7 @@ def _call_anthropic_stream_with_retry(model, max_tokens, system, messages):
         logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
     logger.info("="*15 + " END ANTHROPIC API CALL " + "="*15)
     
-    return anthropic_client.messages.stream(model=model, max_tokens=max_tokens, system=system, messages=messages)
+    return transient_anthropic_client.messages.stream(model=model, max_tokens=max_tokens, system=system, messages=messages)
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -414,6 +425,9 @@ def start_recording_route(user: SupabaseUser):
 
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
+    # Fetch agent-specific API keys or fall back to globals
+    agent_openai_key = get_api_key(agent_name, 'openai', supabase)
+    agent_anthropic_key = get_api_key(agent_name, 'anthropic', supabase)
     
     s3_transcript_base_filename = f"transcript_D{session_start_time_utc.strftime('%Y%m%d')}-T{session_start_time_utc.strftime('%H%M%S')}_uID-{user.id}_oID-river_aID-{agent_name}_eID-{event_id}_sID-{session_id}.txt"
     s3_transcript_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/{s3_transcript_base_filename}"
@@ -430,6 +444,8 @@ def start_recording_route(user: SupabaseUser):
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_transcript_key,
         "temp_audio_session_dir": temp_audio_base_dir, 
+        "openai_api_key": agent_openai_key,       # Store the potentially agent-specific key
+        "anthropic_api_key": agent_anthropic_key, # Store the potentially agent-specific key
         "is_backend_processing_paused": False,
         "current_total_audio_duration_processed_seconds": 0.0,
         "websocket_connection": None,
@@ -545,7 +561,13 @@ def _finalize_session(session_id: str):
                         session_data['actual_segment_duration_seconds'] = estimated_duration_final
                         logger.warning(f"Using rough estimated duration for final segment: {estimated_duration_final:.2f}s")
 
-                    process_audio_segment_and_update_s3(final_output_wav_path, session_data, session_locks[session_id])
+                    process_audio_segment_and_update_s3(
+                        temp_segment_wav_path=final_output_wav_path,
+                        session_data=session_data,
+                        session_lock=session_locks[session_id],
+                        openai_api_key=session_data.get("openai_api_key"),
+                        anthropic_api_key=session_data.get("anthropic_api_key")
+                    )
                 else:
                     logger.error(f"Session {session_id} Finalize: ffmpeg direct WAV conversion failed. RC: {process.returncode}, Err: {stderr.decode('utf-8', 'ignore')}")
             except Exception as e:
@@ -624,9 +646,17 @@ def summarize_transcript_route(user: SupabaseUser):
         logger.error("SummarizeTranscript: S3 client or bucket not configured.")
         return jsonify({"error": "S3 service not available"}), 503
     
-    if not anthropic_client:
-        logger.error("SummarizeTranscript: Anthropic client not initialized.")
-        return jsonify({"error": "LLM service for summarization not available"}), 503
+    agent_anthropic_key = get_api_key(agent_name, 'anthropic', supabase)
+    if not agent_anthropic_key:
+        logger.error(f"SummarizeTranscript: Could not retrieve Anthropic API key for agent '{agent_name}'.")
+        return jsonify({"error": "LLM service not available (key retrieval failed)"}), 503
+
+    try:
+        # Initialize a transient client for this request
+        summary_llm_client = Anthropic(api_key=agent_anthropic_key)
+    except Exception as e:
+        logger.error(f"SummarizeTranscript: Failed to initialize Anthropic client: {e}")
+        return jsonify({"error": "LLM service initialization failed"}), 503
 
     try:
         # 1. Read original transcript content
@@ -643,7 +673,7 @@ def summarize_transcript_route(user: SupabaseUser):
             agent_name=agent_name,
             event_id=event_id,
             source_s3_key=s3_key_original_transcript, # Pass the original S3 key
-            llm_client=anthropic_client 
+            llm_client=summary_llm_client
             # model_name and max_tokens will use defaults in generate_transcript_summary or be overridden by env vars there
         )
 
@@ -975,8 +1005,8 @@ def audio_stream_socket(ws, session_id: str):
 
                             def process_segment_in_thread(
                                 s_id, s_data_ref, lock_ref,
-                                audio_bytes, wav_path
-                                # REMOVED stale current_offset from args
+                                audio_bytes, wav_path,
+                                openai_key, anthropic_key
                             ):
                                 try:
                                     ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', wav_path]
@@ -997,30 +1027,32 @@ def audio_stream_socket(ws, session_id: str):
                                         logger.info(f"Thread Session {s_id}: Actual duration of WAV {wav_path} is {actual_segment_dur:.2f}s")
                                     except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
                                         logger.error(f"Thread Session {s_id}: ffprobe failed for {wav_path}: {ffprobe_err}. Estimating.")
-                                        # Fallback to a rough estimation based on WAV format (16kHz, 16-bit mono)
-                                        # This is a fallback and might not be perfectly accurate.
-                                        bytes_per_second = 16000 * 2 # 16kHz * 16-bit (2 bytes)
-                                        estimated_dur = len(audio_bytes) / bytes_per_second
+                                        bytes_per_second = 16000 * 2
+                                        estimated_dur = len(audio_bytes) / bytes_per_second if bytes_per_second > 0 else 0
                                         actual_segment_dur = estimated_dur
                                         logger.warning(f"Thread Session {s_id}: Using rough estimated duration: {actual_segment_dur:.2f}s")
                                     
-                                    # This update is also moved inside the locked section in transcription_service
-                                    # to ensure it's coupled with the offset calculation.
                                     with lock_ref:
                                         if s_id in active_sessions: 
                                             active_sessions[s_id]['actual_segment_duration_seconds'] = actual_segment_dur
                                         else:
-                                            logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration. Transcription might use old offset.")
+                                            logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration.")
                                             s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
-
-                                    success_transcribe = process_audio_segment_and_update_s3(wav_path, s_data_ref, lock_ref)
+                                    
+                                    success_transcribe = process_audio_segment_and_update_s3(
+                                        temp_segment_wav_path=wav_path,
+                                        session_data=s_data_ref,
+                                        session_lock=lock_ref,
+                                        openai_api_key=openai_key,
+                                        anthropic_api_key=anthropic_key
+                                    )
                                     if not success_transcribe:
                                          logger.error(f"Thread Session {s_id}: Transcription or S3 update failed for segment {wav_path}")
 
                                 except Exception as thread_e:
                                     logger.error(f"Thread Session {s_id}: Error during threaded segment processing: {thread_e}", exc_info=True)
                                 finally:
-                                    pass # Keep empty finally block
+                                    pass
                             
                             processing_thread = threading.Thread(
                                 target=process_segment_in_thread,
@@ -1029,8 +1061,9 @@ def audio_stream_socket(ws, session_id: str):
                                     session_data, 
                                     session_locks[session_id], 
                                     all_segment_bytes_for_ffmpeg_thread,
-                                    final_output_wav_path_thread
-                                    # REMOVED stale current_offset from args
+                                    final_output_wav_path_thread,
+                                    session_data.get("openai_api_key"),
+                                    session_data.get("anthropic_api_key")
                                 )
                             )
                             processing_thread.start()
@@ -1196,13 +1229,13 @@ def transcribe_uploaded_file(user: SupabaseUser):
             logger.info(f"Saving uploaded file temporarily to: {temp_filepath}")
             file.save(temp_filepath)
 
-            # Get agent_name from form data
+            # Get agent_name from form data and fetch the corresponding API key
             agent_name_from_form = request.form.get('agent_name', 'UnknownAgent')
             logger.info(f"Agent name from form for header: {agent_name_from_form}")
 
-            openai_api_key = os.getenv('OPENAI_API_KEY')
+            openai_api_key = get_api_key(agent_name_from_form, 'openai', supabase)
             if not openai_api_key:
-                logger.error("OpenAI API key not found for transcription service.")
+                logger.error(f"OpenAI API key not found for agent '{agent_name_from_form}' or globally.")
                 return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
             
             from transcription_service import _transcribe_audio_segment_openai as transcribe_whisper_file
@@ -1469,6 +1502,11 @@ def handle_chat(user: SupabaseUser):
             # --- RAG ---
             rag_context_block = ""
             last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
+            
+            # Fetch agent-specific keys for RAG (OpenAI) and Chat (Anthropic)
+            openai_key_for_rag = get_api_key(agent_name, 'openai', supabase)
+            anthropic_key_for_chat = get_api_key(agent_name, 'anthropic', supabase)
+
             if last_actual_user_message_for_rag:
                 rag_start_time = time.time()
                 normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
@@ -1476,7 +1514,15 @@ def handle_chat(user: SupabaseUser):
                 if not is_simple_query:
                     logger.info(f"Complex query ('{normalized_query[:50]}...'), attempting RAG.")
                     try:
-                        retriever = RetrievalHandler(index_name=agent_name, agent_name=agent_name, session_id=chat_session_id_log, event_id=event_id, anthropic_client=anthropic_client)
+                        # Pass the agent-specific key to the retriever
+                        retriever = RetrievalHandler(
+                            index_name=agent_name,
+                            agent_name=agent_name,
+                            session_id=chat_session_id_log,
+                            event_id=event_id,
+                            anthropic_client=anthropic_client,
+                            openai_api_key=openai_key_for_rag
+                        )
                         retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=5)
                         if retrieved_docs:
                             items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
@@ -1532,7 +1578,8 @@ def handle_chat(user: SupabaseUser):
                 model=os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514"),
                 max_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096)),
                 system=final_system_prompt,
-                messages=final_llm_messages
+                messages=final_llm_messages,
+                api_key=anthropic_key_for_chat # Pass the agent-specific key
             )
 
             with stream_manager as stream:

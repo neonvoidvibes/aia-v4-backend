@@ -461,8 +461,10 @@ def _transcribe_audio_segment_openai(
 def process_audio_segment_and_update_s3(
     temp_segment_wav_path: str, 
     session_data: Dict[str, Any], 
-    session_lock: threading.Lock # Renamed from s3_lock for clarity
-    ) -> bool:
+    session_lock: threading.Lock,
+    openai_api_key: Optional[str],
+    anthropic_api_key: Optional[str]
+) -> bool:
     
     # --- Part 1a: Calculate actual duration before anything else ---
     # This is now the authoritative source of duration for the segment.
@@ -500,10 +502,9 @@ def process_audio_segment_and_update_s3(
              try: os.remove(temp_segment_wav_path)
              except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path} after pre-check fail: {e_del}")
         return False
-    
-    openai_api_key = os.getenv('OPENAI_API_KEY')
+
     if not openai_api_key:
-        logger.error("OpenAI API key not found. Cannot transcribe.")
+        logger.error("OpenAI API key was not provided to process_audio_segment_and_update_s3. Cannot transcribe.")
         return False
         
     # Transcribe audio (slow network call), passing in the rolling context
@@ -580,13 +581,17 @@ def process_audio_segment_and_update_s3(
         filtered_segments_pre_lock = detect_cross_segment_repetition(filtered_segments_pre_lock)
         filtered_segments_pre_lock = [s for s in filtered_segments_pre_lock if filter_by_duration_and_confidence(s)]
 
-    # Get PII client ready inside the function to avoid circular import at module level
+    # Instantiate a transient PII client if PII filtering is enabled
     pii_llm_client_for_service = None
-    try:
-        from api_server import anthropic_client as global_anthropic_client
-        pii_llm_client_for_service = global_anthropic_client
-    except (ImportError, Exception) as e:
-        logger.warning(f"Could not get global Anthropic client for PII filter: {e}")
+    if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
+        if anthropic_api_key:
+            from anthropic import Anthropic
+            try:
+                pii_llm_client_for_service = Anthropic(api_key=anthropic_api_key)
+            except Exception as e:
+                logger.error(f"Failed to initialize transient Anthropic client for PII filtering: {e}")
+        else:
+            logger.warning("PII filtering is enabled, but no Anthropic API key was provided.")
 
     from utils.pii_filter import anonymize_transcript_chunk
     
