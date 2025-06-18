@@ -20,7 +20,7 @@ s3_client_lock = threading.Lock()
 # Global Cache for S3 files
 S3_FILE_CACHE: Dict[str, Dict[str, Any]] = {}
 S3_CACHE_LOCK = threading.Lock()
-S3_CACHE_TTL_DEFAULT = timedelta(minutes=5)
+S3_CACHE_TTL_DEFAULT = timedelta(minutes=120)
 S3_CACHE_TTL_NOT_FOUND = timedelta(minutes=1)
 
 def get_s3_client(config: Optional[BotoConfig] = None) -> Optional[boto3.client]:
