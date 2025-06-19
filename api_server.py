@@ -1408,6 +1408,40 @@ def manage_s3_file(user: SupabaseUser):
     
     return jsonify({"error": f"Unsupported action: {action_to_perform}"}), 400
 
+@app.route('/api/agent/warm-up', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def warm_up_agent_cache(user: SupabaseUser):
+    """
+    Proactively loads an agent's essential data (prompts, frameworks, etc.)
+    into the in-memory cache to speed up the first chat interaction.
+    This endpoint returns immediately while caching happens in the background.
+    """
+    data = g.get('json_data', {})
+    agent_name = data.get('agent')
+    event_id = data.get('event', '0000')
+
+    logger.info(f"Received cache warm-up request for agent: '{agent_name}', event: '{event_id}' from user: {user.id}")
+
+    def cache_worker(agent, event):
+        with app.app_context(): # Ensure background thread has app context if needed
+            logger.info(f"Background cache worker started for agent: '{agent}', event: '{event}'")
+            try:
+                # Calling these functions will populate the cache due to their internal logic
+                get_latest_system_prompt(agent)
+                get_latest_frameworks(agent)
+                get_latest_context(agent, event)
+                get_agent_docs(agent)
+                get_transcript_summaries(agent, event) # Also warm up summaries
+                logger.info(f"Background cache worker finished for agent: '{agent}', event: '{event}'")
+            except Exception as e:
+                logger.error(f"Error in background cache worker for agent '{agent}': {e}", exc_info=True)
+
+    # Submit the caching tasks to the background executor
+    app.executor.submit(cache_worker, agent_name, event_id)
+
+    return jsonify({"status": "success", "message": "Agent pre-caching initiated"}), 202
+
+
 @app.route('/api/s3/download', methods=['GET'])
 @supabase_auth_required(agent_required=False)
 def download_s3_document(user: SupabaseUser):
