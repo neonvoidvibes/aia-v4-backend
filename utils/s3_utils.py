@@ -527,9 +527,30 @@ def list_agent_names_from_s3() -> Optional[List[str]]:
 def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, Any]]:
     """
     Fetches and parses all JSON transcript summaries for a given agent and event.
+    Uses an in-memory cache to avoid repeated S3 calls.
     Returns a list of dictionaries, where each dictionary is a parsed JSON summary.
     Includes filename in the returned metadata for each summary.
     """
+    cache_key = f"transcript_summaries_{agent_name}_{event_id}"
+    description = f"transcript summaries for {agent_name}/{event_id}"
+
+    # 1. Check cache first
+    with S3_CACHE_LOCK:
+        cached_item = S3_FILE_CACHE.get(cache_key)
+        if cached_item and cached_item['expiry'] > datetime.now(timezone.utc):
+            logger.info(f"CACHE HIT for {description} ('{cache_key}')")
+            if cached_item['content'] is None:
+                return [] # Cached "not found"
+            try:
+                # Content is a JSON string, deserialize it
+                return json.loads(cached_item['content'])
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.error(f"CACHE CORRUPT for {description}: Could not parse cached JSON. Refetching. Error: {e}")
+                # Fall through to re-fetch if cache is corrupt
+
+    # 2. Cache miss, fetch from S3
+    logger.info(f"CACHE MISS for {description} ('{cache_key}')")
+    
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
@@ -573,7 +594,27 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
         logger.info(f"Fetched and parsed {len(parsed_summaries)} transcript summaries for {agent_name}/{event_id}.")
         # Optional: Sort summaries, e.g., by a timestamp within their metadata if available
         # For now, returning in S3 list order.
+
+        # 3. Update cache
+        with S3_CACHE_LOCK:
+            if parsed_summaries:
+                # Serialize list of dicts to a JSON string for caching
+                content_to_cache = json.dumps(parsed_summaries)
+                S3_FILE_CACHE[cache_key] = {
+                    'content': content_to_cache,
+                    'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_DEFAULT
+                }
+                logger.info(f"CACHE SET for {description} ('{cache_key}').")
+            else:
+                # Cache "not found"
+                S3_FILE_CACHE[cache_key] = {
+                    'content': None,
+                    'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_NOT_FOUND
+                }
+                logger.info(f"CACHE SET (None) for {description} ('{cache_key}').")
+        
         return parsed_summaries
+
     except Exception as e:
         logger.error(f"Error listing or fetching transcript summaries from '{summaries_prefix}': {e}", exc_info=True)
         return []

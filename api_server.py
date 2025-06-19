@@ -29,7 +29,8 @@ from utils.transcript_utils import read_new_transcript_content, read_all_transcr
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
-    list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries # Added get_transcript_summaries
+    list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries,
+    S3_CACHE_LOCK, S3_FILE_CACHE
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.pinecone_utils import init_pinecone
@@ -711,6 +712,13 @@ def summarize_transcript_route(user: SupabaseUser):
             # Check the response metadata for success
             if put_response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 200:
                 logger.info(f"SummarizeTranscript: Successfully saved summary to {summary_s3_key} (HTTP 200 OK).")
+
+                # Invalidate the cache for this agent/event's summaries
+                summaries_cache_key = f"transcript_summaries_{agent_name}_{event_id}"
+                with S3_CACHE_LOCK:
+                    if summaries_cache_key in S3_FILE_CACHE:
+                        del S3_FILE_CACHE[summaries_cache_key]
+                        logger.info(f"CACHE INVALIDATED for transcript summaries: '{summaries_cache_key}'")
                 
                 # Step 3: Move original transcript to a /saved subfolder
                 try:
