@@ -416,13 +416,17 @@ def _call_anthropic_stream_with_retry(model, max_tokens, system, messages, api_k
 
 @retry_strategy_gemini
 def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
-    # Note: Circuit breaker is not implemented for Gemini yet, but could be added.
-    
-    # The global genai client is configured with a key, but we can respect agent-specific keys if needed
-    # by re-configuring or creating a new client. For now, we assume global key is sufficient.
     if not api_key:
         logger.error("Gemini call failed: No API key was provided/configured.")
         raise ValueError("API key for Google Generative AI is missing.")
+
+    # The 'google-generativeai' library uses a global configuration (`genai.configure`) which is not thread-safe
+    # for handling multiple, per-request API keys. Therefore, we must use the globally configured key.
+    # A warning is logged if an agent-specific key is provided but cannot be used.
+    global_google_api_key = os.getenv('GOOGLE_API_KEY')
+    if api_key and global_google_api_key and api_key != global_google_api_key:
+        logger.warning("An agent-specific Google API key was provided, but the 'google-generativeai' library does not support per-request API keys in a thread-safe manner. The globally configured GOOGLE_API_KEY will be used for this request. This feature will be fully enabled when the library is updated.")
+        # Proceeding with the globally configured key.
 
     # Model is initialized here
     model = genai.GenerativeModel(
