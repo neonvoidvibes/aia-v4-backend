@@ -153,6 +153,8 @@ class CircuitBreaker:
 
 # Instantiate it globally
 anthropic_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+gemini_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+openai_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 
 # Custom Exception for Circuit Breaker
 class CircuitBreakerOpen(Exception):
@@ -379,7 +381,7 @@ def supabase_auth_required(agent_required: bool = True):
 @retry_strategy_anthropic
 def _call_anthropic_stream_with_retry(model, max_tokens, system, messages, api_key: str):
     if anthropic_circuit_breaker.is_open():
-        raise CircuitBreakerOpen("Assistant is temporarily unavailable due to upstream issues. Please try again in a moment.")
+        raise CircuitBreakerOpen("Assistant (Anthropic) is temporarily unavailable due to upstream issues. Please try again in a moment.")
 
     if not api_key:
         logger.error("Anthropic call failed: No API key was provided.")
@@ -416,6 +418,9 @@ def _call_anthropic_stream_with_retry(model, max_tokens, system, messages, api_k
 
 @retry_strategy_gemini
 def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
+    if gemini_circuit_breaker.is_open():
+        raise CircuitBreakerOpen("Assistant (Gemini) is temporarily unavailable due to upstream issues. Please try again in a moment.")
+
     if not api_key:
         logger.error("Gemini call failed: No API key was provided/configured.")
         raise ValueError("API key for Google Generative AI is missing.")
@@ -467,6 +472,9 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
 
 @retry_strategy_openai
 def _call_openai_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
+    if openai_circuit_breaker.is_open():
+        raise CircuitBreakerOpen("Assistant (OpenAI) is temporarily unavailable due to upstream issues. Please try again in a moment.")
+
     if not api_key:
         logger.error("OpenAI call failed: No API key was provided.")
         raise ValueError("API key for OpenAI is missing.")
@@ -1747,9 +1755,9 @@ def handle_chat(user: SupabaseUser):
             # --- Call LLM and Stream ---
             max_tokens_for_call = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
 
-            if model_selection.startswith('gemini'):
-                logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
-                try:
+            try:
+                if model_selection.startswith('gemini'):
+                    logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
                     # The Gemini API uses specific model names, ensure we use the correct one from their docs
                     gemini_model_name = 'gemini-2.5-flash' # DO NOT CHANGE: gemini-2.5-flash is a real and valid API model name
                     gemini_stream = _call_gemini_stream_with_retry(
@@ -1765,12 +1773,9 @@ def handle_chat(user: SupabaseUser):
                             text_delta = chunk.text
                             sse_data = json.dumps({'delta': text_delta})
                             yield f"data: {sse_data}\n\n"
-                except google_exceptions.GoogleAPICallError as e:
-                    logger.error(f"Gemini API error during stream: {e}", exc_info=True)
-                    yield f"data: {json.dumps({'error': f'Assistant API Error: {str(e)}'})}\n\n"
-            
-            elif model_selection.startswith('gpt-'):
-                try:
+
+                elif model_selection.startswith('gpt-'):
+                    logger.info(f"Dispatching chat request to OpenAI model: {model_selection}")
                     # The OpenAI API uses specific model names
                     openai_model_name = 'gpt-4.1' if '4.1' in model_selection else 'gpt-4o'  # DO NOT CHANGE: gpt-4.1 and gpt-4o are real and valid API model names
                     openai_stream = _call_openai_stream_with_retry(
@@ -1786,37 +1791,43 @@ def handle_chat(user: SupabaseUser):
                         if text_delta:
                             sse_data = json.dumps({'delta': text_delta})
                             yield f"data: {sse_data}\n\n"
-                except OpenAI_APIError as e:
-                    logger.error(f"OpenAI API error during stream: {e}", exc_info=True)
-                    yield f"data: {json.dumps({'error': f'Assistant API Error: {str(e)}'})}\n\n"
+                
+                else: # Default to Anthropic
+                    logger.info(f"Dispatching chat request to Anthropic model: {model_selection}")
+                    stream_manager = _call_anthropic_stream_with_retry(
+                        model=model_selection,
+                        max_tokens=max_tokens_for_call,
+                        system=final_system_prompt,
+                        messages=final_llm_messages,
+                        api_key=llm_api_key
+                    )
+                    with stream_manager as stream:
+                        for chunk in stream:
+                            if chunk.type == "content_block_delta":
+                                text_delta = chunk.delta.text
+                                sse_data = json.dumps({'delta': text_delta})
+                                yield f"data: {sse_data}\n\n"
 
-            else: # Default to Anthropic
-                logger.info(f"Dispatching chat request to Anthropic model: {model_selection}")
-                stream_manager = _call_anthropic_stream_with_retry(
-                    model=model_selection,
-                    max_tokens=max_tokens_for_call,
-                    system=final_system_prompt,
-                    messages=final_llm_messages,
-                    api_key=llm_api_key
-                )
-                with stream_manager as stream:
-                    for chunk in stream:
-                        if chunk.type == "content_block_delta":
-                            text_delta = chunk.delta.text
-                            sse_data = json.dumps({'delta': text_delta})
-                            yield f"data: {sse_data}\n\n"
+                sse_done_data = json.dumps({'done': True})
+                yield f"data: {sse_done_data}\n\n"
+                logger.info(f"Stream for chat with agent {agent_name} (model: {model_selection}) completed successfully.")
+
+            except CircuitBreakerOpen as e:
+                logger.error(f"Circuit breaker is open. Aborting stream. Error: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            except (google_exceptions.GoogleAPICallError, RetryError) as e:
+                logger.error(f"Gemini API error after retries: {e}", exc_info=True)
+                gemini_circuit_breaker.record_failure()
+                yield f"data: {json.dumps({'error': f'Assistant (Gemini) API Error: {str(e)}'})}\n\n"
+            except (OpenAI_APIError, RetryError) as e:
+                logger.error(f"OpenAI API error after retries: {e}", exc_info=True)
+                openai_circuit_breaker.record_failure()
+                yield f"data: {json.dumps({'error': f'Assistant (OpenAI) API Error: {str(e)}'})}\n\n"
+            except (AnthropicError, RetryError) as e:
+                logger.error(f"Anthropic API error after retries: {e}", exc_info=True)
+                anthropic_circuit_breaker.record_failure()
+                yield f"data: {json.dumps({'error': f'Assistant (Anthropic) API Error: {str(e)}'})}\n\n"
             
-            sse_done_data = json.dumps({'done': True})
-            yield f"data: {sse_done_data}\n\n"
-            logger.info(f"Stream for chat with agent {agent_name} (model: {model_selection}) completed successfully.")
-
-        except CircuitBreakerOpen as e:
-            logger.error(f"Circuit breaker is open. Aborting stream. Error: {e}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        except AnthropicError as e:
-            logger.error(f"Anthropic API error during stream: {e}", exc_info=True)
-            anthropic_circuit_breaker.record_failure()
-            yield f"data: {json.dumps({'error': f'Assistant API Error: {str(e)}'})}\n\n"
         except Exception as e:
             logger.error(f"Error in generate_stream: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': 'An internal server error occurred during the stream.'})}\n\n"
