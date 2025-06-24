@@ -1603,7 +1603,7 @@ def handle_chat(user: SupabaseUser):
     # Get default model from the existing LLM_MODEL_NAME env var, with a hardcoded fallback.
     default_model = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514")
     model_selection = data.get('model', default_model)
-    temperature = data.get('temperature', 0.5) # Default temperature
+    temperature = data.get('temperature', 0.7) # Default temperature
     incoming_messages = data.get('messages', [])
     chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S'))
 
