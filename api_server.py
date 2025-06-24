@@ -253,7 +253,12 @@ retry_strategy_gemini = retry(
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry_error_callback=log_retry_error,
     # Gemini can throw ResourceExhausted or other service unavailable errors
-    retry=(retry_if_exception_type((google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable)))
+    retry=(retry_if_exception_type((
+        google_exceptions.ResourceExhausted,
+        google_exceptions.ServiceUnavailable,
+        google_exceptions.DeadlineExceeded,
+        google_exceptions.InternalServerError
+    )))
 )
 
 retry_strategy_openai = retry(
@@ -337,7 +342,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
 
     except Exception as e:
         logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
-        return None, jsonify({"error": "Internal server error during authorization"}), 500
+        return user, (jsonify({"error": "Internal server error during authorization"}), 500)
 
 def supabase_auth_required(agent_required: bool = True):
     def decorator(f):
@@ -1815,7 +1820,7 @@ def handle_chat(user: SupabaseUser):
             except CircuitBreakerOpen as e:
                 logger.error(f"Circuit breaker is open. Aborting stream. Error: {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            except (google_exceptions.GoogleAPICallError, RetryError) as e:
+            except (google_exceptions.GoogleAPICallError, google_exceptions.DeadlineExceeded, google_exceptions.InternalServerError, RetryError) as e:
                 logger.error(f"Gemini API error after retries: {e}", exc_info=True)
                 gemini_circuit_breaker.record_failure()
                 yield f"data: {json.dumps({'error': f'Assistant (Gemini) API Error: {str(e)}'})}\n\n"
