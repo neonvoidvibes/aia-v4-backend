@@ -17,6 +17,8 @@ import subprocess
 from werkzeug.utils import secure_filename # Added for file uploads
 
 from utils.api_key_manager import get_api_key # Import the new key manager
+import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 from flask_sock import Sock 
 from simple_websocket.errors import ConnectionClosed
 
@@ -35,7 +37,8 @@ from utils.s3_utils import (
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
-from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError # Import APIConnectionError
+from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
+import anthropic # Need the module itself for type hints
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
 
@@ -53,7 +56,7 @@ def setup_logging(debug=False):
     except Exception as e: print(f"Error setting up file logger: {e}", file=sys.stderr)
     ch = logging.StreamHandler(sys.stdout); ch.setLevel(log_level)
     cf = logging.Formatter('[%(levelname)-8s] %(name)s: %(message)s'); ch.setFormatter(cf); root_logger.addHandler(ch)
-    for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock']:
+    for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock', 'google.generativeai', 'google.api_core']:
         logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.getLogger('transcription_service').setLevel(logging.DEBUG if debug else logging.INFO)
@@ -176,6 +179,7 @@ SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
 ])
 
 anthropic_client: Optional[Anthropic] = None
+gemini_client: Optional[genai.GenerativeModel] = None # Placeholder, will be configured
 try: 
     init_pinecone()
     logger.info("Pinecone initialized (or skipped).")
@@ -203,6 +207,14 @@ except Exception as e:
     logger.critical(f"Failed Anthropic client init: {e}", exc_info=True)
     anthropic_client = None # Keep it None on failure
 
+try:
+    google_api_key = os.getenv('GOOGLE_API_KEY')
+    if not google_api_key: raise ValueError("GOOGLE_API_KEY not found")
+    genai.configure(api_key=google_api_key)
+    logger.info("Google Generative AI client configured.")
+except Exception as e:
+    logger.critical(f"Failed Google GenAI client init: {e}", exc_info=True)
+
 # Initialize VAD integration if enabled and available
 vad_bridge = None
 if VAD_IMPORT_SUCCESS and os.getenv('ENABLE_VAD_TRANSCRIPTION', 'true').lower() == 'true':
@@ -225,11 +237,20 @@ else:
 
 def log_retry_error(retry_state): 
     logger.warning(f"Retrying API call (attempt {retry_state.attempt_number}): {retry_state.outcome.exception()}")
-retry_strategy = retry(
+retry_strategy_anthropic = retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry_error_callback=log_retry_error,
-    retry=(retry_if_exception_type((APIStatusError, APIConnectionError)))
+    retry=(retry_if_exception_type((anthropic.APIStatusError, anthropic.APIConnectionError)))
+)
+
+# A separate strategy for Gemini, as it has different retry-able exceptions
+retry_strategy_gemini = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry_error_callback=log_retry_error,
+    # Gemini can throw ResourceExhausted or other service unavailable errors
+    retry=(retry_if_exception_type((google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable)))
 )
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
@@ -347,7 +368,7 @@ def supabase_auth_required(agent_required: bool = True):
         return decorated_function
     return decorator
 
-@retry_strategy
+@retry_strategy_anthropic
 def _call_anthropic_stream_with_retry(model, max_tokens, system, messages, api_key: str):
     if anthropic_circuit_breaker.is_open():
         raise CircuitBreakerOpen("Assistant is temporarily unavailable due to upstream issues. Please try again in a moment.")
@@ -385,10 +406,59 @@ def _call_anthropic_stream_with_retry(model, max_tokens, system, messages, api_k
     
     return transient_anthropic_client.messages.stream(model=model, max_tokens=max_tokens, system=system, messages=messages)
 
+@retry_strategy_gemini
+def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str):
+    # Note: Circuit breaker is not implemented for Gemini yet, but could be added.
+    
+    # The global genai client is configured with a key, but we can respect agent-specific keys if needed
+    # by re-configuring or creating a new client. For now, we assume global key is sufficient.
+    if not api_key:
+        logger.error("Gemini call failed: No API key was provided/configured.")
+        raise ValueError("API key for Google Generative AI is missing.")
+
+    # Model is initialized here
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=system_instruction,
+        generation_config={"max_output_tokens": max_tokens}
+    )
+    
+    # Adapt messages to Gemini's format: role must be 'user' or 'model'
+    gemini_messages = []
+    for msg in messages:
+        # Gemini expects 'model' for the assistant's role
+        role = 'model' if msg['role'] == 'assistant' else 'user'
+        gemini_messages.append({'role': role, 'parts': [msg['content']]})
+
+    # Enhanced logging for Gemini API call
+    logger.info("="*15 + " GEMINI API CALL (STREAM) " + "="*15)
+    logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}")
+    logger.info(f"System Instruction Length: {len(system_instruction)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"System Instruction (first 500 chars): {system_instruction[:500]}...")
+
+    logger.info(f"Number of Messages for API: {len(gemini_messages)}")
+    for i, msg in enumerate(gemini_messages):
+        role = msg.get("role")
+        content_len = len(msg.get("parts", [{}])[0].get("text", "")) if msg.get("parts") else 0
+        content_snippet = str(msg.get("parts", [""])[0])[:150] # Snippet of the part
+        logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
+    logger.info("="*15 + " END GEMINI API CALL " + "="*15)
+    
+    return model.generate_content(gemini_messages, stream=True)
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     logger.info("Health check requested")
-    return jsonify({"status": "ok", "message": "Backend is running", "anthropic_client_initialized": anthropic_client is not None, "s3_client_initialized": get_s3_client() is not None}), 200
+    # Check if the GOOGLE_API_KEY is set, as a proxy for client health
+    google_client_ok = os.getenv('GOOGLE_API_KEY') is not None
+    return jsonify({
+        "status": "ok",
+        "message": "Backend is running",
+        "anthropic_client_initialized": anthropic_client is not None,
+        "gemini_client_initialized": google_client_ok,
+        "s3_client_initialized": get_s3_client() is not None
+    }), 200
 
 def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> Dict[str, Any]:
     if session_id and session_id in active_sessions:
@@ -1494,6 +1564,8 @@ def handle_chat(user: SupabaseUser):
     transcript_listen_mode = data.get('transcriptListenMode', 'latest')
     saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled')
     transcription_language_setting = data.get('transcriptionLanguage', 'any')
+    # Default to claude-sonnet-4 if not provided
+    model_selection = data.get('model', 'claude-sonnet-4-20250514')
     incoming_messages = data.get('messages', [])
     chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S'))
 
@@ -1545,10 +1617,17 @@ def handle_chat(user: SupabaseUser):
             rag_context_block = ""
             last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
             
-            # Fetch agent-specific keys for RAG (OpenAI) and Chat (Anthropic)
+            # Fetch agent-specific keys for RAG (OpenAI) and Chat (Anthropic/Google)
             openai_key_for_rag = get_api_key(agent_name, 'openai', supabase)
-            anthropic_key_for_chat = get_api_key(agent_name, 'anthropic', supabase)
-
+            
+            # Determine which LLM provider key to get
+            if model_selection.startswith('gemini'):
+                llm_provider = 'google'
+            else: # Default to anthropic for 'claude' models or unknown
+                llm_provider = 'anthropic'
+            
+            llm_api_key = get_api_key(agent_name, llm_provider, supabase)
+            
             if last_actual_user_message_for_rag:
                 rag_start_time = time.time()
                 normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
@@ -1616,24 +1695,45 @@ def handle_chat(user: SupabaseUser):
             final_llm_messages.extend(llm_messages_from_client)
 
             # --- Call LLM and Stream ---
-            stream_manager = _call_anthropic_stream_with_retry(
-                model=os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514"),
-                max_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096)),
-                system=final_system_prompt,
-                messages=final_llm_messages,
-                api_key=anthropic_key_for_chat # Pass the agent-specific key
-            )
+            max_tokens_for_call = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
 
-            with stream_manager as stream:
-                for chunk in stream:
-                    if chunk.type == "content_block_delta":
-                        text_delta = chunk.delta.text
+            if model_selection.startswith('gemini'):
+                logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
+                try:
+                    gemini_stream = _call_gemini_stream_with_retry(
+                        model_name=model_selection,
+                        max_tokens=max_tokens_for_call,
+                        system_instruction=final_system_prompt,
+                        messages=final_llm_messages,
+                        api_key=llm_api_key
+                    )
+                    for chunk in gemini_stream:
+                        text_delta = chunk.text
                         sse_data = json.dumps({'delta': text_delta})
                         yield f"data: {sse_data}\n\n"
-
+                except google_exceptions.GoogleAPICallError as e:
+                    logger.error(f"Gemini API error during stream: {e}", exc_info=True)
+                    yield f"data: {json.dumps({'error': f'Assistant API Error: {str(e)}'})}\n\n"
+                
+            else: # Default to Anthropic
+                logger.info(f"Dispatching chat request to Anthropic model: {model_selection}")
+                stream_manager = _call_anthropic_stream_with_retry(
+                    model=model_selection,
+                    max_tokens=max_tokens_for_call,
+                    system=final_system_prompt,
+                    messages=final_llm_messages,
+                    api_key=llm_api_key
+                )
+                with stream_manager as stream:
+                    for chunk in stream:
+                        if chunk.type == "content_block_delta":
+                            text_delta = chunk.delta.text
+                            sse_data = json.dumps({'delta': text_delta})
+                            yield f"data: {sse_data}\n\n"
+            
             sse_done_data = json.dumps({'done': True})
             yield f"data: {sse_done_data}\n\n"
-            logger.info(f"Stream for chat with agent {agent_name} completed successfully.")
+            logger.info(f"Stream for chat with agent {agent_name} (model: {model_selection}) completed successfully.")
 
         except CircuitBreakerOpen as e:
             logger.error(f"Circuit breaker is open. Aborting stream. Error: {e}")

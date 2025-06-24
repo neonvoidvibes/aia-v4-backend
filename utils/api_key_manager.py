@@ -35,6 +35,8 @@ def get_api_key(agent_name: str, service_name: str, supabase_client: Client) -> 
         fallback_env_var = 'ANTHROPIC_API_KEY'
     elif service_name == 'openai':
         fallback_env_var = 'OPENAI_API_KEY'
+    elif service_name == 'google':
+        fallback_env_var = 'GOOGLE_API_KEY'
     else:
         raise ValueError(f"Unsupported service_name: {service_name}")
         
