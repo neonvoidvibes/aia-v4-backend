@@ -448,8 +448,14 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
     logger.info(f"Number of Messages for API: {len(gemini_messages)}")
     for i, msg in enumerate(gemini_messages):
         role = msg.get("role")
-        content_len = len(msg.get("parts", [{}])[0].get("text", "")) if msg.get("parts") else 0
-        content_snippet = str(msg.get("parts", [""])[0])[:150] # Snippet of the part
+        # Correctly access the content within the 'parts' array for logging
+        try:
+            content = msg.get("parts", [{}])[0].get('text', '') if isinstance(msg.get("parts", [{}])[0], dict) else str(msg.get("parts", [""])[0])
+            content_len = len(content)
+            content_snippet = content[:150]
+        except (IndexError, AttributeError):
+            content_len = 0
+            content_snippet = "[ERROR PARSING LOG SNIPPET]"
         logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
     logger.info("="*15 + " END GEMINI API CALL " + "="*15)
     
