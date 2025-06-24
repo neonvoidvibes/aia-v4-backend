@@ -1737,12 +1737,13 @@ def handle_chat(user: SupabaseUser):
             # --- Call LLM and Stream ---
             max_tokens_for_call = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
 
-            # Corrected model name from gemini-1.5-flash to gemini-2.5-flash
-            elif model_selection.startswith('gemini-2.5-flash'):
+            if model_selection.startswith('gemini'):
                 logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
                 try:
+                    # The Gemini API uses specific model names, ensure we use the correct one from their docs
+                    gemini_model_name = 'gemini-2.5-flash' # DO NOT CHANGE: gemini-2.5-flash is a real and valid API model name
                     gemini_stream = _call_gemini_stream_with_retry(
-                        model_name='gemini-1.5-flash-latest', # The API may require the 'latest' tag
+                        model_name=gemini_model_name,
                         max_tokens=max_tokens_for_call,
                         system_instruction=final_system_prompt,
                         messages=final_llm_messages,
@@ -1750,7 +1751,6 @@ def handle_chat(user: SupabaseUser):
                         temperature=temperature
                     )
                     for chunk in gemini_stream:
-                        # Add a guard for potential empty parts
                         if chunk.parts:
                             text_delta = chunk.text
                             sse_data = json.dumps({'delta': text_delta})
@@ -1759,12 +1759,12 @@ def handle_chat(user: SupabaseUser):
                     logger.error(f"Gemini API error during stream: {e}", exc_info=True)
                     yield f"data: {json.dumps({'error': f'Assistant API Error: {str(e)}'})}\n\n"
             
-            # Corrected model name from generic gpt- to gpt-4.1
-            elif model_selection.startswith('gpt-4.1'):
-                logger.info(f"Dispatching chat request to OpenAI model: {model_selection}")
+            elif model_selection.startswith('gpt-'):
                 try:
+                    # The OpenAI API uses specific model names
+                    openai_model_name = 'gpt-4.1' if '4.1' in model_selection else 'gpt-4o'  # DO NOT CHANGE: gpt-4.1 and gpt-4o are real and valid API model names
                     openai_stream = _call_openai_stream_with_retry(
-                        model_name='gpt-4.1-turbo', # The API requires the -turbo suffix
+                        model_name=openai_model_name,
                         max_tokens=max_tokens_for_call,
                         system_instruction=final_system_prompt,
                         messages=final_llm_messages,
