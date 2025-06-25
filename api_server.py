@@ -1571,6 +1571,41 @@ def warm_up_agent_cache(user: SupabaseUser):
     return jsonify({"status": "success", "message": "Agent pre-caching initiated"}), 202
 
 
+@app.route('/api/admin/clear-cache', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def clear_s3_cache(user: SupabaseUser):
+    data = g.get('json_data', {})
+    scope = data.get('scope') # e.g., 'all' or an agent_name
+    
+    logger.info(f"User {user.id} requested cache clear for scope: '{scope}'")
+    
+    keys_to_delete = []
+    with S3_CACHE_LOCK:
+        if scope == 'all':
+            keys_to_delete = list(S3_FILE_CACHE.keys())
+        elif scope: # Assume scope is an agent_name
+            for key in S3_FILE_CACHE.keys():
+                if scope in key:
+                    keys_to_delete.append(key)
+        
+        if not keys_to_delete:
+             logger.info(f"No matching cache keys found to clear for scope '{scope}'.")
+             return jsonify({"status": "noop", "message": "No matching cache keys found to clear."}), 200
+
+        deleted_count = 0
+        for key in keys_to_delete:
+            if key in S3_FILE_CACHE:
+                del S3_FILE_CACHE[key]
+                deleted_count += 1
+        
+    logger.info(f"CACHE INVALIDATED: Cleared {deleted_count} cache entries for scope '{scope}'.")
+    return jsonify({
+        "status": "success",
+        "message": f"Successfully cleared {deleted_count} cache entries for agent '{scope}'.",
+        "cleared_keys": keys_to_delete
+    }), 200
+
+
 @app.route('/api/s3/download', methods=['GET'])
 @supabase_auth_required(agent_required=False)
 def download_s3_document(user: SupabaseUser):
