@@ -40,6 +40,7 @@ from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
 import anthropic # Need the module itself for type hints
+from google.generativeai import types as GoogleGenAITypes
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
 
@@ -439,10 +440,15 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
         # Proceeding with the globally configured key.
 
     # Model is initialized here
+    generation_config: Dict[str, Any] = {"max_output_tokens": max_tokens, "temperature": temperature}
+    if model_name == 'gemini-2.5-pro':
+        generation_config["thinking_config"] = GoogleGenAITypes.ThinkingConfig(thinking_budget=-1)
+        logger.info("Enabled dynamic thinking for gemini-2.5-pro.")
+
     model = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=system_instruction,
-        generation_config={"max_output_tokens": max_tokens, "temperature": temperature}
+        generation_config=generation_config
     )
     
     # Adapt messages to Gemini's format: role must be 'user' or 'model'
@@ -1798,10 +1804,9 @@ def handle_chat(user: SupabaseUser):
             try:
                 if model_selection.startswith('gemini'):
                     logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
-                    # The Gemini API uses specific model names, ensure we use the correct one from their docs
-                    gemini_model_name = 'gemini-2.5-flash' # DO NOT CHANGE: gemini-2.5-flash is a real and valid API model name
+                    # The model_selection from the client (e.g., 'gemini-2.5-pro') is now passed directly.
                     gemini_stream = _call_gemini_stream_with_retry(
-                        model_name=gemini_model_name,
+                        model_name=model_selection,
                         max_tokens=max_tokens_for_call,
                         system_instruction=final_system_prompt,
                         messages=final_llm_messages,
