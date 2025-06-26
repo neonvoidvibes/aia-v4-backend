@@ -40,7 +40,6 @@ from utils.pinecone_utils import init_pinecone
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
 import anthropic # Need the module itself for type hints
-from google.generativeai import types as GoogleGenAITypes
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
 
@@ -439,17 +438,17 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
         logger.warning("An agent-specific Google API key was provided, but the 'google-generativeai' library does not support per-request API keys in a thread-safe manner. The globally configured GOOGLE_API_KEY will be used for this request. This feature will be fully enabled when the library is updated.")
         # Proceeding with the globally configured key.
 
-    # Model is initialized here
-    generation_config: Dict[str, Any] = {"max_output_tokens": max_tokens, "temperature": temperature}
-    if model_name == 'gemini-2.5-pro':
-        generation_config["thinking_config"] = GoogleGenAITypes.ThinkingConfig(thinking_budget=-1)
-        logger.info("Enabled dynamic thinking for gemini-2.5-pro.")
-
+    # Model is initialized here, without generation_config
     model = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=system_instruction,
-        generation_config=generation_config
     )
+    
+    # Prepare the generation config to be passed to the generate_content method
+    generation_config = {
+        "max_output_tokens": max_tokens,
+        "temperature": temperature,
+    }
     
     # Adapt messages to Gemini's format: role must be 'user' or 'model'
     gemini_messages = []
@@ -461,6 +460,7 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
     # Enhanced logging for Gemini API call
     logger.info("="*15 + " GEMINI API CALL (STREAM) " + "="*15)
     logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}")
+    logger.info(f"Generation Config: {generation_config}")
     logger.info(f"System Instruction Length: {len(system_instruction)}")
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(f"System Instruction (first 500 chars): {system_instruction[:500]}...")
@@ -478,9 +478,13 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
             content_snippet = "[ERROR PARSING LOG SNIPPET]"
         logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
     logger.info("="*15 + " END GEMINI API CALL " + "="*15)
-    
-    return model.generate_content(gemini_messages, stream=True)
 
+    return model.generate_content(
+        gemini_messages,
+        stream=True,
+        generation_config=generation_config
+    )
+    
 @retry_strategy_openai
 def _call_openai_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
     if openai_circuit_breaker.is_open():
@@ -1804,7 +1808,6 @@ def handle_chat(user: SupabaseUser):
             try:
                 if model_selection.startswith('gemini'):
                     logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
-                    # The model_selection from the client (e.g., 'gemini-2.5-pro') is now passed directly.
                     gemini_stream = _call_gemini_stream_with_retry(
                         model_name=model_selection,
                         max_tokens=max_tokens_for_call,
@@ -1814,6 +1817,7 @@ def handle_chat(user: SupabaseUser):
                         temperature=temperature
                     )
                     for chunk in gemini_stream:
+                        # The Gemini API may yield empty chunks, ensure parts exist.
                         if chunk.parts:
                             text_delta = chunk.text
                             sse_data = json.dumps({'delta': text_delta})
@@ -1821,10 +1825,8 @@ def handle_chat(user: SupabaseUser):
 
                 elif model_selection.startswith('gpt-'):
                     logger.info(f"Dispatching chat request to OpenAI model: {model_selection}")
-                    # The OpenAI API uses specific model names
-                    openai_model_name = 'gpt-4.1' if '4.1' in model_selection else 'gpt-4o'  # DO NOT CHANGE: gpt-4.1 and gpt-4o are real and valid API model names
                     openai_stream = _call_openai_stream_with_retry(
-                        model_name=openai_model_name,
+                        model_name=model_selection,
                         max_tokens=max_tokens_for_call,
                         system_instruction=final_system_prompt,
                         messages=final_llm_messages,
@@ -1838,7 +1840,6 @@ def handle_chat(user: SupabaseUser):
                             yield f"data: {sse_data}\n\n"
                 
                 else: # Default to Anthropic
-                    logger.info(f"Dispatching chat request to Anthropic model: {model_selection}")
                     stream_manager = _call_anthropic_stream_with_retry(
                         model=model_selection,
                         max_tokens=max_tokens_for_call,
