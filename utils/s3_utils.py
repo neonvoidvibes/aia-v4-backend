@@ -390,6 +390,44 @@ def get_agent_docs(agent_name: str) -> Optional[str]:
     return content
 
 
+def get_objective_function(agent_name: Optional[str] = None) -> Optional[str]:
+    """
+    Get the objective function from S3, which is a stable, core directive.
+    It checks for an agent-specific override first, then falls back to a base file.
+    Uses caching.
+    """
+    logger.debug(f"Getting objective function (agent: {agent_name})")
+    
+    # 1. Look for agent-specific objective function (optional override)
+    agent_objective_function = ""
+    if agent_name:
+        agent_pattern = f'organizations/river/agents/{agent_name}/_config/objective_function_aID-{agent_name}'
+        agent_objective_function = get_cached_s3_file(
+            cache_key=agent_pattern,
+            description=f"agent objective function for {agent_name}",
+            fetch_function=lambda: find_file_any_extension(agent_pattern, f"agent objective function for {agent_name}")
+        ) or ""
+        if agent_objective_function:
+            logger.info(f"Loaded agent-specific objective function for '{agent_name}'.")
+        else:
+            logger.debug(f"No agent-specific objective function found for '{agent_name}'.")
+
+    # 2. Look for base objective function
+    base_pattern = '_config/objective_function'
+    base_objective_function = get_cached_s3_file(
+        cache_key=base_pattern,
+        description="base objective function",
+        fetch_function=lambda: find_file_any_extension(base_pattern, "base objective function")
+    ) or ""
+    if base_objective_function: logger.info("Loaded base objective function.")
+    
+    # Prioritize agent-specific, then base.
+    final_objective_function = agent_objective_function or base_objective_function
+    if final_objective_function: logger.info(f"Final objective function loaded, length: {len(final_objective_function)}")
+    else: logger.warning("No objective function file found (neither agent-specific nor base).")
+    return final_objective_function if final_objective_function else None
+
+
 def save_chat_to_s3(agent_name: str, chat_content: str, event_id: Optional[str], is_saved: bool = False, filename: Optional[str] = None) -> tuple[bool, Optional[str]]:
     """Save chat content to S3 bucket (archive or saved folder)."""
     s3 = get_s3_client()

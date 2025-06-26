@@ -32,7 +32,7 @@ from utils.transcript_utils import read_new_transcript_content, read_all_transcr
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
-    list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries,
+    list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries, get_objective_function,
     S3_CACHE_LOCK, S3_FILE_CACHE
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
@@ -1577,6 +1577,7 @@ def warm_up_agent_cache(user: SupabaseUser):
         with app.app_context(): # Ensure background thread has app context if needed
             logger.info(f"Background cache worker started for agent: '{agent}', event: '{event}'")
             try:
+                get_objective_function(agent)
                 # Calling these functions will populate the cache due to their internal logic
                 get_latest_system_prompt(agent)
                 get_latest_frameworks(agent)
@@ -1710,6 +1711,7 @@ def handle_chat(user: SupabaseUser):
 
             # --- System Prompt and Context Assembly ---
             s3_load_start_time = time.time()
+            objective_function = get_objective_function(agent_name)
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
             frameworks = get_latest_frameworks(agent_name)
             event_context = get_latest_context(agent_name, event_id)
@@ -1721,11 +1723,22 @@ def handle_chat(user: SupabaseUser):
             transcript_handling_instructions = (
                 "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
                 "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting. Very important: DO NOT summarize or analyze its content unless specifically asked by the user.\n"
-                "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These updates are chronological and should be considered the most current information.\n"
+                "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These are chronological and should be considered the most current information.\n"
                 "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. DO NOT summarize or analyze its content unless specifically asked by the user."
             )
-            final_system_prompt = base_system_prompt + source_instr + transcript_handling_instructions
-            if frameworks: final_system_prompt += "\n\n## Frameworks\n" + frameworks
+            # CONSTRUCT PROMPT WITH HIERARCHY
+            # Start with the base system prompt (personality)
+            final_system_prompt = base_system_prompt
+            
+            # Add the Objective Function / Core Directive with explicit instructions on its priority
+            if objective_function:
+                final_system_prompt += "\n\n## Core Directive (Objective Function)\n"
+                final_system_prompt += "The following is your highest-priority, foundational objective. It is stable and rarely changes. It MUST be followed and overrides any conflicting instructions found in the 'Frameworks' or other contextual documents.\n\n"
+                final_system_prompt += objective_function
+
+            # Then add frameworks, context, docs, etc.
+            final_system_prompt += source_instr + transcript_handling_instructions
+            if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
             if event_context: final_system_prompt += "\n\n## Context\n" + event_context
             if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
             rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n3. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n4. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n5. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
