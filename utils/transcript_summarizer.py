@@ -113,160 +113,159 @@ The JSON object MUST adhere to the following structure:
 
 {{
   "metadata": {{
-    "original_filename": "string", // Original transcript filename
-    "source_s3_key": "string", // S3 storage path for the source file
-    "agent_name": "string", // Name/identifier of the AI agent
-    "event_id": "string", // Unique identifier for this specific event/session
-    "summarization_timestamp_utc": "string", // ISO timestamp when summary was generated
-    "transcript_language_code": "string", // ISO 639-1 code (e.g., "en", "sv"). Infer from transcript
-    "estimated_duration_minutes": "integer | null", // Estimate meeting duration if discernible from timestamps
-    "session_type": "string" // Type of session (e.g., "workshop", "meeting", "training")
+    "original_filename": "string",
+    "source_s3_key": "string",
+    "agent_name": "string",
+    "event_id": "string",
+    "summarization_timestamp_utc": "string",
+    "transcript_language_code": "string",
+    "estimated_duration_minutes": "integer | null",
+    "session_type": "string"
   }},
-  "session_date": "string", // Human-readable session date with context (e.g., "June 2, 2025 - Today's Session")
-  "overall_summary": "string", // Comprehensive overview capturing essence, outcomes, and strategic context (2-4 sentences)
+  "session_date": "string",
+  "overall_summary": "string",
   
-  "chronological_session_flow": {{ // Object mapping session phases in temporal order
+  "chronological_session_flow": {{
     "1_phase_name": {{
-      "timeframe": "string", // Time estimates for this phase (e.g., "Start - ~20 minutes")
-      "content_covered": ["string"], // Array of specific facts and information shared during this phase
-      "key_information": "string" // Most important insight or outcome from this phase
+      "timeframe": "string",
+      "content_covered": ["string"],
+      "key_information": "string"
     }}
-    // Additional phases numbered sequentially (2_phase_name, 3_phase_name, etc.)
   }},
   
-  "mirror_lens_portal_analysis": {{ // Three-level analysis framework
-    "mirror_level_explicit_content": {{ // What was literally said and directly observable
-      "what_was_actually_said": ["string"], // Direct quotes and explicit statements made
-      "concrete_themes_identified": ["string"], // Specific topics with concrete details
-      "participants_own_language": ["string"] // Key phrases and expressions used by participants
+  "mirror_lens_portal_analysis": {{
+    "mirror_level_explicit_content": {{
+      "what_was_actually_said": ["string"],
+      "concrete_themes_identified": ["string"],
+      "participants_own_language": ["string"]
     }},
-    "lens_level_hidden_patterns": {{ // Underlying dynamics and unspoken elements
-      "unspoken_assumptions": ["string"], // Beliefs and expectations not directly stated
-      "underlying_tensions": ["string"], // Conflicting forces and pressures identified
-      "emotional_undercurrents": ["string"], // Feelings and cultural dynamics observed
-      "systemic_insights": ["string"] // Organizational and structural patterns revealed
+    "lens_level_hidden_patterns": {{
+      "unspoken_assumptions": ["string"],
+      "underlying_tensions": ["string"],
+      "emotional_undercurrents": ["string"],
+      "systemic_insights": ["string"]
     }},
-    "portal_level_transformation_possibilities": {{ // Future-oriented possibilities and vision
-      "emerging_future_scenarios": ["string"], // Potential future states discussed or implied
-      "transformative_potential": ["string"], // Breakthrough possibilities identified
-      "concrete_next_possibilities": ["string"], // Specific near-term opportunities
-      "vision_elements": ["string"] // Inspirational future components discussed
+    "portal_level_transformation_possibilities": {{
+      "emerging_future_scenarios": ["string"],
+      "transformative_potential": ["string"],
+      "concrete_next_possibilities": ["string"],
+      "vision_elements": ["string"]
     }},
-    "cross_level_connections": {{ // How the three levels interconnect
-      "mirror_to_lens": "string", // How explicit content connects to hidden patterns
-      "lens_to_portal": "string", // How hidden patterns suggest transformation possibilities
-      "mirror_to_portal": "string", // Direct connections between explicit content and future vision
-      "systemic_progression": "string" // Overall progression from surface to depth to possibility
+    "cross_level_connections": {{
+      "mirror_to_lens": "string",
+      "lens_to_portal": "string",
+      "mirror_to_portal": "string",
+      "systemic_progression": "string"
     }}
   }},
   
-  "participant_reactions_by_phase": {{ // How participant sentiment evolved throughout session
-    "initial_sentiment": "string", // Starting emotional state and expectations
-    "evolution_during_session": "string", // How attitudes and understanding changed
-    "final_sentiment": "string", // Ending emotional state and commitment level
-    "specific_reactions": ["string"] // Detailed participant responses and quotes
+  "participant_reactions_by_phase": {{
+    "initial_sentiment": "string",
+    "evolution_during_session": "string",
+    "final_sentiment": "string",
+    "specific_reactions": ["string"]
   }},
   
-  "key_concepts_introduced_chronologically": {{ // When key concepts emerged in the session
-    "early_session": ["string"], // Concepts introduced in first phase
-    "mid_session": ["string"], // Concepts introduced in middle phases
-    "late_session": ["string"] // Concepts introduced in final phases
+  "key_concepts_introduced_chronologically": {{
+    "early_session": ["string"],
+    "mid_session": ["string"],
+    "late_session": ["string"]
   }},
   
-  "key_discussion_points": [ // Array of major topics covered with specific details
+  "key_discussion_points": [
     {{
-      "topic": "string", // Main topic or theme name
-      "details": ["string"], // Specific points, facts, and information shared about this topic
-      "significance": "string" // Why this topic was important to the session
+      "topic": "string",
+      "details": ["string"],
+      "significance": "string"
     }}
   ],
   
-  "action_items": [ // Array of specific next steps and commitments
+  "action_items": [
     {{
-      "task_description": "string", // Clear description of the action to be taken
-      "assigned_to": ["string | null"], // List of names/roles, or ["Unassigned"] or null
-      "due_date": "string | null", // Target completion date (YYYY-MM-DD format) or null
-      "status": "string | null", // Current status if mentioned (default "Open")
-      "notes_context": "string | null", // Supporting context from transcript
-      "specific_details": "string | null" // Additional implementation details discussed
+      "task_description": "string",
+      "assigned_to": ["string | null"],
+      "due_date": "string | null",
+      "status": "string | null",
+      "notes_context": "string | null",
+      "specific_details": "string | null"
     }}
   ],
   
-  "decisions_made": [ // Array of decisions made during session
+  "decisions_made": [
     {{
-      "decision_description": "string", // Clear description of the decision made
-      "decision_maker": ["string | null"], // Who made or confirmed the decision, if clear
-      "supporting_reasons": "string | null", // Brief context or reasons for the decision
-      "timestamp_reference": "string | null" // When in session this occurred (e.g., "Early session", "Mid session")
+      "decision_description": "string",
+      "decision_maker": ["string | null"],
+      "supporting_reasons": "string | null",
+      "timestamp_reference": "string | null"
     }}
   ],
   
-  "decisions_made_chronologically": [ // Decisions in order they were made with detailed context
+  "decisions_made_chronologically": [
     {{
-      "when": "string", // Which session phase the decision was made
-      "decision": "string", // What was decided
-      "rationale": "string" // Why this decision was made
+      "when": "string",
+      "decision": "string",
+      "rationale": "string"
     }}
   ],
   
-  "questions_unanswered": [ // Important unresolved questions requiring follow-up
+  "questions_unanswered": [
     {{
-      "question_text": "string", // The specific question that remains open
-      "raised_by": "string | null", // Who raised the question
-      "context": "string | null", // Context of when/why it was asked
-      "urgency": "string | null" // Indicated priority level (High/Medium/Low)
+      "question_text": "string",
+      "raised_by": "string | null",
+      "context": "string | null",
+      "urgency": "string | null"
     }}
   ],
   
-  "questions_raised_chronologically": [ // Questions as they emerged through session
+  "questions_raised_chronologically": [
     {{
-      "phase": "string", // Which session phase the question arose in
-      "question": "string", // The specific question raised
-      "resolution": "string" // How/if it was addressed
+      "phase": "string",
+      "question": "string",
+      "resolution": "string"
     }}
   ],
   
-  "technical_details_by_phase": {{ // Technical information organized by when introduced
+  "technical_details_by_phase": {{
     "phase_name": {{
-      "when_introduced": "string", // Which session phase this was covered
-      "specifics": ["string"] // Detailed technical information shared
+      "when_introduced": "string",
+      "specifics": ["string"]
     }}
   }},
   
-  "organizational_context": {{ // Relevant organizational background and structure
-    "team_structure": "string", // Team composition and leadership
-    "strategic_initiatives": "string", // Current organizational projects and goals
-    "compliance_requirements": "string", // Regulatory or policy considerations
-    "cultural_context": "string" // Organizational culture and values relevant to discussion
+  "organizational_context": {{
+    "team_structure": "string",
+    "strategic_initiatives": "string",
+    "compliance_requirements": "string",
+    "cultural_context": "string"
   }},
   
-  "key_entities_mentioned": {{ // Object. Extract key named entities
-    "people": ["string"], // Unique names of individuals clearly mentioned with roles/context
-    "organizations_clients": ["string"], // Unique names of companies, clients, or external organizations
-    "projects_initiatives": ["string"], // Unique names of specific projects, products, or initiatives
-    "key_terms_glossary": [ // Array of objects for domain-specific terms or acronyms defined or heavily discussed
+  "key_entities_mentioned": {{
+    "people": ["string"],
+    "organizations_clients": ["string"],
+    "projects_initiatives": ["string"],
+    "key_terms_glossary": [
       {{
-        "term": "string", // The specific term or concept
-        "definition_or_context": "string | null" // If defined or explained in the session
+        "term": "string",
+        "definition_or_context": "string | null"
       }}
     ]
   }},
   
-  "sentiment_and_tone": {{ // Object. Overall qualitative assessment
-    "dominant_sentiment": "string | null", // e.g., "Positive", "Negative", "Neutral", "Mixed", "Constructive", "Contentious"
-    "key_sentiment_indicators": ["string | null"], // List of 2-3 phrases or topics from transcript that strongly indicate the sentiment
-    "sentiment_evolution": "string | null" // How sentiment changed throughout session
+  "sentiment_and_tone": {{
+    "dominant_sentiment": "string | null",
+    "key_sentiment_indicators": ["string | null"],
+    "sentiment_evolution": "string | null"
   }},
   
-  "potential_risks_or_challenges": [ // Array of strings. Explicitly mentioned risks or challenges
+  "potential_risks_or_challenges": [
     "string"
   ],
   
-  "opportunities_or_proposals": [ // Array of strings. Explicitly mentioned opportunities, new ideas, or proposals
+  "opportunities_or_proposals": [
     "string"
   ],
   
-  "meeting_outcomes_or_next_steps_summary": "string | null" // A brief summary of stated outcomes or agreed next steps beyond specific action items
+  "meeting_outcomes_or_next_steps_summary": "string | null"
 }}
 
 **Instructions for Content Generation:**
