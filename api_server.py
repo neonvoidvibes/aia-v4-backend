@@ -156,6 +156,8 @@ anthropic_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout
 gemini_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 openai_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 
+gemini_config_lock = threading.Lock()
+
 # Custom Exception for Circuit Breaker
 class CircuitBreakerOpen(Exception):
     pass
@@ -430,60 +432,70 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
         logger.error("Gemini call failed: No API key was provided/configured.")
         raise ValueError("API key for Google Generative AI is missing.")
 
-    # The 'google-generativeai' library uses a global configuration (`genai.configure`) which is not thread-safe
-    # for handling multiple, per-request API keys. Therefore, we must use the globally configured key.
-    # A warning is logged if an agent-specific key is provided but cannot be used.
-    global_google_api_key = os.getenv('GOOGLE_API_KEY')
-    if api_key and global_google_api_key and api_key != global_google_api_key:
-        logger.warning("An agent-specific Google API key was provided, but the 'google-generativeai' library does not support per-request API keys in a thread-safe manner. The globally configured GOOGLE_API_KEY will be used for this request. This feature will be fully enabled when the library is updated.")
-        # Proceeding with the globally configured key.
-
-    # Model is initialized here, without generation_config
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        system_instruction=system_instruction,
-    )
-    
-    # Prepare the generation config to be passed to the generate_content method
-    generation_config = {
-        "max_output_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    
-    # Adapt messages to Gemini's format: role must be 'user' or 'model'
-    gemini_messages = []
-    for msg in messages:
-        # Gemini expects 'model' for the assistant's role
-        role = 'model' if msg['role'] == 'assistant' else 'user'
-        gemini_messages.append({'role': role, 'parts': [msg['content']]})
-
-    # Enhanced logging for Gemini API call
-    logger.info("="*15 + " GEMINI API CALL (STREAM) " + "="*15)
-    logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}")
-    logger.info(f"Generation Config: {generation_config}")
-    logger.info(f"System Instruction Length: {len(system_instruction)}")
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"System Instruction (first 500 chars): {system_instruction[:500]}...")
-
-    logger.info(f"Number of Messages for API: {len(gemini_messages)}")
-    for i, msg in enumerate(gemini_messages):
-        role = msg.get("role")
-        # Correctly access the content within the 'parts' array for logging
+    # The 'google-generativeai' library uses a global configuration (`genai.configure`).
+    # To handle per-request API keys in a thread-safe manner, we use a lock
+    # to temporarily set the API key for the duration of this request's setup.
+    with gemini_config_lock:
+        original_global_key = os.getenv('GOOGLE_API_KEY')
         try:
-            content = msg.get("parts", [{}])[0].get('text', '') if isinstance(msg.get("parts", [{}])[0], dict) else str(msg.get("parts", [""])[0])
-            content_len = len(content)
-            content_snippet = content[:150]
-        except (IndexError, AttributeError):
-            content_len = 0
-            content_snippet = "[ERROR PARSING LOG SNIPPET]"
-        logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
-    logger.info("="*15 + " END GEMINI API CALL " + "="*15)
+            # Temporarily configure the library with the agent-specific key if it's different
+            if api_key != original_global_key:
+                logger.info(f"Temporarily switching to agent-specific Google API key for model {model_name}.")
+                genai.configure(api_key=api_key)
 
-    return model.generate_content(
-        gemini_messages,
-        stream=True,
-        generation_config=generation_config
-    )
+            # Model is initialized here, using the now-configured API key
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_instruction,
+            )
+            
+            # Prepare the generation config to be passed to the generate_content method
+            generation_config = {
+                "max_output_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            
+            # Adapt messages to Gemini's format: role must be 'user' or 'model'
+            gemini_messages = []
+            for msg in messages:
+                # Gemini expects 'model' for the assistant's role
+                role = 'model' if msg['role'] == 'assistant' else 'user'
+                gemini_messages.append({'role': role, 'parts': [msg['content']]})
+
+            # Enhanced logging for Gemini API call
+            logger.info("="*15 + " GEMINI API CALL (STREAM) " + "="*15)
+            logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}")
+            logger.info(f"Generation Config: {generation_config}")
+            logger.info(f"System Instruction Length: {len(system_instruction)}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"System Instruction (first 500 chars): {system_instruction[:500]}...")
+
+            logger.info(f"Number of Messages for API: {len(gemini_messages)}")
+            for i, msg in enumerate(gemini_messages):
+                role = msg.get("role")
+                # Correctly access the content within the 'parts' array for logging
+                try:
+                    content = msg.get("parts", [{}])[0].get('text', '') if isinstance(msg.get("parts", [{}])[0], dict) else str(msg.get("parts", [""])[0])
+                    content_len = len(content)
+                    content_snippet = content[:150]
+                except (IndexError, AttributeError):
+                    content_len = 0
+                    content_snippet = "[ERROR PARSING LOG SNIPPET]"
+                logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
+            logger.info("="*15 + " END GEMINI API CALL " + "="*15)
+
+            # The stream is created here, which initiates the API call with the current config.
+            # The lock can be released after this, and the generator can be consumed by the caller.
+            return model.generate_content(
+                gemini_messages,
+                stream=True,
+                generation_config=generation_config
+            )
+        finally:
+            # Restore the global API key if it was changed
+            if api_key != original_global_key and original_global_key:
+                logger.info("Restoring global Google API key.")
+                genai.configure(api_key=original_global_key)
     
 @retry_strategy_openai
 def _call_openai_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
