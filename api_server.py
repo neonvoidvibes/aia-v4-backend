@@ -304,7 +304,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
 
     user = verify_user(token)
     if not user: 
-        return None, jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
+        return None, (jsonify({"error": "Unauthorized: Invalid or missing token"}), 401)
     
     if not agent_name:
         logger.debug(f"Authorization check: User {user.id} authenticated. No specific agent access check required for this route.")
