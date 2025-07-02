@@ -527,6 +527,54 @@ def _call_openai_stream_with_retry(model_name: str, max_tokens: int, system_inst
     )
     return stream
 
+@retry_strategy_gemini
+def _call_gemini_non_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
+    if gemini_circuit_breaker.is_open():
+        raise CircuitBreakerOpen("Assistant (Gemini) is temporarily unavailable due to upstream issues. Please try again in a moment.")
+
+    if not api_key:
+        logger.error("Gemini call failed: No API key was provided/configured.")
+        raise ValueError("API key for Google Generative AI is missing.")
+
+    with gemini_config_lock:
+        original_global_key = os.getenv('GOOGLE_API_KEY')
+        try:
+            if api_key != original_global_key:
+                logger.info(f"Temporarily switching to agent-specific Google API key for model {model_name}.")
+                genai.configure(api_key=api_key)
+
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_instruction,
+            )
+            
+            generation_config = {
+                "max_output_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            
+            gemini_messages = []
+            for msg in messages:
+                role = 'model' if msg['role'] == 'assistant' else 'user'
+                gemini_messages.append({'role': role, 'parts': [msg['content']]})
+
+            logger.info("="*15 + " GEMINI API CALL (NON-STREAM) " + "="*15)
+            logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}")
+            logger.info(f"System Instruction Length: {len(system_instruction)}")
+            logger.info(f"Number of Messages for API: {len(gemini_messages)}")
+            logger.info("="*15 + " END GEMINI API CALL " + "="*15)
+
+            response = model.generate_content(
+                gemini_messages,
+                stream=False, # Important: non-streaming
+                generation_config=generation_config
+            )
+            return response.text # Return the generated text directly
+        finally:
+            if api_key != original_global_key and original_global_key:
+                logger.info("Restoring global Google API key.")
+                genai.configure(api_key=original_global_key)
+
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
