@@ -1994,6 +1994,243 @@ def sync_agents_from_s3_to_supabase():
         logger.error(f"Agent Sync: Unexpected error inserting agents: {e}", exc_info=True)
     logger.info("Agent Sync: Synchronization finished.")
 
+# Chat History Management Endpoints
+def generate_chat_title(first_user_message: str) -> str:
+    """Generate a concise title for a chat using Gemini 2.5 Flash"""
+    try:
+        # Use Gemini 2.5 Flash for fast, cheap title generation
+        title = _call_gemini_non_stream_with_retry(
+            model_name="gemini-2.0-flash-exp",
+            max_tokens=50,
+            system_instruction="Generate a concise, descriptive title (max 6 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.",
+            messages=[{"role": "user", "content": first_user_message}],
+            api_key=os.getenv('GOOGLE_API_KEY'),
+            temperature=0.3
+        )
+        return title.strip()[:100]  # Limit to 100 chars
+    except Exception as e:
+        logger.error(f"Error generating chat title: {e}")
+        # Fallback to simple truncation
+        return first_user_message[:50] + "..." if len(first_user_message) > 50 else first_user_message
+
+@app.route('/api/chat/history/save', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def save_chat_history(user: SupabaseUser):
+    """Auto-save chat history after each interaction"""
+    try:
+        data = g.get('json_data', {})
+        agent_name = data.get('agent')
+        messages = data.get('messages', [])
+        
+        if not agent_name or not messages:
+            return jsonify({'error': 'Agent name and messages are required'}), 400
+        
+        # Get agent_id from agents table
+        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+        if not agent_result.data:
+            return jsonify({'error': 'Agent not found'}), 404
+        agent_id = agent_result.data['id']
+        
+        # Generate title if this is a new chat (first user message)
+        title = data.get('title')
+        if not title and messages:
+            first_user_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), None)
+            if first_user_message:
+                title = generate_chat_title(first_user_message)
+            else:
+                title = "New Chat"
+        
+        chat_id = data.get('chatId')
+        
+        if chat_id:
+            # Update existing chat
+            result = supabase.table('chat_history').update({
+                'title': title,
+                'messages': messages
+            }).eq('id', chat_id).eq('user_id', user.id).execute()
+        else:
+            # Create new chat
+            result = supabase.table('chat_history').insert({
+                'user_id': user.id,
+                'agent_id': agent_id,
+                'title': title,
+                'messages': messages
+            }).execute()
+            chat_id = result.data[0]['id'] if result.data else None
+        
+        return jsonify({
+            'success': True,
+            'chatId': chat_id,
+            'title': title
+        })
+        
+    except Exception as e:
+        logger.error(f"Error saving chat history: {str(e)}")
+        return jsonify({'error': 'Failed to save chat history'}), 500
+
+@app.route('/api/chat/history/list', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def list_chat_history(user: SupabaseUser):
+    """List user's chat history for an agent"""
+    try:
+        agent_name = request.args.get('agent')
+        
+        if not agent_name:
+            return jsonify({'error': 'Agent parameter is required'}), 400
+        
+        # Get agent_id from agents table
+        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+        if not agent_result.data:
+            return jsonify([])  # Return empty list if agent not found
+        agent_id = agent_result.data['id']
+        
+        result = supabase.table('chat_history').select('id, title, updated_at, agent_id').eq('user_id', user.id).eq('agent_id', agent_id).order('updated_at', desc=True).limit(50).execute()
+        
+        # Format response to match frontend expectations
+        formatted_history = []
+        for chat in result.data:
+            formatted_history.append({
+                'id': chat['id'],
+                'title': chat['title'],
+                'updatedAt': chat['updated_at'],
+                'agentId': chat['agent_id'],
+                'agentName': agent_name
+            })
+        
+        return jsonify(formatted_history)
+        
+    except Exception as e:
+        logger.error(f"Error listing chat history: {str(e)}")
+        return jsonify({'error': 'Failed to list chat history'}), 500
+
+@app.route('/api/chat/history/get', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def get_chat_history(user: SupabaseUser):
+    """Get specific chat history by ID"""
+    try:
+        chat_id = request.args.get('chatId')
+        
+        if not chat_id:
+            return jsonify({'error': 'Chat ID is required'}), 400
+        
+        result = supabase.table('chat_history').select('*').eq('id', chat_id).eq('user_id', user.id).single().execute()
+        
+        return jsonify(result.data)
+        
+    except Exception as e:
+        logger.error(f"Error getting chat history: {str(e)}")
+        return jsonify({'error': 'Failed to get chat history'}), 500
+
+@app.route('/api/agent/memory/save', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def save_agent_memory(user: SupabaseUser):
+    """Save a chat to shared agent memory"""
+    try:
+        data = g.get('json_data', {})
+        agent_name = data.get('agent')
+        chat_id = data.get('chatId')
+        title = data.get('title')
+        messages = data.get('messages', [])
+        
+        if not agent_name or not title or not messages:
+            return jsonify({'error': 'Agent name, title, and messages are required'}), 400
+        
+        # Get agent_id from agents table
+        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+        if not agent_result.data:
+            return jsonify({'error': 'Agent not found'}), 404
+        agent_id = agent_result.data['id']
+        
+        # If chat_id provided, verify it belongs to the user
+        if chat_id:
+            chat_result = supabase.table('chat_history').select('id').eq('id', chat_id).eq('user_id', user.id).single().execute()
+            if not chat_result.data:
+                return jsonify({'error': 'Chat not found or access denied'}), 404
+        
+        # Check if memory with this title already exists for this agent
+        existing = supabase.table('agent_memories').select('id').eq('agent_id', agent_id).eq('title', title).execute()
+        
+        if existing.data:
+            # Update existing memory
+            result = supabase.table('agent_memories').update({
+                'messages': messages,
+                'chat_history_id': chat_id
+            }).eq('agent_id', agent_id).eq('title', title).execute()
+            memory_id = existing.data[0]['id']
+        else:
+            # Create new memory
+            result = supabase.table('agent_memories').insert({
+                'agent_id': agent_id,
+                'chat_history_id': chat_id,
+                'title': title,
+                'messages': messages,
+                'created_by': user.id
+            }).execute()
+            memory_id = result.data[0]['id'] if result.data else None
+        
+        return jsonify({
+            'success': True,
+            'memoryId': memory_id,
+            'title': title
+        })
+        
+    except Exception as e:
+        logger.error(f"Error saving agent memory: {str(e)}")
+        return jsonify({'error': 'Failed to save agent memory'}), 500
+
+@app.route('/api/agent/memory/list', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def list_agent_memories(user: SupabaseUser):
+    """List shared memories for an agent"""
+    try:
+        agent_name = request.args.get('agent')
+        
+        if not agent_name:
+            return jsonify({'error': 'Agent parameter is required'}), 400
+        
+        # Get agent_id from agents table
+        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+        if not agent_result.data:
+            return jsonify([])  # Return empty list if agent not found
+        agent_id = agent_result.data['id']
+        
+        result = supabase.table('agent_memories').select('id, title, updated_at, agent_id').eq('agent_id', agent_id).order('updated_at', desc=True).execute()
+        
+        # Format response to match frontend expectations
+        formatted_memories = []
+        for memory in result.data:
+            formatted_memories.append({
+                'id': memory['id'],
+                'title': memory['title'],
+                'updatedAt': memory['updated_at'],
+                'agentId': memory['agent_id'],
+                'agentName': agent_name
+            })
+        
+        return jsonify(formatted_memories)
+        
+    except Exception as e:
+        logger.error(f"Error listing agent memories: {str(e)}")
+        return jsonify({'error': 'Failed to list agent memories'}), 500
+
+@app.route('/api/agent/memory/get', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def get_agent_memory(user: SupabaseUser):
+    """Get specific agent memory by ID"""
+    try:
+        memory_id = request.args.get('memoryId')
+        
+        if not memory_id:
+            return jsonify({'error': 'Memory ID is required'}), 400
+        
+        result = supabase.table('agent_memories').select('*').eq('id', memory_id).single().execute()
+        
+        return jsonify(result.data)
+        
+    except Exception as e:
+        logger.error(f"Error getting agent memory: {str(e)}")
+        return jsonify({'error': 'Failed to get agent memory'}), 500
+
 def cleanup_idle_sessions():
     while True:
         time.sleep(30) # Check more frequently
