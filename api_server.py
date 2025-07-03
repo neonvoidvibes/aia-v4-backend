@@ -346,6 +346,17 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
         return user, (jsonify({"error": "Internal server error during authorization"}), 500)
 
+import httpx
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry_error_callback=log_retry_error,
+    retry=retry_if_exception_type(httpx.RemoteProtocolError)
+)
+def verify_user_agent_access_with_retry(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]:
+    return verify_user_agent_access(token, agent_name)
+
 def supabase_auth_required(agent_required: bool = True):
     def decorator(f):
         @wraps(f)
@@ -375,11 +386,19 @@ def supabase_auth_required(agent_required: bool = True):
                     agent_name_from_payload = g.json_data.get('agentName')
                 elif 'agent' in request.args: # Fallback for GET requests
                     agent_name_from_payload = request.args.get('agent')
+            
+            try:
+                user, error_response = verify_user_agent_access_with_retry(token, agent_name_from_payload if agent_required else None)
+            except RetryError as e:
+                logger.error(f"Authorization failed after multiple retries: {e}", exc_info=True)
+                return jsonify({"error": "Authorization service is temporarily unavailable. Please try again."}), 503
 
-            user, error_response = verify_user_agent_access(token, agent_name_from_payload if agent_required else None)
             if error_response:
-                status_code = error_response.status_code if hasattr(error_response, 'status_code') else 500
-                error_json = error_response.get_json() if hasattr(error_response, 'get_json') else {"error": "Unknown authorization error"}
+                status_code = getattr(error_response, 'status_code', 500)
+                try:
+                    error_json = error_response.get_json()
+                except Exception:
+                    error_json = {"error": "Unknown authorization error"}
                 return jsonify(error_json), status_code
             return f(user=user, *args, **kwargs)
         return decorated_function
