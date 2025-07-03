@@ -103,10 +103,19 @@ class EmbeddingHandler:
             source_type = metadata.get('source')
             if source_type == 'chat_memory_log':
                 logger.debug(f"Using MarkdownHeaderTextSplitter for source: {source_type}")
+                # First, try to split by Markdown headers
                 documents = self.markdown_splitter.split_text(content)
-                # Manually add the base metadata back to each document chunk
-                for doc in documents:
-                    doc.metadata.update(metadata)
+
+                # If Markdown splitting results in 1 or 0 chunks, it may mean the log is short
+                # or lacks the specific header format. In this case, fallback to a recursive split.
+                if len(documents) <= 1:
+                    logger.info(f"Markdown split resulted in {len(documents)} chunk(s). Falling back to recursive split for '{original_file_name}'.")
+                    # Use the recursive splitter on the original content
+                    documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
+                else:
+                    # If Markdown split was successful, ensure base metadata is on each chunk
+                    for doc in documents:
+                        doc.metadata.update(metadata)
             else:
                 logger.debug(f"Using RecursiveCharacterTextSplitter for source: {source_type or 'default'}")
                 documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])

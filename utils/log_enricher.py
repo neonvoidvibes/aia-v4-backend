@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from typing import List, Dict, Any, Tuple
 
 from utils.prompts import ENRICHMENT_PROMPT_TEMPLATE
