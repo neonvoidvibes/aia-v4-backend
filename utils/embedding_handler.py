@@ -68,13 +68,29 @@ class EmbeddingHandler:
         logger.info("EmbeddingHandler: Initialized MarkdownHeaderTextSplitter.")
 
         # 2. Initialize Recursive splitter for general purpose docs (PDFs, plain text)
+        # Use tiktoken to measure length in tokens, not characters, for better embedding performance.
+        try:
+            self.tiktoken_encoding = tiktoken.encoding_for_model(self.embedding_model_name)
+            logger.info(f"Tiktoken encoding '{self.embedding_model_name}' loaded successfully.")
+            def tiktoken_len(text: str) -> int:
+                return len(self.tiktoken_encoding.encode(text))
+            self.length_function = tiktoken_len
+            # Adjust chunk_size to be token-based
+            token_chunk_size = 1000
+            token_chunk_overlap = 100
+        except Exception as e:
+            logger.warning(f"Tiktoken init failed: {e}. Falling back to character count for splitting.")
+            self.length_function = len
+            token_chunk_size = chunk_size
+            token_chunk_overlap = chunk_overlap
+
         self.recursive_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            length_function=len,
+            chunk_size=token_chunk_size,
+            chunk_overlap=token_chunk_overlap,
+            length_function=self.length_function,
             separators=["\n\n", "\n", " ", ""]
         )
-        logger.info(f"EmbeddingHandler: Initialized RecursiveCharacterTextSplitter (chunk={chunk_size}, overlap={chunk_overlap}).")
+        logger.info(f"EmbeddingHandler: Initialized RecursiveCharacterTextSplitter (chunk={token_chunk_size}, overlap={token_chunk_overlap}, method={'tokens' if self.length_function is not len else 'characters'}).")
 
         self.pc = init_pinecone()
         if not self.pc: raise RuntimeError("Failed Pinecone init")
@@ -99,17 +115,11 @@ class EmbeddingHandler:
             original_file_name = metadata.get('file_name')
             if not original_file_name: logger.error("Missing 'file_name' in metadata."); return False
 
-            # Decide whether to split based on content length vs. chunk size
-            # This prevents short documents from being split unnecessarily.
+            # Unified splitting logic for all documents.
+            # The splitter is now token-aware, so it will handle chat logs and other docs appropriately.
             source_type = metadata.get('source', 'default')
-            if len(content) < self.recursive_splitter._chunk_size:
-                logger.info(f"Content length ({len(content)}) is less than chunk size ({self.recursive_splitter._chunk_size}). Treating as a single chunk.")
-                # Create a single Document object directly, bypassing the splitter
-                documents = [Document(page_content=content, metadata=metadata)]
-            else:
-                logger.info(f"Content length ({len(content)}) exceeds chunk size. Using RecursiveCharacterTextSplitter.")
-                # Use the recursive splitter for large documents
-                documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
+            logger.info(f"Processing document '{original_file_name}' with token-based splitter.")
+            documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
 
             if not documents: logger.warning(f"No documents/chunks created for: {original_file_name}"); return False
             logger.info(f"Split '{original_file_name}' into {len(documents)} documents/chunks using '{source_type}' strategy.")
