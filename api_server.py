@@ -937,6 +937,50 @@ def stop_audio_recording_route(user: SupabaseUser):
         "recording_status": {"is_recording": False, "is_backend_processing_paused": False}
     })
 
+@app.route('/api/audio-recording/pause', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def pause_audio_recording_route(user: SupabaseUser):
+    data = g.get('json_data', {})
+    session_id = data.get('session_id')
+    if not session_id:
+        return jsonify({"status": "error", "message": "Missing session_id"}), 400
+
+    logger.info(f"Pause audio recording request for session {session_id} by user {user.id}")
+
+    with session_locks[session_id]:
+        if session_id in active_sessions:
+            session_data = active_sessions[session_id]
+            if session_data.get('session_type') == 'recording':
+                session_data['is_backend_processing_paused'] = True
+                logger.info(f"Audio recording session {session_id} paused.")
+                return jsonify({"status": "success", "message": "Audio recording paused."}), 200
+            else:
+                return jsonify({"status": "error", "message": "Session is not an audio recording session."}), 400
+        else:
+            return jsonify({"status": "error", "message": "Session not found."}), 404
+
+@app.route('/api/audio-recording/resume', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def resume_audio_recording_route(user: SupabaseUser):
+    data = g.get('json_data', {})
+    session_id = data.get('session_id')
+    if not session_id:
+        return jsonify({"status": "error", "message": "Missing session_id"}), 400
+
+    logger.info(f"Resume audio recording request for session {session_id} by user {user.id}")
+
+    with session_locks[session_id]:
+        if session_id in active_sessions:
+            session_data = active_sessions[session_id]
+            if session_data.get('session_type') == 'recording':
+                session_data['is_backend_processing_paused'] = False
+                logger.info(f"Audio recording session {session_id} resumed.")
+                return jsonify({"status": "success", "message": "Audio recording resumed."}), 200
+            else:
+                return jsonify({"status": "error", "message": "Session is not an audio recording session."}), 400
+        else:
+            return jsonify({"status": "error", "message": "Session not found."}), 404
+
 @sock.route('/ws/audio_stream/<session_id>')
 def audio_stream_socket(ws, session_id: str):
     token = request.args.get('token')
