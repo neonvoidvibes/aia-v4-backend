@@ -2,7 +2,7 @@
 import os
 import time
 import logging
-from typing import Optional
+from typing import Optional, List
 from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
 # Import specific exception for finer control
