@@ -99,26 +99,14 @@ class EmbeddingHandler:
             original_file_name = metadata.get('file_name')
             if not original_file_name: logger.error("Missing 'file_name' in metadata."); return False
 
-            # Dynamically select the splitter based on the source type
-            source_type = metadata.get('source')
-            if source_type == 'chat_memory_log':
-                logger.debug(f"Using MarkdownHeaderTextSplitter for source: {source_type}")
-                # First, try to split by Markdown headers
-                documents = self.markdown_splitter.split_text(content)
-
-                # If Markdown splitting results in 1 or 0 chunks, it may mean the log is short
-                # or lacks the specific header format. In this case, fallback to a recursive split.
-                if len(documents) <= 1:
-                    logger.info(f"Markdown split resulted in {len(documents)} chunk(s). Falling back to recursive split for '{original_file_name}'.")
-                    # Use the recursive splitter on the original content
-                    documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
-                else:
-                    # If Markdown split was successful, ensure base metadata is on each chunk
-                    for doc in documents:
-                        doc.metadata.update(metadata)
-            else:
-                logger.debug(f"Using RecursiveCharacterTextSplitter for source: {source_type or 'default'}")
-                documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
+            # For all content, use the recursive splitter to ensure chunks are sized appropriately for token efficiency.
+            # This is more reliable than header-based splitting for Pinecone.
+            source_type = metadata.get('source', 'default')
+            logger.debug(f"Using RecursiveCharacterTextSplitter for source: {source_type}")
+            
+            # We create a single document object first to pass metadata correctly.
+            # The splitter will then break this down based on its configuration.
+            documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
 
             if not documents: logger.warning(f"No documents/chunks created for: {original_file_name}"); return False
             logger.info(f"Split '{original_file_name}' into {len(documents)} documents/chunks using '{source_type}' strategy.")
