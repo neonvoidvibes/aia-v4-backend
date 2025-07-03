@@ -1900,13 +1900,13 @@ def save_chat_memory_log(user: SupabaseUser):
 @supabase_auth_required(agent_required=True)
 def list_saved_chat_logs(user: SupabaseUser):
     """Lists all saved memory logs for a given agent that the user can access."""
-    agent_name = request.args.get('agent')
+    agent_name = request.args.get('agentName') # Corrected from 'agent'
     if not agent_name or not supabase:
         return jsonify({"error": "Agent name is required"}), 400
 
     try:
         query = supabase.table("agent_memory_logs") \
-            .select("id, created_at, summary, source_identifier") \
+            .select("id, created_at, summary") \
             .eq("agent_name", agent_name) \
             .order("created_at", desc=True)
         
@@ -1986,6 +1986,111 @@ def list_pinecone_indexes(user: SupabaseUser):
     except Exception as e:
         logger.error(f"Internal API: Error listing Pinecone indexes: {e}", exc_info=True)
         return jsonify({"error": "Failed to list Pinecone indexes"}), 500
+
+
+# --- Restored User Chat History Endpoints ---
+
+def generate_chat_title(first_user_message: str) -> str:
+    """Generate a concise title for a chat using Gemini 1.5 Flash"""
+    try:
+        title = _call_gemini_non_stream_with_retry(
+            model_name="gemini-1.5-flash-latest",
+            max_tokens=50,
+            system_instruction="Generate a concise, descriptive title (max 6 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.",
+            messages=[{"role": "user", "content": first_user_message}],
+            api_key=os.getenv('GOOGLE_API_KEY'), # Use global key for this utility
+            temperature=0.3
+        )
+        return title.strip().strip('"')[:100]
+    except Exception as e:
+        logger.error(f"Error generating chat title: {e}")
+        return first_user_message[:50] + "..." if len(first_user_message) > 50 else first_user_message
+
+@app.route('/api/chat/history/save', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def save_chat_history(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agent')
+    messages = data.get('messages', [])
+    chat_id = data.get('chatId')
+    title = data.get('title')
+
+    if not agent_name or not messages:
+        return jsonify({'error': 'Agent name and messages are required'}), 400
+    
+    agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+    if not agent_result.data:
+        return jsonify({'error': 'Agent not found'}), 404
+    agent_id = agent_result.data['id']
+
+    if not title and not chat_id and messages:
+        first_user_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), None)
+        title = generate_chat_title(first_user_message) if first_user_message else "New Chat"
+
+    try:
+        if chat_id:
+            result = supabase.table('chat_history').update({
+                'title': title,
+                'messages': messages
+            }).eq('id', chat_id).eq('user_id', user.id).execute()
+        else:
+            result = supabase.table('chat_history').insert({
+                'user_id': user.id,
+                'agent_id': agent_id,
+                'title': title,
+                'messages': messages
+            }).select('id, title').single().execute()
+            chat_id = result.data['id'] if result.data else None
+            title = result.data['title'] if result.data else title
+        
+        return jsonify({'success': True, 'chatId': chat_id, 'title': title})
+    except Exception as e:
+        logger.error(f"Error saving chat history: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to save chat history'}), 500
+
+@app.route('/api/chat/history/list', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def list_chat_history(user: SupabaseUser):
+    agent_name = request.args.get('agent')
+    if not agent_name or not supabase:
+        return jsonify({'error': 'Agent parameter is required'}), 400
+
+    try:
+        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+        if not agent_result.data:
+            return jsonify([])
+        agent_id = agent_result.data['id']
+
+        result = supabase.table('chat_history') \
+            .select('id, title, updated_at, agent_id') \
+            .eq('user_id', user.id) \
+            .eq('agent_id', agent_id) \
+            .order('updated_at', desc=True).limit(100).execute()
+
+        formatted_history = [{
+            'id': chat['id'], 'title': chat['title'],
+            'updatedAt': chat['updated_at'], 'agentId': chat['agent_id'],
+            'agentName': agent_name
+        } for chat in result.data]
+
+        return jsonify(formatted_history)
+    except Exception as e:
+        logger.error(f"Error listing chat history for agent '{agent_name}': {e}", exc_info=True)
+        return jsonify({'error': 'Failed to list chat history'}), 500
+
+@app.route('/api/chat/history/get', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def get_chat_history(user: SupabaseUser):
+    chat_id = request.args.get('chatId')
+    if not chat_id or not supabase:
+        return jsonify({'error': 'Chat ID is required'}), 400
+
+    try:
+        result = supabase.table('chat_history').select('*').eq('id', chat_id).eq('user_id', user.id).single().execute()
+        return jsonify(result.data) if result.data else jsonify({'error': 'Chat not found or access denied'}), 404
+    except Exception as e:
+        logger.error(f"Error getting chat history for ID '{chat_id}': {e}", exc_info=True)
+        return jsonify({'error': 'Failed to get chat history'}), 500
 
 
 def cleanup_idle_sessions():
