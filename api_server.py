@@ -2039,9 +2039,9 @@ def save_chat_history(user: SupabaseUser):
                 'agent_id': agent_id,
                 'title': title,
                 'messages': messages
-            }).select('id, title').single().execute()
-            chat_id = result.data['id'] if result.data else None
-            title = result.data['title'] if result.data else title
+            }).execute()
+            chat_id = result.data[0]['id'] if result.data else None
+            title = result.data[0]['title'] if result.data else title
         
         return jsonify({'success': True, 'chatId': chat_id, 'title': title})
     except Exception as e:
