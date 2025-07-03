@@ -993,20 +993,21 @@ def audio_stream_socket(ws, session_id: str):
 
     logger.info(f"WebSocket connection attempt for session {session_id}, user {user.id}")
 
-    if session_id not in active_sessions:
-        logger.warning(f"WebSocket: Session {session_id} not found. Closing.")
-        ws.close()
-        return
-    
-    if active_sessions[session_id].get("websocket_connection") is not None:
-        logger.warning(f"WebSocket: Session {session_id} already has a WebSocket connection. Closing new one.")
-        ws.close()
-        return
+    with session_locks[session_id]:
+        if session_id not in active_sessions:
+            logger.warning(f"WebSocket: Session {session_id} not found after acquiring lock. Closing.")
+            ws.close(code=1011, reason="Session not found")
+            return
+        
+        if active_sessions[session_id].get("websocket_connection") is not None:
+            logger.warning(f"WebSocket: Session {session_id} already has a WebSocket connection. Closing new one.")
+            ws.close(code=1008, reason="Connection already exists")
+            return
 
-    active_sessions[session_id]["websocket_connection"] = ws
-    active_sessions[session_id]["last_activity_timestamp"] = time.time()
-    active_sessions[session_id]["is_active"] = True 
-    logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
+        active_sessions[session_id]["websocket_connection"] = ws
+        active_sessions[session_id]["last_activity_timestamp"] = time.time()
+        active_sessions[session_id]["is_active"] = True 
+        logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
     AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15 
 
