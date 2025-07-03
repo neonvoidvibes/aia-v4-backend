@@ -2043,11 +2043,19 @@ def save_chat_history(user: SupabaseUser):
         chat_id = data.get('chatId')
         
         if chat_id:
-            # Update existing chat
-            result = supabase.table('chat_history').update({
-                'title': title,
-                'messages': messages
-            }).eq('id', chat_id).eq('user_id', user.id).execute()
+            # Update existing chat - only update if messages have actually changed
+            # First get the current chat to compare messages
+            current_chat = supabase.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
+            
+            if current_chat.data and current_chat.data.get('messages') != messages:
+                # Messages have changed, update the chat
+                result = supabase.table('chat_history').update({
+                    'title': title,
+                    'messages': messages
+                }).eq('id', chat_id).eq('user_id', user.id).execute()
+            else:
+                # Messages haven't changed, don't update (this prevents updated_at from changing)
+                result = current_chat  # Return existing data
         else:
             # Create new chat
             result = supabase.table('chat_history').insert({
