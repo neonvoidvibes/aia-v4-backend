@@ -13,8 +13,8 @@ except Exception as e: logging.getLogger(__name__).warning(f"Early tiktoken impo
 
 # Langchain imports
 from langchain_openai import OpenAIEmbeddings
-# Use MarkdownHeaderTextSplitter for context-aware chunking
-from langchain.text_splitter import MarkdownHeaderTextSplitter
+# Use both splitter types for different document structures
+from langchain.text_splitter import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 # Document object for metadata handling with splitter
 from langchain_core.documents import Document
 
@@ -44,8 +44,8 @@ class EmbeddingHandler:
         self,
         index_name: str = "magicchat",
         namespace: Optional[str] = None,
-        chunk_size: int = 2000,
-        chunk_overlap: int = 200
+        chunk_size: int = 1500,
+        chunk_overlap: int = 150
     ):
         """Initialize embedding handler."""
         self.index_name = index_name
@@ -59,18 +59,22 @@ class EmbeddingHandler:
             logger.error(f"EmbeddingHandler: Failed OpenAIEmbeddings init: {e}", exc_info=True)
             raise RuntimeError("Failed OpenAIEmbeddings init") from e
 
-        # Define headers to split on, which correspond to the "Intelligent Log" format.
-        # This keeps each conversational turn together.
-        headers_to_split_on = [
-            ("###", "Header 3"), # Splits on H3 headers, e.g., "### User" or "### Assistant"
-        ]
-
-        # Use MarkdownHeaderTextSplitter for context-aware chunking.
-        self.text_splitter = MarkdownHeaderTextSplitter(
+        # 1. Initialize Markdown splitter for "Intelligent Logs"
+        headers_to_split_on = [("###", "Header 3")]
+        self.markdown_splitter = MarkdownHeaderTextSplitter(
             headers_to_split_on=headers_to_split_on,
-            strip_headers=False # Keep the headers (e.g. "### User") as part of the content
+            strip_headers=False
         )
-        logger.info(f"EmbeddingHandler: Initialized MarkdownHeaderTextSplitter.")
+        logger.info("EmbeddingHandler: Initialized MarkdownHeaderTextSplitter.")
+
+        # 2. Initialize Recursive splitter for general purpose docs (PDFs, plain text)
+        self.recursive_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        logger.info(f"EmbeddingHandler: Initialized RecursiveCharacterTextSplitter (chunk={chunk_size}, overlap={chunk_overlap}).")
 
         self.pc = init_pinecone()
         if not self.pc: raise RuntimeError("Failed Pinecone init")
@@ -95,15 +99,20 @@ class EmbeddingHandler:
             original_file_name = metadata.get('file_name')
             if not original_file_name: logger.error("Missing 'file_name' in metadata."); return False
 
-            # Use the new MarkdownHeaderTextSplitter
-            documents = self.text_splitter.split_text(content)
-
-            # Manually add the base metadata to each document chunk
-            for doc in documents:
-                doc.metadata.update(metadata)
+            # Dynamically select the splitter based on the source type
+            source_type = metadata.get('source')
+            if source_type == 'chat_memory_log':
+                logger.debug(f"Using MarkdownHeaderTextSplitter for source: {source_type}")
+                documents = self.markdown_splitter.split_text(content)
+                # Manually add the base metadata back to each document chunk
+                for doc in documents:
+                    doc.metadata.update(metadata)
+            else:
+                logger.debug(f"Using RecursiveCharacterTextSplitter for source: {source_type or 'default'}")
+                documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
 
             if not documents: logger.warning(f"No documents/chunks created for: {original_file_name}"); return False
-            logger.info(f"Split {original_file_name} into {len(documents)} documents/chunks.")
+            logger.info(f"Split '{original_file_name}' into {len(documents)} documents/chunks using '{source_type}' strategy.")
 
             vectors_to_upsert = []
             embedding_failed_count = 0
