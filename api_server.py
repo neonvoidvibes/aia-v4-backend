@@ -2087,7 +2087,12 @@ def get_chat_history(user: SupabaseUser):
 
     try:
         result = supabase.table('chat_history').select('*').eq('id', chat_id).eq('user_id', user.id).single().execute()
-        return jsonify(result.data) if result.data else jsonify({'error': 'Chat not found or access denied'}), 404
+        
+        if result.data:
+            return jsonify(result.data), 200
+        else:
+            return jsonify({'error': 'Chat not found or access denied'}), 404
+
     except Exception as e:
         logger.error(f"Error getting chat history for ID '{chat_id}': {e}", exc_info=True)
         return jsonify({'error': 'Failed to get chat history'}), 500
