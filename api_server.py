@@ -448,6 +448,12 @@ def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> 
 @app.route('/api/recording/start', methods=['POST'])
 @supabase_auth_required(agent_required=True) 
 def start_recording_route(user: SupabaseUser): 
+    # Mutual Exclusivity Check
+    for session in active_sessions.values():
+        if session.get('session_type') == 'recording' and session.get('is_active'):
+            logger.warning("Attempted to start a transcript session while a recording session is active.")
+            return jsonify({"status": "error", "message": "A recording session is already in progress. Cannot start a transcript session."}), 409
+
     data = g.get('json_data', {})
     agent_name = data.get('agent') 
     event_id = data.get('event')
@@ -476,6 +482,7 @@ def start_recording_route(user: SupabaseUser):
         "user_id": user.id,
         "agent_name": agent_name,
         "event_id": event_id,
+        "session_type": "transcript", # Differentiate session type
         "language_setting_from_client": language_setting, # Store the new setting
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_transcript_key,
@@ -497,7 +504,7 @@ def start_recording_route(user: SupabaseUser):
         "last_successful_transcript": "", # For providing rolling context to Whisper
         "actual_segment_duration_seconds": 0.0, # To track duration of processed segments
     }
-    logger.info(f"Recording session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
+    logger.info(f"Transcript session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
     
     # Initialize VAD session if enabled
@@ -530,6 +537,78 @@ def start_recording_route(user: SupabaseUser):
     return jsonify({
         "status": "success", 
         "message": "Recording session initiated", 
+        "session_id": session_id,
+        "session_start_time_utc": session_start_time_utc.isoformat(),
+        "recording_status": _get_current_recording_status_snapshot(session_id)
+    })
+
+@app.route('/api/audio-recording/start', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def start_audio_recording(user: SupabaseUser):
+    # Mutual Exclusivity Check
+    for session in active_sessions.values():
+        if session.get('session_type') == 'transcript' and session.get('is_active'):
+            logger.warning("Attempted to start a recording session while a transcript session is active.")
+            return jsonify({"status": "error", "message": "A transcript session is already in progress. Cannot start a recording session."}), 409
+
+    data = g.get('json_data', {})
+    agent_name = data.get('agent')
+    language_setting = data.get('transcriptionLanguage', 'any')
+    
+    logger.info(f"Start audio recording: agent='{agent_name}', language='{language_setting}'")
+
+    session_id = uuid.uuid4().hex
+    session_start_time_utc = datetime.now(timezone.utc)
+    
+    agent_openai_key = get_api_key(agent_name, 'openai', supabase)
+    agent_anthropic_key = get_api_key(agent_name, 'anthropic', supabase)
+    
+    s3_recording_filename = f"recording_D{session_start_time_utc.strftime('%Y%m%d')}-T{session_start_time_utc.strftime('%H%M%S')}_uID-{user.id}_oID-river_aID-{agent_name}_sID-{session_id}.txt"
+    s3_recording_key = f"organizations/river/agents/{agent_name}/recordings/{s3_recording_filename}"
+    
+    temp_audio_base_dir = os.path.join('tmp', 'audio_sessions', session_id)
+    os.makedirs(temp_audio_base_dir, exist_ok=True)
+    
+    active_sessions[session_id] = {
+        "session_id": session_id,
+        "user_id": user.id,
+        "agent_name": agent_name,
+        "session_type": "recording", # Differentiate session type
+        "language_setting_from_client": language_setting,
+        "session_start_time_utc": session_start_time_utc,
+        "s3_transcript_key": s3_recording_key, # Re-use the same key name for compatibility
+        "temp_audio_session_dir": temp_audio_base_dir,
+        "openai_api_key": agent_openai_key,
+        "anthropic_api_key": agent_anthropic_key,
+        "is_backend_processing_paused": False,
+        "current_total_audio_duration_processed_seconds": 0.0,
+        "websocket_connection": None,
+        "last_activity_timestamp": time.time(),
+        "is_active": True,
+        "is_finalizing": False,
+        "current_segment_raw_bytes": bytearray(),
+        "accumulated_audio_duration_for_current_segment_seconds": 0.0,
+        "actual_segment_duration_seconds": 0.0,
+        "webm_global_header_bytes": None,
+        "is_first_blob_received": False,
+        "vad_enabled": False,
+        "last_successful_transcript": "",
+    }
+    logger.info(f"Audio recording session {session_id} started for agent {agent_name} by user {user.id}.")
+    
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if s3 and aws_s3_bucket:
+        header = f"# Recording - Session {session_id}\nAgent: {agent_name}\nUser: {user.id}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
+        try:
+            s3.put_object(Bucket=aws_s3_bucket, Key=s3_recording_key, Body=header.encode('utf-8'))
+            logger.info(f"Initialized S3 recording file: {s3_recording_key}")
+        except Exception as e:
+            logger.error(f"Failed to initialize S3 recording file {s3_recording_key}: {e}")
+
+    return jsonify({
+        "status": "success",
+        "message": "Audio recording session initiated",
         "session_id": session_id,
         "session_start_time_utc": session_start_time_utc.isoformat(),
         "recording_status": _get_current_recording_status_snapshot(session_id)
@@ -813,6 +892,11 @@ def stop_recording_route(user: SupabaseUser):
         logger.warning(f"Stop request for session {session_id}, but session not found in active_sessions. It might have already been finalized or never started.")
         return jsonify({"status": "success", "message": "Session already stopped or not found", "session_id": session_id}), 200 
     
+    session_data = active_sessions.get(session_id)
+    if session_data and session_data.get('session_type') != 'transcript':
+        logger.warning(f"Stop recording request for session {session_id} which is not a transcript session.")
+        # Decide if we should still stop it or return an error. For now, let's stop it.
+    
     _finalize_session(session_id)
     
     return jsonify({
@@ -820,6 +904,37 @@ def stop_recording_route(user: SupabaseUser):
         "message": "Recording session stopped", 
         "session_id": session_id,
         "recording_status": {"is_recording": False, "is_backend_processing_paused": False} 
+    })
+
+@app.route('/api/audio-recording/stop', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def stop_audio_recording_route(user: SupabaseUser):
+    data = g.get('json_data', {})
+    session_id = data.get('session_id')
+    if not session_id:
+        return jsonify({"status": "error", "message": "Missing session_id"}), 400
+
+    logger.info(f"Stop audio recording request for session {session_id} by user {user.id}")
+
+    if session_id not in active_sessions:
+        logger.warning(f"Stop request for audio recording session {session_id}, but session not found.")
+        return jsonify({"status": "success", "message": "Session already stopped or not found", "session_id": session_id}), 200
+
+    session_data = active_sessions.get(session_id)
+    if session_data and session_data.get('session_type') != 'recording':
+        logger.warning(f"Stop audio recording request for session {session_id} which is not a recording session.")
+        # Let's stop it anyway to be safe.
+    
+    s3_key = session_data.get('s3_transcript_key') # Get the key before finalizing
+    
+    _finalize_session(session_id)
+    
+    return jsonify({
+        "status": "success",
+        "message": "Audio recording session stopped",
+        "session_id": session_id,
+        "s3Key": s3_key, # Return the S3 key of the finished recording
+        "recording_status": {"is_recording": False, "is_backend_processing_paused": False}
     })
 
 @sock.route('/ws/audio_stream/<session_id>')
@@ -1834,6 +1949,50 @@ def sync_agents_from_s3_to_supabase():
 # --- New "Intelligent Log" Memory Endpoints ---
 from utils.log_enricher import enrich_chat_log
 from utils.embedding_handler import EmbeddingHandler
+
+@app.route('/api/recordings/embed', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def embed_recording_route(user: SupabaseUser):
+    data = g.get('json_data', {})
+    s3_key = data.get('s3Key')
+    agent_name = data.get('agentName')
+
+    if not all([s3_key, agent_name]):
+        return jsonify({"error": "s3Key and agentName are required"}), 400
+
+    logger.info(f"Embedding request for s3Key: {s3_key}, agent: {agent_name}")
+
+    try:
+        from utils.s3_utils import read_file_content as s3_read_content
+        content = s3_read_content(s3_key, f"S3 file for embedding ({s3_key})")
+        if content is None:
+            return jsonify({"error": "File not found or could not be read from S3"}), 404
+
+        embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
+        
+        # A virtual filename for metadata purposes
+        virtual_filename = os.path.basename(s3_key)
+        
+        metadata_for_embedding = {
+            "agent_name": agent_name,
+            "source": "recording", # As specified in the plan
+            "file_name": virtual_filename,
+            "s3_key": s3_key
+        }
+
+        upsert_success = embedding_handler.embed_and_upsert(content, metadata_for_embedding)
+
+        if not upsert_success:
+            logger.error(f"Failed to embed and upsert recording {s3_key} to Pinecone.")
+            return jsonify({"error": "Failed to index recording for retrieval"}), 500
+
+        logger.info(f"Successfully embedded recording from {s3_key}.")
+        return jsonify({"status": "success", "message": "Recording embedded successfully."}), 200
+
+    except Exception as e:
+        logger.error(f"Error during recording embedding for s3Key {s3_key}: {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred during embedding."}), 500
+
 
 @app.route('/api/memory/save-chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
