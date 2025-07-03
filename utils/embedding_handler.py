@@ -13,8 +13,8 @@ except Exception as e: logging.getLogger(__name__).warning(f"Early tiktoken impo
 
 # Langchain imports
 from langchain_openai import OpenAIEmbeddings
-# Use RecursiveCharacterTextSplitter for more flexible splitting
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+# Use MarkdownHeaderTextSplitter for context-aware chunking
+from langchain.text_splitter import MarkdownHeaderTextSplitter
 # Document object for metadata handling with splitter
 from langchain_core.documents import Document
 
@@ -44,9 +44,8 @@ class EmbeddingHandler:
         self,
         index_name: str = "magicchat",
         namespace: Optional[str] = None,
-        # Add chunking parameters here if they need to be configurable per instance
-        chunk_size: int = 1500, # Keep larger chunk size
-        chunk_overlap: int = 150
+        chunk_size: int = 2000,
+        chunk_overlap: int = 200
     ):
         """Initialize embedding handler."""
         self.index_name = index_name
@@ -60,22 +59,18 @@ class EmbeddingHandler:
             logger.error(f"EmbeddingHandler: Failed OpenAIEmbeddings init: {e}", exc_info=True)
             raise RuntimeError("Failed OpenAIEmbeddings init") from e
 
-        # Initialize RecursiveCharacterTextSplitter directly
-        # Prioritize splitting between Q&A sections, then common markdown/text separators
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            length_function=len,
-            is_separator_regex=False, # Treat separators literally for now
-            separators=[
-                "\n\n**Hur", # Try to split before each question first
-                "\n\n",      # Then paragraphs
-                "\n",        # Then lines
-                " ",         # Then spaces
-                ""           # Finally characters
-                ]
+        # Define headers to split on, which correspond to the "Intelligent Log" format.
+        # This keeps each conversational turn together.
+        headers_to_split_on = [
+            ("###", "Header 3"), # Splits on H3 headers, e.g., "### User" or "### Assistant"
+        ]
+
+        # Use MarkdownHeaderTextSplitter for context-aware chunking.
+        self.text_splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=headers_to_split_on,
+            strip_headers=False # Keep the headers (e.g. "### User") as part of the content
         )
-        logger.info(f"EmbeddingHandler: Initialized RecursiveCharacterTextSplitter (chunk={chunk_size}, overlap={chunk_overlap}).")
+        logger.info(f"EmbeddingHandler: Initialized MarkdownHeaderTextSplitter.")
 
         self.pc = init_pinecone()
         if not self.pc: raise RuntimeError("Failed Pinecone init")
@@ -100,10 +95,12 @@ class EmbeddingHandler:
             original_file_name = metadata.get('file_name')
             if not original_file_name: logger.error("Missing 'file_name' in metadata."); return False
 
-            # Use the text splitter directly
-            # create_documents adds metadata to each doc automatically
-            # We pass the base metadata which will be copied to each chunk
-            documents = self.text_splitter.create_documents([content], metadatas=[metadata]) # Pass metadata once for the whole doc
+            # Use the new MarkdownHeaderTextSplitter
+            documents = self.text_splitter.split_text(content)
+
+            # Manually add the base metadata to each document chunk
+            for doc in documents:
+                doc.metadata.update(metadata)
 
             if not documents: logger.warning(f"No documents/chunks created for: {original_file_name}"); return False
             logger.info(f"Split {original_file_name} into {len(documents)} documents/chunks.")
