@@ -174,7 +174,7 @@ class EmbeddingHandler:
             logger.error("Delete failed: Pinecone index is not available.")
             return False
         try:
-            logger.warning(f"Attempting to delete vectors for source_identifier='{source_identifier}' in namespace '{self.namespace}'...")
+            logger.info(f"Attempting to delete vectors for source_identifier='{source_identifier}' in namespace '{self.namespace}'...")
             
             # Deleting by metadata filter is the correct approach for this use case.
             delete_response = self.index.delete(
@@ -183,6 +183,10 @@ class EmbeddingHandler:
             )
             logger.info(f"Delete by filter for source_identifier='{source_identifier}' completed. Response: {delete_response}")
             return True
+        except pinecone.exceptions.NotFoundException:
+            # This is an expected and harmless error if the namespace doesn't exist yet (e.g., first save).
+            logger.debug(f"Namespace '{self.namespace}' not found during pre-emptive delete for source '{source_identifier}'. This is normal on first save.")
+            return True # The desired state (no old vectors) is achieved.
         except Exception as e:
             logger.error(f"Error deleting vectors for source_identifier='{source_identifier}': {e}", exc_info=True)
             return False

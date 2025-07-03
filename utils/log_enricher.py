@@ -18,27 +18,25 @@ def _format_chat_for_enrichment(messages: List[Dict[str, Any]]) -> str:
     return "\n".join(log_lines)
 
 def _extract_summary_from_enriched_log(log: str) -> str:
-    """Extracts the summary from the YAML frontmatter of the enriched log."""
+    """Extracts the summary from the YAML frontmatter of the enriched log using regex."""
     try:
-        if log.strip().startswith("---"):
-            parts = log.split('---', 2)
-            if len(parts) >= 2:
-                frontmatter_str = parts[1]
-                # A very simple YAML-like parse for the summary
-                for line in frontmatter_str.splitlines():
-                    if line.strip().startswith("summary:"):
-                        summary = line.split(":", 1)[1].strip()
-                        # Remove quotes if they exist
-                        if summary.startswith('"') and summary.endswith('"'):
-                            return summary[1:-1]
-                        if summary.startswith("'") and summary.endswith("'"):
-                            return summary[1:-1]
-                        return summary
+        # Regex to find the YAML frontmatter block and capture the summary field
+        match = re.search(r'---\s*\n(.*?)\n---', log, re.DOTALL)
+        if match:
+            frontmatter = match.group(1)
+            summary_match = re.search(r'summary:\s*(?:"(.*?)"|\'(.*?)\'|(.*))', frontmatter)
+            if summary_match:
+                # The regex captures content in quotes or unquoted content.
+                # One of the groups will have the summary.
+                summary = next((s for s in summary_match.groups() if s is not None), None)
+                if summary:
+                    return summary.strip()
     except Exception as e:
-        logger.warning(f"Could not extract summary from enriched log frontmatter: {e}")
-    
-    # Fallback to first line if summary not found
-    return log.splitlines()[0] if log else "No summary available."
+        logger.warning(f"Could not extract summary from enriched log frontmatter using regex: {e}")
+
+    # Fallback to first meaningful line if regex fails or no summary is found
+    fallback_summary = next((line for line in log.splitlines() if line.strip() and not line.strip() == '---'), "No summary available.")
+    return fallback_summary
 
 
 def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tuple[str, str]:
