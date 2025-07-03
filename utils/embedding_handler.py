@@ -99,14 +99,17 @@ class EmbeddingHandler:
             original_file_name = metadata.get('file_name')
             if not original_file_name: logger.error("Missing 'file_name' in metadata."); return False
 
-            # For all content, use the recursive splitter to ensure chunks are sized appropriately for token efficiency.
-            # This is more reliable than header-based splitting for Pinecone.
+            # Decide whether to split based on content length vs. chunk size
+            # This prevents short documents from being split unnecessarily.
             source_type = metadata.get('source', 'default')
-            logger.debug(f"Using RecursiveCharacterTextSplitter for source: {source_type}")
-            
-            # We create a single document object first to pass metadata correctly.
-            # The splitter will then break this down based on its configuration.
-            documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
+            if len(content) < self.recursive_splitter._chunk_size:
+                logger.info(f"Content length ({len(content)}) is less than chunk size ({self.recursive_splitter._chunk_size}). Treating as a single chunk.")
+                # Create a single Document object directly, bypassing the splitter
+                documents = [Document(page_content=content, metadata=metadata)]
+            else:
+                logger.info(f"Content length ({len(content)}) exceeds chunk size. Using RecursiveCharacterTextSplitter.")
+                # Use the recursive splitter for large documents
+                documents = self.recursive_splitter.create_documents([content], metadatas=[metadata])
 
             if not documents: logger.warning(f"No documents/chunks created for: {original_file_name}"); return False
             logger.info(f"Split '{original_file_name}' into {len(documents)} documents/chunks using '{source_type}' strategy.")
