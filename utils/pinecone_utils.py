@@ -100,6 +100,19 @@ def create_or_verify_index(
              logger.error(f"Describe index error response body: {e.body}")
         return None
 
+def list_indexes() -> List[str]:
+    """Lists all available Pinecone index names."""
+    pc = init_pinecone()
+    if not pc:
+        logger.error("Pinecone client failed to initialize, cannot list indexes.")
+        return []
+    try:
+        indexes = pc.list_indexes().names()
+        logger.info(f"Found {len(indexes)} Pinecone indexes: {indexes}")
+        return indexes
+    except Exception as e:
+        logger.error(f"Error listing Pinecone indexes: {e}")
+        return []
 
 def delete_index(index_name: str) -> bool:
     """Delete a Pinecone index.

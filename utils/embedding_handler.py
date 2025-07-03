@@ -134,13 +134,15 @@ class EmbeddingHandler:
                     **chunk_metadata, # Copy all metadata from the split document
                     'content': chunk_content, # Explicitly add content field
                     'chunk_index': i, # Explicitly add chunk index
-                    'total_chunks': len(documents) # Add total chunks for context
+                    'total_chunks': len(documents), # Add total chunks for context
+                    'supabase_log_id': metadata.get('supabase_log_id', -1), # Link to agent_memory_logs table
+                    'source_identifier': metadata.get('source_identifier', 'unknown'), # Link to source session
                 }
                 # Ensure agent_name is present if not added by splitter metadata copy
                 if 'agent_name' not in pinecone_metadata:
                      pinecone_metadata['agent_name'] = metadata.get('agent_name', 'unknown')
                 if 'source' not in pinecone_metadata:
-                     pinecone_metadata['source'] = metadata.get('source', 'unknown')
+                     pinecone_metadata['source'] = metadata.get('source', 'manual_upload') # Default source
 
 
                 vectors_to_upsert.append((vector_id, vector, pinecone_metadata))
@@ -166,14 +168,21 @@ class EmbeddingHandler:
             logger.error(f"Error embedding/upserting file '{metadata.get('file_name', '?')}': {e}", exc_info=True)
             return False
 
-    def delete_document(self, file_name: str) -> bool:
-        """Delete all vectors associated with a specific file_name."""
-        if not self.index: logger.error("Delete failed: Pinecone index missing."); return False
+    def delete_document(self, source_identifier: str) -> bool:
+        """Delete all vectors associated with a specific source_identifier."""
+        if not self.index:
+            logger.error("Delete failed: Pinecone index is not available.")
+            return False
         try:
-            logger.warning(f"Attempting delete vectors for file_name='{file_name}' in namespace '{self.namespace}'...")
-            # It's often safer/simpler to delete by ID if possible, but requires fetching first.
-            # Deleting by metadata filter is simpler but less direct.
-            delete_response = self.index.delete(filter={"file_name": file_name}, namespace=self.namespace)
-            logger.info(f"Delete by filter for file_name='{file_name}' completed. Resp: {delete_response}")
+            logger.warning(f"Attempting to delete vectors for source_identifier='{source_identifier}' in namespace '{self.namespace}'...")
+            
+            # Deleting by metadata filter is the correct approach for this use case.
+            delete_response = self.index.delete(
+                filter={"source_identifier": {"$eq": source_identifier}},
+                namespace=self.namespace
+            )
+            logger.info(f"Delete by filter for source_identifier='{source_identifier}' completed. Response: {delete_response}")
             return True
-        except Exception as e: logger.error(f"Error deleting doc vectors for '{file_name}': {e}"); return False
+        except Exception as e:
+            logger.error(f"Error deleting vectors for source_identifier='{source_identifier}': {e}", exc_info=True)
+            return False

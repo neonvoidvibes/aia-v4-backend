@@ -385,195 +385,12 @@ def supabase_auth_required(agent_required: bool = True):
         return decorated_function
     return decorator
 
-@retry_strategy_anthropic
-def _call_anthropic_stream_with_retry(model, max_tokens, system, messages, api_key: str):
-    if anthropic_circuit_breaker.is_open():
-        raise CircuitBreakerOpen("Assistant (Anthropic) is temporarily unavailable due to upstream issues. Please try again in a moment.")
-
-    if not api_key:
-        logger.error("Anthropic call failed: No API key was provided.")
-        raise ValueError("API key for Anthropic is missing.")
-    
-    # Initialize a transient client with the provided key for this specific call
-    try:
-        transient_anthropic_client = Anthropic(api_key=api_key)
-    except Exception as e:
-        logger.error(f"Failed to initialize transient Anthropic client: {e}", exc_info=True)
-        raise RuntimeError("Failed to initialize transient Anthropic client") from e
-
-    # Enhanced logging for API call payload
-    logger.info("="*15 + " ANTHROPIC API CALL (STREAM) " + "="*15)
-    logger.info(f"Model: {model}, MaxTokens: {max_tokens}")
-    logger.info(f"System Prompt Length: {len(system)}")
-    if logger.isEnabledFor(logging.DEBUG): # Only log full system prompt in debug
-        logger.debug(f"System Prompt (first 500 chars): {system[:500]}...")
-        logger.debug(f"System Prompt (last 500 chars): ...{system[-500:]}")
-    
-    logger.info(f"Number of Messages for API: {len(messages)}")
-    for i, msg in enumerate(messages):
-        role = msg.get("role")
-        content_len = len(msg.get("content", ""))
-        # Log more for the potentially large initial transcript message
-        if msg.get("content", "").startswith("IMPORTANT CONTEXT: The following is the full meeting transcript"):
-            content_snippet = msg.get("content", "")[:300] + " ... [TRUNCATED INITIAL TRANSCRIPT] ... " + msg.get("content", "")[-300:]
-        else:
-            content_snippet = msg.get("content", "")[:150] # Shorter snippet for other messages
-        logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
-    logger.info("="*15 + " END ANTHROPIC API CALL " + "="*15)
-    
-    return transient_anthropic_client.messages.stream(model=model, max_tokens=max_tokens, system=system, messages=messages)
-
-@retry_strategy_gemini
-def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
-    if gemini_circuit_breaker.is_open():
-        raise CircuitBreakerOpen("Assistant (Gemini) is temporarily unavailable due to upstream issues. Please try again in a moment.")
-
-    if not api_key:
-        logger.error("Gemini call failed: No API key was provided/configured.")
-        raise ValueError("API key for Google Generative AI is missing.")
-
-    # The 'google-generativeai' library uses a global configuration (`genai.configure`).
-    # To handle per-request API keys in a thread-safe manner, we use a lock
-    # to temporarily set the API key for the duration of this request's setup.
-    with gemini_config_lock:
-        original_global_key = os.getenv('GOOGLE_API_KEY')
-        try:
-            # Temporarily configure the library with the agent-specific key if it's different
-            if api_key != original_global_key:
-                logger.info(f"Temporarily switching to agent-specific Google API key for model {model_name}.")
-                genai.configure(api_key=api_key)
-
-            # Model is initialized here, using the now-configured API key
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=system_instruction,
-            )
-            
-            # Prepare the generation config to be passed to the generate_content method
-            generation_config = {
-                "max_output_tokens": max_tokens,
-                "temperature": temperature,
-            }
-            
-            # Adapt messages to Gemini's format: role must be 'user' or 'model'
-            gemini_messages = []
-            for msg in messages:
-                # Gemini expects 'model' for the assistant's role
-                role = 'model' if msg['role'] == 'assistant' else 'user'
-                gemini_messages.append({'role': role, 'parts': [msg['content']]})
-
-            # Enhanced logging for Gemini API call
-            logger.info("="*15 + " GEMINI API CALL (STREAM) " + "="*15)
-            logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}")
-            logger.info(f"Generation Config: {generation_config}")
-            logger.info(f"System Instruction Length: {len(system_instruction)}")
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"System Instruction (first 500 chars): {system_instruction[:500]}...")
-
-            logger.info(f"Number of Messages for API: {len(gemini_messages)}")
-            for i, msg in enumerate(gemini_messages):
-                role = msg.get("role")
-                # Correctly access the content within the 'parts' array for logging
-                try:
-                    content = msg.get("parts", [{}])[0].get('text', '') if isinstance(msg.get("parts", [{}])[0], dict) else str(msg.get("parts", [""])[0])
-                    content_len = len(content)
-                    content_snippet = content[:150]
-                except (IndexError, AttributeError):
-                    content_len = 0
-                    content_snippet = "[ERROR PARSING LOG SNIPPET]"
-                logger.info(f"  LLM Message [{i}]: Role='{role}', Length={content_len}, Content Snippet='{content_snippet}...'")
-            logger.info("="*15 + " END GEMINI API CALL " + "="*15)
-
-            # The stream is created here, which initiates the API call with the current config.
-            # The lock can be released after this, and the generator can be consumed by the caller.
-            return model.generate_content(
-                gemini_messages,
-                stream=True,
-                generation_config=generation_config
-            )
-        finally:
-            # Restore the global API key if it was changed
-            if api_key != original_global_key and original_global_key:
-                logger.info("Restoring global Google API key.")
-                genai.configure(api_key=original_global_key)
-    
-@retry_strategy_openai
-def _call_openai_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
-    if openai_circuit_breaker.is_open():
-        raise CircuitBreakerOpen("Assistant (OpenAI) is temporarily unavailable due to upstream issues. Please try again in a moment.")
-
-    if not api_key:
-        logger.error("OpenAI call failed: No API key was provided.")
-        raise ValueError("API key for OpenAI is missing.")
-    
-    transient_openai_client = OpenAI(api_key=api_key)
-
-    # For OpenAI, the system prompt is just the first message with role 'system'
-    openai_messages = [{"role": "system", "content": system_instruction}] + messages
-
-    logger.info("="*15 + " OPENAI API CALL (STREAM) " + "="*15)
-    logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}, Temperature: {temperature}")
-    logger.info(f"Total Messages for API (incl. system): {len(openai_messages)}")
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"System Instruction (first 500 chars): {system_instruction[:500]}...")
-    logger.info("="*15 + " END OPENAI API CALL " + "="*15)
-    
-    stream = transient_openai_client.chat.completions.create(
-        model=model_name,
-        messages=openai_messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stream=True
-    )
-    return stream
-
-@retry_strategy_gemini
-def _call_gemini_non_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
-    if gemini_circuit_breaker.is_open():
-        raise CircuitBreakerOpen("Assistant (Gemini) is temporarily unavailable due to upstream issues. Please try again in a moment.")
-
-    if not api_key:
-        logger.error("Gemini call failed: No API key was provided/configured.")
-        raise ValueError("API key for Google Generative AI is missing.")
-
-    with gemini_config_lock:
-        original_global_key = os.getenv('GOOGLE_API_KEY')
-        try:
-            if api_key != original_global_key:
-                logger.info(f"Temporarily switching to agent-specific Google API key for model {model_name}.")
-                genai.configure(api_key=api_key)
-
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=system_instruction,
-            )
-            
-            generation_config = {
-                "max_output_tokens": max_tokens,
-                "temperature": temperature,
-            }
-            
-            gemini_messages = []
-            for msg in messages:
-                role = 'model' if msg['role'] == 'assistant' else 'user'
-                gemini_messages.append({'role': role, 'parts': [msg['content']]})
-
-            logger.info("="*15 + " GEMINI API CALL (NON-STREAM) " + "="*15)
-            logger.info(f"Model: {model_name}, MaxTokens: {max_tokens}")
-            logger.info(f"System Instruction Length: {len(system_instruction)}")
-            logger.info(f"Number of Messages for API: {len(gemini_messages)}")
-            logger.info("="*15 + " END GEMINI API CALL " + "="*15)
-
-            response = model.generate_content(
-                gemini_messages,
-                stream=False, # Important: non-streaming
-                generation_config=generation_config
-            )
-            return response.text # Return the generated text directly
-        finally:
-            if api_key != original_global_key and original_global_key:
-                logger.info("Restoring global Google API key.")
-                genai.configure(api_key=original_global_key)
+from utils.llm_api_utils import (
+    _call_anthropic_stream_with_retry, _call_gemini_stream_with_retry,
+    _call_openai_stream_with_retry, _call_gemini_non_stream_with_retry,
+    anthropic_circuit_breaker, gemini_circuit_breaker, openai_circuit_breaker,
+    CircuitBreakerOpen
+)
 
 
 @app.route('/api/health', methods=['GET'])
@@ -1995,249 +1812,181 @@ def sync_agents_from_s3_to_supabase():
     logger.info("Agent Sync: Synchronization finished.")
 
 # Chat History Management Endpoints
-def generate_chat_title(first_user_message: str) -> str:
-    """Generate a concise title for a chat using Gemini 2.5 Flash"""
-    try:
-        # Use Gemini 2.5 Flash for fast, cheap title generation
-        title = _call_gemini_non_stream_with_retry(
-            model_name="gemini-2.0-flash-exp",
-            max_tokens=50,
-            system_instruction="Generate a concise, descriptive title (max 6 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.",
-            messages=[{"role": "user", "content": first_user_message}],
-            api_key=os.getenv('GOOGLE_API_KEY'),
-            temperature=0.3
-        )
-        return title.strip()[:100]  # Limit to 100 chars
-    except Exception as e:
-        logger.error(f"Error generating chat title: {e}")
-        # Fallback to simple truncation
-        return first_user_message[:50] + "..." if len(first_user_message) > 50 else first_user_message
+# --- New "Intelligent Log" Memory Endpoints ---
+from utils.log_enricher import enrich_chat_log
+from utils.embedding_handler import EmbeddingHandler
 
-@app.route('/api/chat/history/save', methods=['POST'])
+@app.route('/api/memory/save-chat', methods=['POST'])
 @supabase_auth_required(agent_required=True)
-def save_chat_history(user: SupabaseUser):
-    """Auto-save chat history after each interaction"""
-    try:
-        data = g.get('json_data', {})
-        agent_name = data.get('agent')
-        messages = data.get('messages', [])
-        
-        if not agent_name or not messages:
-            return jsonify({'error': 'Agent name and messages are required'}), 400
-        
-        # Get agent_id from agents table
-        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
-        if not agent_result.data:
-            return jsonify({'error': 'Agent not found'}), 404
-        agent_id = agent_result.data['id']
-        
-        # Generate title if this is a new chat (first user message)
-        title = data.get('title')
-        if not title and messages:
-            first_user_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), None)
-            if first_user_message:
-                title = generate_chat_title(first_user_message)
-            else:
-                title = "New Chat"
-        
-        chat_id = data.get('chatId')
-        
-        if chat_id:
-            # Update existing chat - only update if messages have actually changed
-            # First get the current chat to compare messages
-            current_chat = supabase.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
-            
-            if current_chat.data and current_chat.data.get('messages') != messages:
-                # Messages have changed, update the chat
-                result = supabase.table('chat_history').update({
-                    'title': title,
-                    'messages': messages
-                }).eq('id', chat_id).eq('user_id', user.id).execute()
-            else:
-                # Messages haven't changed, don't update (this prevents updated_at from changing)
-                result = current_chat  # Return existing data
-        else:
-            # Create new chat
-            result = supabase.table('chat_history').insert({
-                'user_id': user.id,
-                'agent_id': agent_id,
-                'title': title,
-                'messages': messages
-            }).execute()
-            chat_id = result.data[0]['id'] if result.data else None
-        
-        return jsonify({
-            'success': True,
-            'chatId': chat_id,
-            'title': title
-        })
-        
-    except Exception as e:
-        logger.error(f"Error saving chat history: {str(e)}")
-        return jsonify({'error': 'Failed to save chat history'}), 500
+def save_chat_memory_log(user: SupabaseUser):
+    """
+    Creates or updates an "Intelligent Log" for a chat session.
+    This is the new primary pipeline for saving memories.
+    """
+    data = g.get('json_data', {})
+    agent_name = data.get('agentName') # Note: Frontend might send agentName
+    if not agent_name: agent_name = data.get('agent') # Fallback to 'agent'
+    
+    messages = data.get('messages', [])
+    session_id = data.get('sessionId')
 
-@app.route('/api/chat/history/list', methods=['GET'])
-@supabase_auth_required(agent_required=False)
-def list_chat_history(user: SupabaseUser):
-    """List user's chat history for an agent"""
-    try:
-        agent_name = request.args.get('agent')
-        
-        if not agent_name:
-            return jsonify({'error': 'Agent parameter is required'}), 400
-        
-        # Get agent_id from agents table
-        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
-        if not agent_result.data:
-            return jsonify([])  # Return empty list if agent not found
-        agent_id = agent_result.data['id']
-        
-        result = supabase.table('chat_history').select('id, title, updated_at, agent_id').eq('user_id', user.id).eq('agent_id', agent_id).order('updated_at', desc=True).limit(50).execute()
-        
-        # Format response to match frontend expectations
-        formatted_history = []
-        for chat in result.data:
-            formatted_history.append({
-                'id': chat['id'],
-                'title': chat['title'],
-                'updatedAt': chat['updated_at'],
-                'agentId': chat['agent_id'],
-                'agentName': agent_name
-            })
-        
-        return jsonify(formatted_history)
-        
-    except Exception as e:
-        logger.error(f"Error listing chat history: {str(e)}")
-        return jsonify({'error': 'Failed to list chat history'}), 500
+    if not all([agent_name, messages, session_id, supabase]):
+        return jsonify({"error": "agentName, messages, and sessionId are required"}), 400
 
-@app.route('/api/chat/history/get', methods=['GET'])
-@supabase_auth_required(agent_required=False)
-def get_chat_history(user: SupabaseUser):
-    """Get specific chat history by ID"""
-    try:
-        chat_id = request.args.get('chatId')
-        
-        if not chat_id:
-            return jsonify({'error': 'Chat ID is required'}), 400
-        
-        result = supabase.table('chat_history').select('*').eq('id', chat_id).eq('user_id', user.id).single().execute()
-        
-        return jsonify(result.data)
-        
-    except Exception as e:
-        logger.error(f"Error getting chat history: {str(e)}")
-        return jsonify({'error': 'Failed to get chat history'}), 500
+    logger.info(f"Save Memory Log: Received request for agent '{agent_name}', session '{session_id}'.")
 
-@app.route('/api/agent/memory/save', methods=['POST'])
+    try:
+        # Step 1: Enrich the chat log
+        google_api_key = get_api_key(agent_name, 'google', supabase)
+        if not google_api_key:
+            return jsonify({"error": "Enrichment service not configured (missing API key)"}), 500
+        
+        structured_content, summary = enrich_chat_log(messages, google_api_key)
+        
+        # Step 2: Upsert the log into Supabase
+        upsert_data = {
+            "agent_name": agent_name,
+            "source_identifier": session_id,
+            "structured_content": structured_content,
+            "summary": summary,
+        }
+        
+        # Use on_conflict to handle both insert and update in one call
+        upsert_res = supabase.table("agent_memory_logs") \
+            .upsert(upsert_data, on_conflict="source_identifier") \
+            .execute()
+        
+        if not upsert_res.data:
+            logger.error(f"Save Memory Log: Supabase upsert failed for session '{session_id}'. Error: {upsert_res.error}")
+            return jsonify({"error": "Failed to save memory log to database", "details": str(upsert_res.error)}), 500
+        
+        supabase_log_id = upsert_res.data[0]['id']
+        logger.info(f"Save Memory Log: Successfully upserted log to Supabase. ID: {supabase_log_id}")
+
+        # Step 3 & 4: Re-index in Pinecone (Delete then Upsert)
+        embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
+        
+        # Delete old vectors for this session to prevent stale data
+        logger.info(f"Save Memory Log: Deleting old vectors from Pinecone for session '{session_id}'...")
+        delete_success = embedding_handler.delete_document(source_identifier=session_id)
+        if not delete_success:
+            logger.warning(f"Save Memory Log: Could not delete old vectors for session '{session_id}'. This may result in duplicate data.")
+
+        # Upsert new vectors
+        logger.info(f"Save Memory Log: Upserting new vectors to Pinecone for session '{session_id}'...")
+        metadata_for_embedding = {
+            "agent_name": agent_name,
+            "source_identifier": session_id,
+            "supabase_log_id": supabase_log_id,
+            "file_name": f"chat_memory_{session_id}.md" # A virtual filename
+        }
+        
+        upsert_success = embedding_handler.embed_and_upsert(structured_content, metadata_for_embedding)
+        if not upsert_success:
+            # This is a critical failure as the memory won't be retrievable.
+            logger.error(f"Save Memory Log: CRITICAL - Failed to upsert new vectors to Pinecone for session '{session_id}'.")
+            # We might want to rollback the Supabase entry or flag it for re-indexing here.
+            # For now, we return an error to the user.
+            return jsonify({"error": "Failed to index memory for retrieval"}), 500
+
+        logger.info(f"Save Memory Log: Pipeline completed successfully for session '{session_id}'.")
+        return jsonify({"status": "success", "message": "Chat memory saved and indexed.", "log_id": supabase_log_id}), 200
+
+    except Exception as e:
+        logger.error(f"Save Memory Log: Unexpected error in pipeline for agent '{agent_name}', session '{session_id}': {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred while saving memory."}), 500
+
+@app.route('/api/memory/list-saved-chats', methods=['GET'])
 @supabase_auth_required(agent_required=True)
-def save_agent_memory(user: SupabaseUser):
-    """Save a chat to shared agent memory"""
+def list_saved_chat_logs(user: SupabaseUser):
+    """Lists all saved memory logs for a given agent that the user can access."""
+    agent_name = request.args.get('agent')
+    if not agent_name or not supabase:
+        return jsonify({"error": "Agent name is required"}), 400
+
     try:
-        data = g.get('json_data', {})
-        agent_name = data.get('agent')
-        chat_id = data.get('chatId')
-        title = data.get('title')
-        messages = data.get('messages', [])
+        query = supabase.table("agent_memory_logs") \
+            .select("id, created_at, summary, source_identifier") \
+            .eq("agent_name", agent_name) \
+            .order("created_at", desc=True)
         
-        if not agent_name or not title or not messages:
-            return jsonify({'error': 'Agent name, title, and messages are required'}), 400
-        
-        # Get agent_id from agents table
-        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
-        if not agent_result.data:
-            return jsonify({'error': 'Agent not found'}), 404
-        agent_id = agent_result.data['id']
-        
-        # If chat_id provided, verify it belongs to the user
-        if chat_id:
-            chat_result = supabase.table('chat_history').select('id').eq('id', chat_id).eq('user_id', user.id).single().execute()
-            if not chat_result.data:
-                return jsonify({'error': 'Chat not found or access denied'}), 404
-        
-        # Check if memory with this title already exists for this agent
-        existing = supabase.table('agent_memories').select('id').eq('agent_id', agent_id).eq('title', title).execute()
-        
-        if existing.data:
-            # Update existing memory
-            result = supabase.table('agent_memories').update({
-                'messages': messages,
-                'chat_history_id': chat_id
-            }).eq('agent_id', agent_id).eq('title', title).execute()
-            memory_id = existing.data[0]['id']
+        response = query.execute()
+
+        if response.data:
+            return jsonify(response.data), 200
         else:
-            # Create new memory
-            result = supabase.table('agent_memories').insert({
-                'agent_id': agent_id,
-                'chat_history_id': chat_id,
-                'title': title,
-                'messages': messages,
-                'created_by': user.id
-            }).execute()
-            memory_id = result.data[0]['id'] if result.data else None
-        
-        return jsonify({
-            'success': True,
-            'memoryId': memory_id,
-            'title': title
-        })
-        
+            logger.warning(f"List Saved Chats: No saved logs found for agent '{agent_name}'.")
+            return jsonify([]), 200
     except Exception as e:
-        logger.error(f"Error saving agent memory: {str(e)}")
-        return jsonify({'error': 'Failed to save agent memory'}), 500
+        logger.error(f"List Saved Chats: Error fetching logs for agent '{agent_name}': {e}", exc_info=True)
+        return jsonify({"error": "Failed to retrieve saved memories."}), 500
 
-@app.route('/api/agent/memory/list', methods=['GET'])
-@supabase_auth_required(agent_required=False)
-def list_agent_memories(user: SupabaseUser):
-    """List shared memories for an agent"""
-    try:
-        agent_name = request.args.get('agent')
-        
-        if not agent_name:
-            return jsonify({'error': 'Agent parameter is required'}), 400
-        
-        # Get agent_id from agents table
-        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
-        if not agent_result.data:
-            return jsonify([])  # Return empty list if agent not found
-        agent_id = agent_result.data['id']
-        
-        result = supabase.table('agent_memories').select('id, title, updated_at, agent_id').eq('agent_id', agent_id).order('updated_at', desc=True).execute()
-        
-        # Format response to match frontend expectations
-        formatted_memories = []
-        for memory in result.data:
-            formatted_memories.append({
-                'id': memory['id'],
-                'title': memory['title'],
-                'updatedAt': memory['updated_at'],
-                'agentId': memory['agent_id'],
-                'agentName': agent_name
-            })
-        
-        return jsonify(formatted_memories)
-        
-    except Exception as e:
-        logger.error(f"Error listing agent memories: {str(e)}")
-        return jsonify({'error': 'Failed to list agent memories'}), 500
+@app.route('/api/memory/forget-chat', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def forget_chat_memory_log(user: SupabaseUser):
+    """Permanently deletes a memory log from Supabase and Pinecone."""
+    data = g.get('json_data', {})
+    agent_name = data.get('agentName')
+    memory_id = data.get('memoryId')
 
-@app.route('/api/agent/memory/get', methods=['GET'])
-@supabase_auth_required(agent_required=False)
-def get_agent_memory(user: SupabaseUser):
-    """Get specific agent memory by ID"""
+    if not all([agent_name, memory_id, supabase]):
+        return jsonify({"error": "agentName and memoryId are required"}), 400
+    
+    logger.info(f"Forget Memory: Request received for agent '{agent_name}', memory ID '{memory_id}'.")
+
     try:
-        memory_id = request.args.get('memoryId')
+        # Step 1: Get the source_identifier from Supabase before deleting the row
+        select_res = supabase.table("agent_memory_logs") \
+            .select("source_identifier") \
+            .eq("id", memory_id) \
+            .eq("agent_name", agent_name) \
+            .single() \
+            .execute()
         
-        if not memory_id:
-            return jsonify({'error': 'Memory ID is required'}), 400
+        if not select_res.data:
+            logger.warning(f"Forget Memory: Memory log with ID '{memory_id}' not found for agent '{agent_name}'.")
+            return jsonify({"error": "Memory not found"}), 404
         
-        result = supabase.table('agent_memories').select('*').eq('id', memory_id).single().execute()
+        source_identifier = select_res.data['source_identifier']
+
+        # Step 2: Delete vectors from Pinecone
+        embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
+        delete_success = embedding_handler.delete_document(source_identifier=source_identifier)
+        if not delete_success:
+            # Log a warning but proceed with DB deletion. The user wants the memory gone.
+            logger.warning(f"Forget Memory: Failed to delete vectors from Pinecone for source '{source_identifier}'. The database entry will still be removed.")
+
+        # Step 3: Delete from Supabase
+        delete_res = supabase.table("agent_memory_logs") \
+            .delete() \
+            .eq("id", memory_id) \
+            .execute()
+
+        if not delete_res.data:
+            logger.error(f"Forget Memory: Supabase delete failed for ID '{memory_id}'. Error: {delete_res.error}")
+            return jsonify({"error": "Failed to delete memory from database"}), 500
         
-        return jsonify(result.data)
-        
+        logger.info(f"Forget Memory: Successfully deleted memory ID '{memory_id}' (source: '{source_identifier}') for agent '{agent_name}'.")
+        return jsonify({"status": "success", "message": "Memory forgotten."}), 200
+
     except Exception as e:
-        logger.error(f"Error getting agent memory: {str(e)}")
-        return jsonify({'error': 'Failed to get agent memory'}), 500
+        logger.error(f"Forget Memory: Unexpected error for agent '{agent_name}', memory ID '{memory_id}': {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred while forgetting memory."}), 500
+
+@app.route('/internal_api/pinecone/list-indexes', methods=['GET'])
+@supabase_auth_required(agent_required=False) # Internal, but still requires a valid user token
+def list_pinecone_indexes(user: SupabaseUser):
+    """Internal endpoint to list all available Pinecone indexes."""
+    from utils.pinecone_utils import list_indexes as list_pinecone_indexes_util
+    
+    logger.info(f"Internal API: User {user.id} requested to list Pinecone indexes.")
+    try:
+        indexes = list_pinecone_indexes_util()
+        return jsonify({"indexes": indexes}), 200
+    except Exception as e:
+        logger.error(f"Internal API: Error listing Pinecone indexes: {e}", exc_info=True)
+        return jsonify({"error": "Failed to list Pinecone indexes"}), 500
+
 
 def cleanup_idle_sessions():
     while True:
