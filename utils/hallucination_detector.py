@@ -58,16 +58,16 @@ class TranscriptHistoryManager:
         
         # Store the first transcript separately for long-term checks
         if not self.initial_transcript:
-            # Limit the initial transcript to the first 7 words for focused checking
+            # Limit the initial transcript to the first 2 words for focused checking
             words = normalized_text.split()
-            short_text = " ".join(words[:7])
+            short_text = " ".join(words[:2])
             
             self.initial_transcript = {
-                'text': text,
+                'text': " ".join(text.split()[:2]),
                 'normalized_text': short_text,
                 'timestamp': timestamp
             }
-            logger.info(f"Stored initial transcript: '{short_text}'")
+            logger.info(f"Stored initial transcript phrase: '{short_text}'")
 
         self.history.append(transcript_entry)
         logger.debug(f"Added transcript to history: '{text[:50]}...' at {timestamp}")
@@ -193,12 +193,32 @@ class HallucinationDetector:
             logger.warning(f"Hallucination pattern detected: '{pattern_match}' in '{new_transcript}'")
             return True, f"pattern_match_{pattern_match}", None
 
-        # Check for repetition of a prefix from a recent transcript.
-        # This is the primary mechanism for fixing loops like "Hallå där..."
+        # Check for repetition of the initial phrase of the session
+        if history_manager.initial_transcript and len(history_manager.history) > 0:
+            initial_phrase_norm = history_manager.initial_transcript['normalized_text']
+            if len(initial_phrase_norm.split()) > 1 and normalized_new.startswith(initial_phrase_norm):
+                num_words = len(initial_phrase_norm.split())
+                original_words = new_transcript.split()
+                if len(original_words) > num_words:
+                    corrected_words = original_words[num_words:]
+                    corrected_transcript = " ".join(corrected_words)
+                    
+                    if len(corrected_words) >= self.min_transcript_length:
+                        logger.warning(f"Corrected initial phrase repetition. Phrase: '{initial_phrase_norm}', Original: '{new_transcript}', Corrected: '{corrected_transcript}'")
+                        return True, "initial_phrase_repetition_corrected", corrected_transcript
+                    else:
+                        logger.warning(f"Initial phrase repetition detected, but correction is too short. Phrase: '{initial_phrase_norm}', Original: '{new_transcript}'")
+                        return True, "initial_phrase_repetition_uncorrectable", None
+
+        # Check for repetition against the previous transcript. This handles both full and partial repeats.
         is_repetition, corrected_transcript = self._check_for_repeated_prefix(new_transcript, history_manager)
         if is_repetition:
-            # The "reason" is that we corrected it. It's not a "bad" transcript anymore.
-            return True, "prefix_repetition_corrected", corrected_transcript
+            if corrected_transcript is not None:
+                # This was a correctable overlap.
+                return True, "prefix_repetition_corrected", corrected_transcript
+            else:
+                # This was an uncorrectable full match.
+                return True, "full_repetition", None
         
         # Check similarity against recent history (this is for full-sentence repetition)
         recent_phrases = history_manager.get_recent_phrases(3)
@@ -207,9 +227,6 @@ class HallucinationDetector:
             if similarity_result[0]:
                 logger.warning(f"Similarity hallucination detected: '{new_transcript}' similar to recent transcript")
                 return True, f"similarity_{similarity_result[1]:.3f}", None
-        else:
-            # If there's no history, it cannot be a similarity-based hallucination.
-            return False, "no_history", None
         
         # Check for internal repetition within the transcript
         internal_repetition = self._check_internal_repetition(normalized_new)
@@ -221,13 +238,12 @@ class HallucinationDetector:
 
     def _check_for_repeated_prefix(self, new_text: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, Optional[str]]:
         """
-        Checks if the new transcript starts with a repeated suffix from the immediately preceding transcript.
-        This is the core logic to fix feedback loops where Whisper prepends a few words from the previous segment.
+        Checks for repetition against the most recent transcript.
         
-        Example:
-        History: ["...testar vi det här"]
-        New:     "vi det här och nu provar vi igen"
-        Result:  (True, "och nu provar vi igen") -> The repeated suffix "vi det här" is stripped.
+        Returns a tuple of (bool, Optional[str]):
+        - (True, str): An overlap was found and corrected. The string is the corrected text.
+        - (True, None): A full, exact repetition was found. This is uncorrectable.
+        - (False, None): No repetition was found.
         """
         if not history_manager.history:
             return False, None
@@ -238,12 +254,16 @@ class HallucinationDetector:
         # Check only against the most recent transcript in history
         previous_entry = list(history_manager.history)[-1]
         previous_text_normalized = previous_entry['normalized_text']
-        
-        # We are looking for a 2, 3, or 4-word suffix-prefix match.
+
+        # Case 1: Exact match with the previous transcript (full repetition hallucination)
+        if normalized_new_text == previous_text_normalized:
+            logger.warning(f"Uncorrectable full repetition detected. Text: '{new_text}'")
+            # Return True for hallucination, but None for corrected_transcript to signal it should be dropped.
+            return True, None
+
+        # Case 2: Partial overlap (suffix of old is prefix of new)
         for len_to_compare in [4, 3, 2]:
-            # Ensure both new and old texts are long enough for the comparison
             if len(original_new_words) > len_to_compare and ' ' in previous_text_normalized:
-                
                 previous_words_normalized = previous_text_normalized.split()
                 if len(previous_words_normalized) < len_to_compare:
                     continue
@@ -253,15 +273,13 @@ class HallucinationDetector:
                 
                 # Check if the *new* transcript starts with this suffix
                 if normalized_new_text.startswith(suffix_to_check):
-                    # The suffix/prefix matches. We need to strip it from the *original* new text.
-                    # This is a simple heuristic assuming word counts are consistent.
+                    # The overlap matches. Strip it from the original new text.
                     corrected_transcript = " ".join(original_new_words[len_to_compare:])
                     
-                    # Final sanity check: ensure we are not returning an empty string
                     if corrected_transcript.strip():
                         logger.warning(
-                            f"Corrected repeated prefix. "
-                            f"Prefix: '{suffix_to_check}', Original: '{new_text}', Corrected: '{corrected_transcript}'"
+                            f"Corrected overlap repetition. "
+                            f"Overlap: '{suffix_to_check}', Original: '{new_text}', Corrected: '{corrected_transcript}'"
                         )
                         return True, corrected_transcript
         
@@ -295,11 +313,6 @@ class HallucinationDetector:
         """
         max_similarity = 0.0
         
-        # If the new text is identical to the most recent phrase, it's not a hallucination,
-        # it's likely a re-processing of the same segment.
-        if recent_phrases and new_text == recent_phrases[-1]:
-            return False, 1.0
-
         for phrase in recent_phrases:
             if not phrase:
                 continue
