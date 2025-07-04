@@ -517,38 +517,15 @@ def process_audio_segment_and_update_s3(
         rolling_context_prompt=last_transcript
     )
 
-    # === Hallucination Detection & Context Update
-    # Check for hallucinations before further processing
-    if transcription_result and transcription_result.get("text"):
-        hallucination_manager = get_hallucination_manager(session_id)
-        is_valid, reason, corrected_transcript = hallucination_manager.process_transcript(transcription_result.get("text", "").strip())
-        
-        if corrected_transcript:
-            logger.info(f"Session {session_id}: Transcript was corrected by hallucination filter. New text: '{corrected_transcript}'")
-            transcription_result['text'] = corrected_transcript
-            is_valid = True # A corrected transcript is considered valid for processing
-
-        if not is_valid:
-            logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update and analyzing context health.")
-            stats = hallucination_manager.get_statistics()
-            logger.info(f"Session {session_id} hallucination stats - Total: {stats['total_transcripts']}, Valid: {stats['valid_transcripts']}, Hallucinations: {stats['hallucinations_detected']}, Rate: {stats['hallucination_rate']:.1%}")
-            
-            # CRITICAL FIX: Aggressive context reset to break feedback loops.
-            with session_lock:
-                logger.warning(f"Session {session_id}: Clearing context prompt due to hallucination (reason: {reason}).")
-                session_data["last_successful_transcript"] = ""
-                session_data["consecutive_context_failures"] = session_data.get("consecutive_context_failures", 0) + 1
-
-            # Clean up the WAV file and exit early
-            if os.path.exists(temp_segment_wav_path):
-                try: os.remove(temp_segment_wav_path)
-                except OSError as e_del: logger.error(f"Error deleting hallucinated temp WAV {temp_segment_wav_path}: {e_del}")
-            return True # Return True as the "error" was handled (by not processing a hallucination)
-        else:
-            # Reset consecutive failures counter on successful transcription
-            with session_lock:
-                session_data["consecutive_context_failures"] = 0
-    # === End Hallucination Detection & Context Update
+    # If transcription fails, exit early.
+    if not transcription_result:
+        logger.warning(f"Transcription returned no result for {temp_segment_wav_path}. Skipping.")
+        if os.path.exists(temp_segment_wav_path):
+            try:
+                os.remove(temp_segment_wav_path)
+            except OSError as e:
+                logger.error(f"Error removing failed segment file {temp_segment_wav_path}: {e}")
+        return False
 
     # Pre-process segments that don't depend on the atomic offset
     filtered_segments_pre_lock = []

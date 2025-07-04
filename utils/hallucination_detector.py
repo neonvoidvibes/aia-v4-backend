@@ -202,13 +202,14 @@ class HallucinationDetector:
         
         # Check similarity against recent history (this is for full-sentence repetition)
         recent_phrases = history_manager.get_recent_phrases(3)
-        if not recent_phrases:
+        if recent_phrases:
+            similarity_result = self._check_similarity(normalized_new, recent_phrases)
+            if similarity_result[0]:
+                logger.warning(f"Similarity hallucination detected: '{new_transcript}' similar to recent transcript")
+                return True, f"similarity_{similarity_result[1]:.3f}", None
+        else:
+            # If there's no history, it cannot be a similarity-based hallucination.
             return False, "no_history", None
-        
-        similarity_result = self._check_similarity(normalized_new, recent_phrases)
-        if similarity_result[0]:
-            logger.warning(f"Similarity hallucination detected: '{new_transcript}' similar to recent transcript")
-            return True, f"similarity_{similarity_result[1]:.3f}", None
         
         # Check for internal repetition within the transcript
         internal_repetition = self._check_internal_repetition(normalized_new)
@@ -294,6 +295,11 @@ class HallucinationDetector:
         """
         max_similarity = 0.0
         
+        # If the new text is identical to the most recent phrase, it's not a hallucination,
+        # it's likely a re-processing of the same segment.
+        if recent_phrases and new_text == recent_phrases[-1]:
+            return False, 1.0
+
         for phrase in recent_phrases:
             if not phrase:
                 continue
