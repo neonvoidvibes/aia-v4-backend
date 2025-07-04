@@ -58,12 +58,12 @@ class TranscriptHistoryManager:
         
         # Store the first transcript separately for long-term checks
         if not self.initial_transcript:
-            # Limit the initial transcript to the first 2 words for focused checking
+            # Limit the initial transcript to the first 7 words for focused checking
             words = normalized_text.split()
-            short_text = " ".join(words[:2])
+            short_text = " ".join(words[:7])
             
             self.initial_transcript = {
-                'text': " ".join(text.split()[:2]),
+                'text': " ".join(text.split()[:7]),
                 'normalized_text': short_text,
                 'timestamp': timestamp
             }
@@ -193,22 +193,33 @@ class HallucinationDetector:
             logger.warning(f"Hallucination pattern detected: '{pattern_match}' in '{new_transcript}'")
             return True, f"pattern_match_{pattern_match}", None
 
-        # Check for repetition of the initial phrase of the session
+        # Check for repetition of the initial phrase of the session dynamically
         if history_manager.initial_transcript and len(history_manager.history) > 0:
-            initial_phrase_norm = history_manager.initial_transcript['normalized_text']
-            if len(initial_phrase_norm.split()) > 1 and normalized_new.startswith(initial_phrase_norm):
-                num_words = len(initial_phrase_norm.split())
-                original_words = new_transcript.split()
-                if len(original_words) > num_words:
-                    corrected_words = original_words[num_words:]
-                    corrected_transcript = " ".join(corrected_words)
+            initial_phrase_full_norm = history_manager.initial_transcript['normalized_text']
+            initial_phrase_words = initial_phrase_full_norm.split()
+            
+            # Dynamically check for prefixes of decreasing length (from 7 down to 2)
+            for phrase_len in range(min(len(initial_phrase_words), 7), 1, -1):
+                phrase_to_check = " ".join(initial_phrase_words[:phrase_len])
+                
+                if normalized_new.startswith(phrase_to_check):
+                    # Found a match. Correct it by stripping the corresponding number of words from the original.
+                    num_words_to_strip = len(phrase_to_check.split())
+                    original_words = new_transcript.split()
                     
-                    if len(corrected_words) >= self.min_transcript_length:
-                        logger.warning(f"Corrected initial phrase repetition. Phrase: '{initial_phrase_norm}', Original: '{new_transcript}', Corrected: '{corrected_transcript}'")
-                        return True, "initial_phrase_repetition_corrected", corrected_transcript
-                    else:
-                        logger.warning(f"Initial phrase repetition detected, but correction is too short. Phrase: '{initial_phrase_norm}', Original: '{new_transcript}'")
-                        return True, "initial_phrase_repetition_uncorrectable", None
+                    if len(original_words) > num_words_to_strip:
+                        corrected_words = original_words[num_words_to_strip:]
+                        corrected_transcript = " ".join(corrected_words)
+                        
+                        if len(corrected_words) >= self.min_transcript_length:
+                            logger.warning(f"Corrected dynamic initial phrase repetition. Phrase: '{phrase_to_check}', Original: '{new_transcript}', Corrected: '{corrected_transcript}'")
+                            return True, "initial_phrase_repetition_corrected", corrected_transcript
+                        else:
+                            logger.warning(f"Initial phrase repetition detected, but correction is too short. Phrase: '{phrase_to_check}', Original: '{new_transcript}'")
+                            return True, "initial_phrase_repetition_uncorrectable", None
+                    
+                    # If a match was found and handled, break the loop
+                    break
 
         # Check for repetition against the previous transcript. This handles both full and partial repeats.
         is_repetition, corrected_transcript = self._check_for_repeated_prefix(new_transcript, history_manager)
