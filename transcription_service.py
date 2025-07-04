@@ -656,19 +656,6 @@ def process_audio_segment_and_update_s3(
             lines_to_append_to_s3.insert(0, f"[{timestamp} UTC] {marker_to_write}") # Insert at the beginning
             session_data["pause_marker_to_write"] = None # Clear after processing
 
-        # Process markers
-        lines_to_append_to_s3 = []
-        marker_to_write = session_data.get("pause_marker_to_write")
-        if marker_to_write:
-            offset = session_data.get("pause_event_timestamp_offset", segment_offset_seconds)
-            timestamp = _format_time_delta(offset, session_start_time_utc)
-            lines_to_append_to_s3.append(f"[{timestamp} UTC] {marker_to_write}")
-            session_data["pause_marker_to_write"] = None # Clear after processing
-
-        lines_to_append_to_s3.extend(processed_transcript_lines)
-        
-        # The rolling context is now updated directly when the combined line is created.
-        # This section can be removed as it's now redundant.
 
         # Perform S3 append if there's new content
         if lines_to_append_to_s3:
