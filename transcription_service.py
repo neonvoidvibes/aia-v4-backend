@@ -355,7 +355,7 @@ def _transcribe_audio_segment_openai(
             data_payload: Dict[str, Any] = {
                 'model': 'whisper-1',
                 'response_format': 'verbose_json', 
-                'temperature': 0.0,
+                'temperature': 0.2,                 # Increased from 0.0 to 0.2 to help break repetitive loops
                 'no_speech_threshold': 0.95,        # Increased from 0.9 to 0.95 (much stricter)
                 'logprob_threshold': -0.3,          # Increased from -0.5 to -0.3 (much stricter)
                 'compression_ratio_threshold': 1.5, # Decreased from 1.8 to 1.5 (much stricter)
@@ -533,37 +533,11 @@ def process_audio_segment_and_update_s3(
             stats = hallucination_manager.get_statistics()
             logger.info(f"Session {session_id} hallucination stats - Total: {stats['total_transcripts']}, Valid: {stats['valid_transcripts']}, Hallucinations: {stats['hallucinations_detected']}, Rate: {stats['hallucination_rate']:.1%}")
             
-            # CRITICAL FIX: Context poisoning prevention
+            # CRITICAL FIX: Aggressive context reset to break feedback loops.
             with session_lock:
-                # Track consecutive hallucinations for this context
-                current_context = session_data.get("last_successful_transcript", "")
-                consecutive_fails = session_data.get("consecutive_context_failures", 0) + 1
-                session_data["consecutive_context_failures"] = consecutive_fails
-                
-                # ROBUST EMERGENCY RESET - Balanced thresholds for stability + protection
-                should_reset_context = (
-                    consecutive_fails >= 2 or  # 2 consecutive failures with same context
-                    (stats['total_transcripts'] >= 10 and stats['hallucination_rate'] > 0.45) or  # 45% rate with 10+ segments
-                    (stats['hallucinations_detected'] >= 5 and stats['hallucination_rate'] > 0.6)  # 60% rate with 5+ hallucinations
-                )
-                
-                if should_reset_context:
-                    # Blacklist this context to prevent reuse
-                    if 'context_blacklist' not in session_data:
-                        session_data['context_blacklist'] = set()
-                    if current_context:
-                        session_data['context_blacklist'].add(current_context.strip().lower())
-                        logger.warning(f"Session {session_id}: Context '{current_context}' blacklisted due to repeated hallucinations")
-                    
-                    # AGGRESSIVE EMERGENCY RESET - Clear everything
-                    session_data["last_successful_transcript"] = ""
-                    session_data["consecutive_context_failures"] = 0
-                    session_data["segments_since_context_reset"] = 0
-                    
-                    # CRITICAL: Clear hallucination statistics to reset rate to 0%
-                    hallucination_manager.clear_session()
-                    
-                    logger.error(f"Session {session_id}: AGGRESSIVE EMERGENCY RESET - Hallucination rate: {stats['hallucination_rate']:.1%}, Consecutive failures: {consecutive_fails} - STATS CLEARED")
+                logger.warning(f"Session {session_id}: Clearing context prompt due to hallucination (reason: {reason}).")
+                session_data["last_successful_transcript"] = ""
+                session_data["consecutive_context_failures"] = session_data.get("consecutive_context_failures", 0) + 1
 
             # Clean up the WAV file and exit early
             if os.path.exists(temp_segment_wav_path):

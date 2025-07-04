@@ -164,14 +164,13 @@ class HallucinationDetector:
         
         logger.info(f"HallucinationDetector initialized with threshold={similarity_threshold}")
     
-    def is_hallucination(self, new_transcript: str, history_manager: TranscriptHistoryManager, blocklist: set) -> Tuple[bool, str, Optional[str]]:
+    def is_hallucination(self, new_transcript: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, str, Optional[str]]:
         """
         Determine if a new transcript is likely a hallucination.
         
         Args:
             new_transcript: New transcribed text to evaluate
             history_manager: TranscriptHistoryManager instance with history
-            blocklist: A set of normalized phrases to always filter.
             
         Returns:
             Tuple of (is_hallucination: bool, reason: str, corrected_transcript: Optional[str])
@@ -181,11 +180,6 @@ class HallucinationDetector:
         
         # Normalize the new transcript
         normalized_new = history_manager._normalize_text(new_transcript)
-        
-        # Check against the session-specific blocklist first
-        if normalized_new in blocklist:
-            logger.warning(f"Blocklist match detected: '{new_transcript}'")
-            return True, "blocklist_match", None
         
         # Check minimum length
         word_count = len(normalized_new.split())
@@ -199,13 +193,14 @@ class HallucinationDetector:
             logger.warning(f"Hallucination pattern detected: '{pattern_match}' in '{new_transcript}'")
             return True, f"pattern_match_{pattern_match}", None
 
-        # Check for repetition of the initial session transcript
-        is_repetition, corrected_transcript = self._check_initial_transcript_repetition(new_transcript, history_manager)
+        # Check for repetition of a prefix from a recent transcript.
+        # This is the primary mechanism for fixing loops like "Hallå där..."
+        is_repetition, corrected_transcript = self._check_for_repeated_prefix(new_transcript, history_manager)
         if is_repetition:
-            logger.warning(f"Initial transcript repetition detected: '{new_transcript}'")
-            return True, "initial_transcript_repetition", corrected_transcript
+            # The "reason" is that we corrected it. It's not a "bad" transcript anymore.
+            return True, "prefix_repetition_corrected", corrected_transcript
         
-        # Check similarity against recent history
+        # Check similarity against recent history (this is for full-sentence repetition)
         recent_phrases = history_manager.get_recent_phrases(3)
         if not recent_phrases:
             return False, "no_history", None
@@ -223,42 +218,51 @@ class HallucinationDetector:
         
         return False, "valid", None
 
-    def _check_initial_transcript_repetition(self, new_text: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, Optional[str]]:
+    def _check_for_repeated_prefix(self, new_text: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, Optional[str]]:
         """
-        Checks if the new transcript's prefix is a repetition of the initial utterance's prefix.
-        If a repetition is found, it returns the corrected transcript without the prepended hallucination.
+        Checks if the new transcript starts with a repeated prefix from any recent transcript.
+        This is the core logic to fix feedback loops where Whisper prepends a few words.
+        
+        Example:
+        History: ["hallå där nu testar vi"]
+        New:     "hallå där nu provar vi igen"
+        Result:  (True, "nu provar vi igen") -> The repeated prefix "hallå där" is stripped.
         """
-        if not history_manager.initial_transcript or not history_manager.history:
+        if not history_manager.history:
             return False, None
 
-        initial_prefix_stored = history_manager.initial_transcript['normalized_text']
-        initial_prefix_words = initial_prefix_stored.split()
-        
-        # Use original text for reconstruction, but normalized for comparison
         original_new_words = new_text.split()
-        normalized_new_words = history_manager._normalize_text(new_text).split()
+        normalized_new_text = history_manager._normalize_text(new_text)
 
-        # We check for 2, 3, and 4-word prefix matches
-        for len_to_compare in [4, 3, 2]:
-            threshold = 0.9 if len_to_compare > 2 else 0.95
-
-            if len(normalized_new_words) > len_to_compare and len(initial_prefix_words) >= len_to_compare:
-                new_prefix = " ".join(normalized_new_words[:len_to_compare])
-                initial_prefix = " ".join(initial_prefix_words[:len_to_compare])
-                
-                similarity = SequenceMatcher(None, new_prefix, initial_prefix).ratio()
-                
-                if similarity > threshold:
-                    # Find the end of the repeated segment in the original text
-                    # This is a simple heuristic assuming the word count is the same
-                    corrected_transcript = " ".join(original_new_words[len_to_compare:])
+        # Check against the last 3 transcripts in history
+        for previous_entry in history_manager.get_recent_transcripts(3):
+            previous_text_normalized = previous_entry['normalized_text']
+            
+            # We are looking for a 2, 3, or 4-word prefix match.
+            for len_to_compare in [4, 3, 2]:
+                # Ensure both new and old texts are long enough for the comparison
+                if len(original_new_words) > len_to_compare and ' ' in previous_text_normalized:
                     
-                    logger.warning(
-                        f"Initial {len_to_compare}-word prefix repetition detected. "
-                        f"Similarity: {similarity:.2f}. New: '{new_prefix}', Initial: '{initial_prefix}'. "
-                        f"Corrected transcript: '{corrected_transcript}'"
-                    )
-                    return True, corrected_transcript
+                    previous_words_normalized = previous_text_normalized.split()
+                    if len(previous_words_normalized) < len_to_compare:
+                        continue
+
+                    # Take the prefix from the *previous* transcript
+                    prefix_to_check = " ".join(previous_words_normalized[:len_to_compare])
+                    
+                    # Check if the *new* transcript starts with this prefix
+                    if normalized_new_text.startswith(prefix_to_check):
+                        # The prefix matches. We need to strip it from the *original* new text.
+                        # This is a simple heuristic assuming word counts are consistent.
+                        corrected_transcript = " ".join(original_new_words[len_to_compare:])
+                        
+                        # Final sanity check: ensure we are not returning an empty string
+                        if corrected_transcript.strip():
+                            logger.warning(
+                                f"Corrected repeated prefix. "
+                                f"Prefix: '{prefix_to_check}', Original: '{new_text}', Corrected: '{corrected_transcript}'"
+                            )
+                            return True, corrected_transcript
         
         return False, None
     
@@ -393,10 +397,6 @@ class HallucinationManager:
         self.history_manager = TranscriptHistoryManager(max_history)
         self.detector = HallucinationDetector(similarity_threshold, min_transcript_length)
         
-        # Session-specific blocklisting for recurring hallucinations
-        self.hallucination_candidates: Dict[str, int] = {}
-        self.blocklist: set = set()
-        
         # Statistics
         self.stats = {
             'total_transcripts': 0,
@@ -422,34 +422,24 @@ class HallucinationManager:
         
         is_hallucination, reason, corrected_transcript = self.detector.is_hallucination(
             transcript_text, 
-            self.history_manager,
-            self.blocklist
+            self.history_manager
         )
         
         if is_hallucination:
             self.stats['hallucinations_detected'] += 1
             self.stats['hallucination_reasons'][reason] = self.stats['hallucination_reasons'].get(reason, 0) + 1
             
+            # If we have a corrected transcript, the "hallucination" is that we've cleaned it.
+            # It's still a "valid" transcript in its corrected form.
             if corrected_transcript:
                 logger.warning(f"Session {self.session_id}: Corrected hallucination. Reason: {reason}. Original: '{transcript_text}', Corrected: '{corrected_transcript}'")
+                # Add the corrected version to history
                 self.history_manager.add_transcript(corrected_transcript, timestamp)
                 self.stats['valid_transcripts'] += 1
+                # Return the corrected transcript as valid.
                 return True, reason, corrected_transcript
             else:
-                # This is an uncorrectable hallucination (similarity, blocklist, etc.)
-                normalized_text = self.history_manager._normalize_text(transcript_text)
-                
-                # If it was a similarity match, consider it for the blocklist
-                if reason.startswith("similarity"):
-                    count = self.hallucination_candidates.get(normalized_text, 0) + 1
-                    self.hallucination_candidates[normalized_text] = count
-                    logger.info(f"Hallucination candidate '{normalized_text}' detected {count} time(s).")
-
-                    # Add to blocklist after 2 detections to prevent false positives
-                    if count >= 2:
-                        self.blocklist.add(normalized_text)
-                        logger.warning(f"'{normalized_text}' has been added to the session blocklist.")
-
+                # This is an uncorrectable hallucination (e.g., similarity match, pattern match)
                 logger.warning(f"Session {self.session_id}: Uncorrectable hallucination detected. Reason: {reason}. Text: '{transcript_text}'")
                 return False, reason, None
         else:
@@ -481,8 +471,6 @@ class HallucinationManager:
     def clear_session(self) -> None:
         """Clear all session data."""
         self.history_manager.clear_history()
-        self.hallucination_candidates.clear()
-        self.blocklist.clear()
         self.stats = {
             'total_transcripts': 0,
             'hallucinations_detected': 0,
