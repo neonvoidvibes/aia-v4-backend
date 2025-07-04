@@ -345,12 +345,15 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
 
 import httpx
 
-@retry(
+# Generic retry strategy for Supabase calls that might face transient network issues
+retry_strategy_supabase = retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry_error_callback=log_retry_error,
-    retry=retry_if_exception_type(httpx.RemoteProtocolError)
+    retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException, httpx.ConnectError))
 )
+
+@retry_strategy_supabase
 def verify_user_agent_access_with_retry(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]:
     return verify_user_agent_access(token, agent_name)
 
@@ -2269,6 +2272,7 @@ def generate_chat_title(first_user_message: str) -> str:
 
 @app.route('/api/chat/history/save', methods=['POST'])
 @supabase_auth_required(agent_required=True)
+@retry_strategy_supabase
 def save_chat_history(user: SupabaseUser):
     data = g.get('json_data', {})
     agent_name = data.get('agent')
@@ -2313,6 +2317,7 @@ def save_chat_history(user: SupabaseUser):
 
 @app.route('/api/chat/history/list', methods=['GET'])
 @supabase_auth_required(agent_required=False)
+@retry_strategy_supabase
 def list_chat_history(user: SupabaseUser):
     agent_name = request.args.get('agent')
     client = get_supabase_client()
@@ -2344,6 +2349,7 @@ def list_chat_history(user: SupabaseUser):
 
 @app.route('/api/chat/history/get', methods=['GET'])
 @supabase_auth_required(agent_required=False)
+@retry_strategy_supabase
 def get_chat_history(user: SupabaseUser):
     chat_id = request.args.get('chatId')
     client = get_supabase_client()
