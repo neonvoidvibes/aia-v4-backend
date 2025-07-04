@@ -600,32 +600,61 @@ def process_audio_segment_and_update_s3(
         final_filtered_segments = detect_single_word_loops(filtered_segments_pre_lock, session_data, segment_offset_seconds)
         logger.debug(f"After all filtering, {len(final_filtered_segments)} segments remain for processing.")
 
-        processed_transcript_lines = []
-        current_prompt = session_data.get("last_successful_transcript", "")
-        
-        for segment in final_filtered_segments:
-            raw_text = segment.get('text', '').strip()
+        # --- NEW: Combine segments into a single block before writing ---
+        lines_to_append_to_s3 = []
+        if final_filtered_segments:
+            # Combine text from all valid segments
+            combined_text = " ".join([s.get('text', '').strip() for s in final_filtered_segments])
             
-            # CRITICAL FIX: Check for prompt echo before other filtering
-            if current_prompt and is_prompt_echo(raw_text, current_prompt, threshold=0.6):
-                logger.warning(f"Session {session_id_for_log}: Prompt echo detected, filtering segment: '{raw_text}' (prompt was: '{current_prompt}')")
-                continue
-            
-            filtered_text = filter_hallucinations(raw_text)
-            
-            if is_valid_transcription(filtered_text):
-                final_text_for_s3 = filtered_text
+            # Get the full text from the original, unsegmented transcription result
+            # This is a better source for the hallucination detector as it has more context
+            full_unsegmented_text = transcription_result.get("text", "").strip()
+
+            # Run hallucination detection on the full, unsegmented text block
+            hallucination_manager = get_hallucination_manager(session_id)
+            is_valid, reason, corrected_text = hallucination_manager.process_transcript(full_unsegmented_text)
+
+            if not is_valid:
+                logger.warning(f"Session {session_id_for_log}: Hallucination detected in combined block. Reason: {reason}. Original: '{full_unsegmented_text}'. Corrected: '{corrected_text}'. Skipping update.")
+                # Aggressively clear context on hallucination
+                session_data["last_successful_transcript"] = ""
+            else:
+                final_text_for_s3 = corrected_text
+                
+                # Apply PII filtering to the final, corrected, combined text
                 if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
                     lang_hint = language_setting_from_client if language_setting_from_client != 'any' else language_hint_fallback
                     model_name_pii = os.getenv("PII_REDACTION_MODEL_NAME", "claude-3-haiku-20240307")
-                    final_text_for_s3 = anonymize_transcript_chunk(filtered_text, pii_llm_client_for_service, model_name_pii, language_hint=lang_hint)
-                
+                    final_text_for_s3 = anonymize_transcript_chunk(final_text_for_s3, pii_llm_client_for_service, model_name_pii, language_hint=lang_hint)
+
                 if is_valid_transcription(final_text_for_s3):
-                    # Generate timestamp using the ATOMICALLY read offset
-                    abs_start = segment_offset_seconds + segment.get('start', 0.0)
-                    abs_end = segment_offset_seconds + segment.get('end', 0.0)
+                    # Create a single timestamp from the first segment's start to the last segment's end
+                    first_segment = final_filtered_segments[0]
+                    last_segment = final_filtered_segments[-1]
+                    
+                    abs_start = segment_offset_seconds + first_segment.get('start', 0.0)
+                    abs_end = segment_offset_seconds + last_segment.get('end', 0.0)
+                    
                     timestamp_str = format_timestamp_range(abs_start, abs_end, session_start_time_utc)
-                    processed_transcript_lines.append(f"{timestamp_str} {final_text_for_s3}")
+                    
+                    # Add the single, combined, corrected, and PII-filtered line
+                    lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
+                    
+                    # Update context with this new valid line
+                    session_data["last_successful_transcript"] = final_text_for_s3
+                else:
+                    logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
+        else:
+            logger.info(f"Session {session_id_for_log}: No valid segments remained after filtering, nothing to append.")
+        # --- END: New segment combination logic ---
+
+        # Process markers (this logic remains the same)
+        marker_to_write = session_data.get("pause_marker_to_write")
+        if marker_to_write:
+            offset = session_data.get("pause_event_timestamp_offset", segment_offset_seconds)
+            timestamp = _format_time_delta(offset, session_start_time_utc)
+            lines_to_append_to_s3.insert(0, f"[{timestamp} UTC] {marker_to_write}") # Insert at the beginning
+            session_data["pause_marker_to_write"] = None # Clear after processing
 
         # Process markers
         lines_to_append_to_s3 = []
@@ -638,50 +667,8 @@ def process_audio_segment_and_update_s3(
 
         lines_to_append_to_s3.extend(processed_transcript_lines)
         
-        # --- Update rolling context for next API call ---
-        # CRITICAL FIX: Use minimal or no context to prevent hallucination feedback loops
-        if processed_transcript_lines:
-            # Track segments since last context reset to implement periodic resets
-            segments_since_reset = session_data.get("segments_since_context_reset", 0) + 1
-            session_data["segments_since_context_reset"] = segments_since_reset
-            
-            # Reset context every 8 segments to break potential feedback loops
-            if segments_since_reset >= 8:
-                session_data["last_successful_transcript"] = ""
-                session_data["segments_since_context_reset"] = 0
-                logger.info(f"Session {session_id_for_log}: Context reset after {segments_since_reset} segments to prevent hallucination loops")
-            else:
-                # Use minimal context (2-3 words max) to reduce feedback loop risk
-                last_line_text = processed_transcript_lines[-1].split("] ", 1)[-1]
-                words = last_line_text.split()
-                
-                # Only use 2-3 words from the end, and only if they're meaningful
-                if len(words) >= 3:
-                    context_words = " ".join(words[-2:])  # Use only last 2 words
-                    context_words_lower = context_words.strip().lower()
-                    
-                    # Check against blacklist to prevent reuse of problematic contexts
-                    blacklist = session_data.get('context_blacklist', set())
-                    is_blacklisted = context_words_lower in blacklist
-                    
-                    # Additional safety: avoid using context if it contains repetitive patterns or is blacklisted
-                    if (len(set(context_words.lower().split())) > 1 and not is_blacklisted):  # Ensure at least 2 unique words and not blacklisted
-                        session_data["last_successful_transcript"] = context_words
-                        logger.debug(f"Updated rolling context for session {session_id_for_log} with minimal context (2 words): '{context_words}'")
-                    else:
-                        session_data["last_successful_transcript"] = ""
-                        if is_blacklisted:
-                            logger.debug(f"Session {session_id_for_log}: Skipped blacklisted context '{context_words}', using no context")
-                        else:
-                            logger.debug(f"Session {session_id_for_log}: Skipped repetitive context, using no context")
-                else:
-                    # Not enough words for meaningful context
-                    session_data["last_successful_transcript"] = ""
-                    logger.debug(f"Session {session_id_for_log}: Insufficient words for context, using no context")
-        else:
-            # No processed lines, don't update context
-            logger.debug(f"Session {session_id_for_log}: No processed lines, keeping existing context")
-        # --- End context update ---
+        # The rolling context is now updated directly when the combined line is created.
+        # This section can be removed as it's now redundant.
 
         # Perform S3 append if there's new content
         if lines_to_append_to_s3:
