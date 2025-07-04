@@ -26,7 +26,7 @@ from flask_sock import Sock
 from simple_websocket.errors import ConnectionClosed
 
 from supabase import create_client, Client
-from gotrue.errors import AuthApiError
+from gotrue.errors import AuthApiError, AuthRetryableError
 from gotrue.types import User as SupabaseUser
 from utils.supabase_client import get_supabase_client
 
@@ -268,6 +268,15 @@ retry_strategy_openai = retry(
     retry=(retry_if_exception_type((OpenAI_APIStatusError, OpenAI_APIConnectionError)))
 )
 
+# Specific retry for Supabase auth transient errors
+retry_strategy_auth = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry_error_callback=log_retry_error,
+    retry=retry_if_exception_type(AuthRetryableError)
+)
+
+@retry_strategy_auth
 def verify_user(token: Optional[str]) -> Optional[SupabaseUser]:
     client = get_supabase_client()
     if not client:
