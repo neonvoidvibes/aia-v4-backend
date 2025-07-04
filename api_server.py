@@ -93,6 +93,11 @@ sock = Sock(app)
 app.executor = ThreadPoolExecutor(max_workers=(os.cpu_count() or 1) * 2)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 
+# Clear any stale sessions at startup, which can happen in some deployment environments
+active_sessions: Dict[str, Dict[str, Any]] = {}
+session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
+logger.info("Initialized and cleared active_sessions and session_locks at startup.")
+
 def on_shutdown():
     """Ensure the executor is shut down gracefully when the app exits."""
     logger.info("Shutting down ThreadPoolExecutor...")
@@ -269,9 +274,6 @@ retry_strategy_openai = retry(
     retry_error_callback=log_retry_error,
     retry=(retry_if_exception_type((OpenAI_APIStatusError, OpenAI_APIConnectionError)))
 )
-
-active_sessions: Dict[str, Dict[str, Any]] = {}
-session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock) 
 
 def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: 
     if not supabase:
