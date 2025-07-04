@@ -214,12 +214,21 @@ class VADTranscriptionService:
         temp_dir: str,
         language_setting: str,
         session_data: Dict,
-        session_lock: threading.Lock
+        session_lock: threading.Lock,
+        vad_aggressiveness: int = 3 # Add parameter with a safe default
     ):
         """
         Process a single audio segment: convert, analyze, and submit.
         """
         processing_start_time = time.time()
+
+        try:
+            # Set the VAD aggressiveness for this specific call
+            self.vad.set_mode(vad_aggressiveness)
+            logger.debug(f"Session {session_id}: Set VAD aggressiveness to {vad_aggressiveness} for this segment.")
+        except Exception as e:
+            logger.error(f"Session {session_id}: Failed to set VAD mode to {vad_aggressiveness}. Error: {e}", exc_info=True)
+            # Continue with the default/previous mode
         
         # Convert entire blob to raw PCM data
         audio_data_np = self.process_webm_to_wav(webm_blob_bytes)
