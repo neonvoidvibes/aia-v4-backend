@@ -31,6 +31,7 @@ class TranscriptHistoryManager:
         self.max_history = max_history
         self.history = deque(maxlen=max_history)
         self.session_start_time = time.time()
+        self.initial_transcript: Optional[Dict[str, Any]] = None
         
         logger.info(f"TranscriptHistoryManager initialized with max_history={max_history}")
     
@@ -55,6 +56,19 @@ class TranscriptHistoryManager:
             'relative_time': timestamp - self.session_start_time
         }
         
+        # Store the first transcript separately for long-term checks
+        if not self.initial_transcript:
+            # Limit the initial transcript to the first 7 words for focused checking
+            words = normalized_text.split()
+            short_text = " ".join(words[:7])
+            
+            self.initial_transcript = {
+                'text': text,
+                'normalized_text': short_text,
+                'timestamp': timestamp
+            }
+            logger.info(f"Stored initial transcript: '{short_text}'")
+
         self.history.append(transcript_entry)
         logger.debug(f"Added transcript to history: '{text[:50]}...' at {timestamp}")
     
@@ -86,6 +100,7 @@ class TranscriptHistoryManager:
     def clear_history(self) -> None:
         """Clear all transcript history."""
         self.history.clear()
+        self.initial_transcript = None
         logger.info("Transcript history cleared")
     
     def _normalize_text(self, text: str) -> str:
@@ -177,6 +192,12 @@ class HallucinationDetector:
         if pattern_match:
             logger.warning(f"Hallucination pattern detected: '{pattern_match}' in '{new_transcript}'")
             return True, f"pattern_match_{pattern_match}"
+
+        # Check for repetition of the initial session transcript
+        initial_transcript_match = self._check_initial_transcript_repetition(normalized_new, history_manager)
+        if initial_transcript_match:
+            logger.warning(f"Initial transcript repetition detected: '{new_transcript}'")
+            return True, "initial_transcript_repetition"
         
         # Check similarity against recent history
         recent_phrases = history_manager.get_recent_phrases(3)
@@ -195,6 +216,33 @@ class HallucinationDetector:
             return True, f"internal_repetition_{internal_repetition}"
         
         return False, "valid"
+
+    def _check_initial_transcript_repetition(self, new_text: str, history_manager: TranscriptHistoryManager) -> bool:
+        """
+        Checks if the new transcript is a repetition of the initial utterance.
+        This is specifically to catch hallucinations where the first few words of a session are repeated later.
+        """
+        if not history_manager.initial_transcript or len(history_manager.history) < 2:
+            return False
+
+        initial_normalized = history_manager.initial_transcript['normalized_text']
+        new_words = new_text.split()
+        
+        # Only check for short, hallucinated repetitions
+        if len(new_words) <= 4:
+            initial_words = initial_normalized.split()
+            
+            # Compare the new text against the corresponding first few words of the initial transcript
+            if len(initial_words) >= len(new_words):
+                initial_prefix = " ".join(initial_words[:len(new_words)])
+                
+                # Use a tuned similarity threshold to catch close variations and misspellings
+                similarity = SequenceMatcher(None, new_text, initial_prefix).ratio()
+                if similarity > 0.6:
+                    logger.warning(f"Initial transcript repetition detected. Similarity: {similarity:.2f}. New: '{new_text}', Initial Prefix: '{initial_prefix}'")
+                    return True
+        
+        return False
     
     def _check_hallucination_patterns(self, normalized_text: str) -> Optional[str]:
         """
