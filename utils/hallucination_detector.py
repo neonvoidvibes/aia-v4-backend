@@ -220,13 +220,13 @@ class HallucinationDetector:
 
     def _check_for_repeated_prefix(self, new_text: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, Optional[str]]:
         """
-        Checks if the new transcript starts with a repeated prefix from any recent transcript.
-        This is the core logic to fix feedback loops where Whisper prepends a few words.
+        Checks if the new transcript starts with a repeated suffix from the immediately preceding transcript.
+        This is the core logic to fix feedback loops where Whisper prepends a few words from the previous segment.
         
         Example:
-        History: ["hallå där nu testar vi"]
-        New:     "hallå där nu provar vi igen"
-        Result:  (True, "nu provar vi igen") -> The repeated prefix "hallå där" is stripped.
+        History: ["...testar vi det här"]
+        New:     "vi det här och nu provar vi igen"
+        Result:  (True, "och nu provar vi igen") -> The repeated suffix "vi det här" is stripped.
         """
         if not history_manager.history:
             return False, None
@@ -234,35 +234,35 @@ class HallucinationDetector:
         original_new_words = new_text.split()
         normalized_new_text = history_manager._normalize_text(new_text)
 
-        # Check against the last 3 transcripts in history
-        for previous_entry in history_manager.get_recent_transcripts(3):
-            previous_text_normalized = previous_entry['normalized_text']
-            
-            # We are looking for a 2, 3, or 4-word prefix match.
-            for len_to_compare in [4, 3, 2]:
-                # Ensure both new and old texts are long enough for the comparison
-                if len(original_new_words) > len_to_compare and ' ' in previous_text_normalized:
-                    
-                    previous_words_normalized = previous_text_normalized.split()
-                    if len(previous_words_normalized) < len_to_compare:
-                        continue
+        # Check only against the most recent transcript in history
+        previous_entry = list(history_manager.history)[-1]
+        previous_text_normalized = previous_entry['normalized_text']
+        
+        # We are looking for a 2, 3, or 4-word suffix-prefix match.
+        for len_to_compare in [4, 3, 2]:
+            # Ensure both new and old texts are long enough for the comparison
+            if len(original_new_words) > len_to_compare and ' ' in previous_text_normalized:
+                
+                previous_words_normalized = previous_text_normalized.split()
+                if len(previous_words_normalized) < len_to_compare:
+                    continue
 
-                    # Take the prefix from the *previous* transcript
-                    prefix_to_check = " ".join(previous_words_normalized[:len_to_compare])
+                # Take the suffix from the *previous* transcript
+                suffix_to_check = " ".join(previous_words_normalized[-len_to_compare:])
+                
+                # Check if the *new* transcript starts with this suffix
+                if normalized_new_text.startswith(suffix_to_check):
+                    # The suffix/prefix matches. We need to strip it from the *original* new text.
+                    # This is a simple heuristic assuming word counts are consistent.
+                    corrected_transcript = " ".join(original_new_words[len_to_compare:])
                     
-                    # Check if the *new* transcript starts with this prefix
-                    if normalized_new_text.startswith(prefix_to_check):
-                        # The prefix matches. We need to strip it from the *original* new text.
-                        # This is a simple heuristic assuming word counts are consistent.
-                        corrected_transcript = " ".join(original_new_words[len_to_compare:])
-                        
-                        # Final sanity check: ensure we are not returning an empty string
-                        if corrected_transcript.strip():
-                            logger.warning(
-                                f"Corrected repeated prefix. "
-                                f"Prefix: '{prefix_to_check}', Original: '{new_text}', Corrected: '{corrected_transcript}'"
-                            )
-                            return True, corrected_transcript
+                    # Final sanity check: ensure we are not returning an empty string
+                    if corrected_transcript.strip():
+                        logger.warning(
+                            f"Corrected repeated prefix. "
+                            f"Prefix: '{suffix_to_check}', Original: '{new_text}', Corrected: '{corrected_transcript}'"
+                        )
+                        return True, corrected_transcript
         
         return False, None
     

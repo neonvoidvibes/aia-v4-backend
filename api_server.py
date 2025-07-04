@@ -1288,7 +1288,7 @@ def audio_stream_socket(ws, session_id: str):
                 break
 
     except ConnectionClosed as e:
-        logger.info(f"WebSocket for session {session_id} (user {user.id}): Connection closed by client. Code: {e.code}, Reason: {e.reason}")
+        logger.info(f"WebSocket for session {session_id} (user {user.id}): Connection closed by client: {e}")
     except ConnectionResetError:
         logger.warning(f"WebSocket for session {session_id} (user {user.id}): Connection reset by client.")
     except Exception as e:
