@@ -197,16 +197,32 @@ except Exception as e:
     logger.warning(f"Pinecone initialization failed: {e}")
 
 supabase: Optional[Client] = None
-try:
-    supabase_url = os.environ.get("SUPABASE_URL")
-    supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    if not supabase_url or not supabase_key:
-        logger.warning("Supabase environment variables (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) not found. Supabase features disabled.")
-    else:
-        supabase = create_client(supabase_url, supabase_key)
-        logger.info("Supabase client initialized successfully.")
-except Exception as e:
-    logger.error(f"Failed to initialize Supabase client: {e}", exc_info=True)
+supabase_lock = threading.Lock()
+
+def get_supabase_client() -> Optional[Client]:
+    """
+    Gets a thread-safe, resilient Supabase client, re-initializing if necessary.
+    """
+    global supabase
+    with supabase_lock:
+        # Check if the client is None or if the session might be stale/closed
+        if supabase is None or getattr(supabase.auth.session, 'access_token', None) is None:
+            logger.info("Supabase client is None or session is invalid, attempting to re-initialize.")
+            try:
+                supabase_url = os.environ.get("SUPABASE_URL")
+                supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+                if not supabase_url or not supabase_key:
+                    logger.error("Cannot initialize Supabase client: URL or Key is missing.")
+                    return None
+                supabase = create_client(supabase_url, supabase_key)
+                logger.info("Supabase client initialized successfully.")
+            except Exception as e:
+                logger.error(f"Failed to initialize Supabase client: {e}", exc_info=True)
+                supabase = None # Ensure it's None on failure
+    return supabase
+
+# Initial connection attempt at startup
+get_supabase_client()
 
 try:
     anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -275,9 +291,10 @@ retry_strategy_openai = retry(
     retry=(retry_if_exception_type((OpenAI_APIStatusError, OpenAI_APIConnectionError)))
 )
 
-def verify_user(token: Optional[str]) -> Optional[SupabaseUser]: 
-    if not supabase:
-        logger.error("Auth check failed: Supabase client not initialized.")
+def verify_user(token: Optional[str]) -> Optional[SupabaseUser]:
+    client = get_supabase_client()
+    if not client:
+        logger.error("Auth check failed: Supabase client not available.")
         return None
 
     if not token:
@@ -285,7 +302,7 @@ def verify_user(token: Optional[str]) -> Optional[SupabaseUser]:
         return None
 
     try:
-        user_resp = supabase.auth.get_user(token)
+        user_resp = client.auth.get_user(token)
         if user_resp and user_resp.user:
             logger.debug(f"Token verified for user ID: {user_resp.user.id}")
             return user_resp.user 
@@ -299,9 +316,10 @@ def verify_user(token: Optional[str]) -> Optional[SupabaseUser]:
         logger.error(f"Unexpected error during token verification: {e}", exc_info=True)
         return None
 
-def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]: 
-    if not supabase:
-        logger.error("Auth check failed: Supabase client not initialized.")
+def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]:
+    client = get_supabase_client()
+    if not client:
+        logger.error("Auth check failed: Supabase client not available.")
         return None, jsonify({"error": "Auth service unavailable"}, 503)
 
     user = verify_user(token)
@@ -313,7 +331,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         return user, None
 
     try:
-        agent_res = supabase.table("agents").select("id").eq("name", agent_name).limit(1).execute()
+        agent_res = client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
         if hasattr(agent_res, 'error') and agent_res.error:
             logger.error(f"Database error finding agent_id for name '{agent_name}': {agent_res.error}")
             return None, jsonify({"error": "Database error checking agent"}), 500
@@ -324,7 +342,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         agent_id = agent_res.data[0]['id']
         logger.debug(f"Found agent_id '{agent_id}' for name '{agent_name}'.")
 
-        access_res = supabase.table("user_agent_access") \
+        access_res = client.table("user_agent_access") \
             .select("agent_id") \
             .eq("user_id", user.id) \
             .eq("agent_id", agent_id) \
@@ -465,8 +483,8 @@ def start_recording_route(user: SupabaseUser):
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
     # Fetch agent-specific API keys or fall back to globals
-    agent_openai_key = get_api_key(agent_name, 'openai', supabase)
-    agent_anthropic_key = get_api_key(agent_name, 'anthropic', supabase)
+    agent_openai_key = get_api_key(agent_name, 'openai')
+    agent_anthropic_key = get_api_key(agent_name, 'anthropic')
     
     s3_transcript_base_filename = f"transcript_D{session_start_time_utc.strftime('%Y%m%d')}-T{session_start_time_utc.strftime('%H%M%S')}_uID-{user.id}_oID-river_aID-{agent_name}_eID-{event_id}_sID-{session_id}.txt"
     s3_transcript_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/{s3_transcript_base_filename}"
@@ -557,8 +575,8 @@ def start_audio_recording(user: SupabaseUser):
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
     
-    agent_openai_key = get_api_key(agent_name, 'openai', supabase)
-    agent_anthropic_key = get_api_key(agent_name, 'anthropic', supabase)
+    agent_openai_key = get_api_key(agent_name, 'openai')
+    agent_anthropic_key = get_api_key(agent_name, 'anthropic')
     
     s3_recording_filename = f"recording_D{session_start_time_utc.strftime('%Y%m%d')}-T{session_start_time_utc.strftime('%H%M%S')}_uID-{user.id}_oID-river_aID-{agent_name}_sID-{session_id}.txt"
     s3_recording_key = f"organizations/river/agents/{agent_name}/recordings/{s3_recording_filename}"
@@ -758,7 +776,7 @@ def summarize_transcript_route(user: SupabaseUser):
         logger.error("SummarizeTranscript: S3 client or bucket not configured.")
         return jsonify({"error": "S3 service not available"}), 503
     
-    agent_anthropic_key = get_api_key(agent_name, 'anthropic', supabase)
+    agent_anthropic_key = get_api_key(agent_name, 'anthropic')
     if not agent_anthropic_key:
         logger.error(f"SummarizeTranscript: Could not retrieve Anthropic API key for agent '{agent_name}'.")
         return jsonify({"error": "LLM service not available (key retrieval failed)"}), 503
@@ -1064,11 +1082,15 @@ def audio_stream_socket(ws, session_id: str):
                     logger.error(f"WebSocket session {session_id}: Error processing control message '{message}': {e}")
 
             elif isinstance(message, bytes):
-                with session_locks[session_id]: 
-                    if session_id not in active_sessions: 
+                with session_locks[session_id]:
+                    if session_id not in active_sessions:
                         logger.warning(f"WebSocket {session_id}: Session disappeared after acquiring lock. Aborting message processing.")
                         break
                     session_data = active_sessions[session_id]
+
+                    if session_data.get("is_backend_processing_paused", False):
+                        logger.debug(f"Session {session_id} is paused. Discarding {len(message)} audio bytes.")
+                        continue
                     
                     # Check if VAD is enabled for this session
                     vad_enabled = session_data.get("vad_enabled", False)
@@ -1433,7 +1455,7 @@ def transcribe_uploaded_file(user: SupabaseUser):
             agent_name_from_form = request.form.get('agent_name', 'UnknownAgent')
             logger.info(f"Agent name from form for header: {agent_name_from_form}")
 
-            openai_api_key = get_api_key(agent_name_from_form, 'openai', supabase)
+            openai_api_key = get_api_key(agent_name_from_form, 'openai')
             if not openai_api_key:
                 logger.error(f"OpenAI API key not found for agent '{agent_name_from_form}' or globally.")
                 return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
@@ -1986,8 +2008,9 @@ def handle_chat(user: SupabaseUser):
     return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
 
 def sync_agents_from_s3_to_supabase():
-    if not supabase: 
-        logger.warning("Agent Sync: Supabase client not initialized. Skipping.")
+    client = get_supabase_client()
+    if not client:
+        logger.warning("Agent Sync: Supabase client not available. Skipping.")
         return
     logger.info("Agent Sync: Starting synchronization from S3 to Supabase...")
     s3_agent_names = list_agent_names_from_s3()
@@ -1998,8 +2021,8 @@ def sync_agents_from_s3_to_supabase():
         logger.info("Agent Sync: No agent directories found in S3.")
         return
     try:
-        response = supabase.table("agents").select("name").execute()
-        if hasattr(response, 'error') and response.error: 
+        response = client.table("agents").select("name").execute()
+        if hasattr(response, 'error') and response.error:
             logger.error(f"Agent Sync: Error querying agents from Supabase: {response.error}")
             return
         db_agent_names = {agent['name'] for agent in response.data}
@@ -2014,8 +2037,8 @@ def sync_agents_from_s3_to_supabase():
     logger.info(f"Agent Sync: Found {len(missing_agents)} agents in S3 to add to Supabase: {missing_agents}")
     agents_to_insert = [{'name': name, 'description': f'Agent discovered from S3 path: {name}'} for name in missing_agents]
     try:
-        insert_response = supabase.table("agents").insert(agents_to_insert).execute()
-        if hasattr(insert_response, 'error') and insert_response.error: 
+        insert_response = client.table("agents").insert(agents_to_insert).execute()
+        if hasattr(insert_response, 'error') and insert_response.error:
             logger.error(f"Agent Sync: Error inserting agents into Supabase: {insert_response.error}")
         elif insert_response.data: 
             logger.info(f"Agent Sync: Successfully inserted {len(insert_response.data)} new agents into Supabase.")
@@ -2088,8 +2111,9 @@ def save_chat_memory_log(user: SupabaseUser):
     messages = data.get('messages', [])
     session_id = data.get('sessionId')
 
-    if not all([agent_name, messages, session_id, supabase]):
-        return jsonify({"error": "agentName, messages, and sessionId are required"}), 400
+    client = get_supabase_client()
+    if not all([agent_name, messages, session_id, client]):
+        return jsonify({"error": "agentName, messages, and sessionId are required, or DB is unavailable"}), 400
 
     logger.info(f"Save Memory Log: Received request for agent '{agent_name}', session '{session_id}'.")
 
@@ -2110,7 +2134,7 @@ def save_chat_memory_log(user: SupabaseUser):
         }
         
         # Use on_conflict to handle both insert and update in one call
-        upsert_res = supabase.table("agent_memory_logs") \
+        upsert_res = client.table("agent_memory_logs") \
             .upsert(upsert_data, on_conflict="source_identifier") \
             .execute()
         
@@ -2159,11 +2183,12 @@ def save_chat_memory_log(user: SupabaseUser):
 def list_saved_chat_logs(user: SupabaseUser):
     """Lists all saved memory logs for a given agent that the user can access."""
     agent_name = request.args.get('agentName') # Corrected from 'agent'
-    if not agent_name or not supabase:
-        return jsonify({"error": "Agent name is required"}), 400
+    client = get_supabase_client()
+    if not agent_name or not client:
+        return jsonify({"error": "Agent name is required or DB is unavailable"}), 400
 
     try:
-        query = supabase.table("agent_memory_logs") \
+        query = client.table("agent_memory_logs") \
             .select("id, created_at, summary") \
             .eq("agent_name", agent_name) \
             .order("created_at", desc=True)
@@ -2187,14 +2212,15 @@ def forget_chat_memory_log(user: SupabaseUser):
     agent_name = data.get('agentName')
     memory_id = data.get('memoryId')
 
-    if not all([agent_name, memory_id, supabase]):
-        return jsonify({"error": "agentName and memoryId are required"}), 400
+    client = get_supabase_client()
+    if not all([agent_name, memory_id, client]):
+        return jsonify({"error": "agentName and memoryId are required, or DB is unavailable"}), 400
     
     logger.info(f"Forget Memory: Request received for agent '{agent_name}', memory ID '{memory_id}'.")
 
     try:
         # Step 1: Get the source_identifier from Supabase before deleting the row
-        select_res = supabase.table("agent_memory_logs") \
+        select_res = client.table("agent_memory_logs") \
             .select("source_identifier") \
             .eq("id", memory_id) \
             .eq("agent_name", agent_name) \
@@ -2215,7 +2241,7 @@ def forget_chat_memory_log(user: SupabaseUser):
             logger.warning(f"Forget Memory: Failed to delete vectors from Pinecone for source '{source_identifier}'. The database entry will still be removed.")
 
         # Step 3: Delete from Supabase
-        delete_res = supabase.table("agent_memory_logs") \
+        delete_res = client.table("agent_memory_logs") \
             .delete() \
             .eq("id", memory_id) \
             .execute()
@@ -2276,7 +2302,9 @@ def save_chat_history(user: SupabaseUser):
     if not agent_name or not messages:
         return jsonify({'error': 'Agent name and messages are required'}), 400
     
-    agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+    client = get_supabase_client()
+    if not client: return jsonify({'error': 'Database not available'}), 503
+    agent_result = client.table('agents').select('id').eq('name', agent_name).single().execute()
     if not agent_result.data:
         return jsonify({'error': 'Agent not found'}), 404
     agent_id = agent_result.data['id']
@@ -2287,12 +2315,12 @@ def save_chat_history(user: SupabaseUser):
 
     try:
         if chat_id:
-            result = supabase.table('chat_history').update({
+            result = client.table('chat_history').update({
                 'title': title,
                 'messages': messages
             }).eq('id', chat_id).eq('user_id', user.id).execute()
         else:
-            result = supabase.table('chat_history').insert({
+            result = client.table('chat_history').insert({
                 'user_id': user.id,
                 'agent_id': agent_id,
                 'title': title,
@@ -2310,16 +2338,17 @@ def save_chat_history(user: SupabaseUser):
 @supabase_auth_required(agent_required=False)
 def list_chat_history(user: SupabaseUser):
     agent_name = request.args.get('agent')
-    if not agent_name or not supabase:
-        return jsonify({'error': 'Agent parameter is required'}), 400
+    client = get_supabase_client()
+    if not agent_name or not client:
+        return jsonify({'error': 'Agent parameter is required or DB is unavailable'}), 400
 
     try:
-        agent_result = supabase.table('agents').select('id').eq('name', agent_name).single().execute()
+        agent_result = client.table('agents').select('id').eq('name', agent_name).single().execute()
         if not agent_result.data:
             return jsonify([])
         agent_id = agent_result.data['id']
 
-        result = supabase.table('chat_history') \
+        result = client.table('chat_history') \
             .select('id, title, updated_at, agent_id') \
             .eq('user_id', user.id) \
             .eq('agent_id', agent_id) \
@@ -2340,11 +2369,12 @@ def list_chat_history(user: SupabaseUser):
 @supabase_auth_required(agent_required=False)
 def get_chat_history(user: SupabaseUser):
     chat_id = request.args.get('chatId')
-    if not chat_id or not supabase:
-        return jsonify({'error': 'Chat ID is required'}), 400
+    client = get_supabase_client()
+    if not chat_id or not client:
+        return jsonify({'error': 'Chat ID is required or DB is unavailable'}), 400
 
     try:
-        result = supabase.table('chat_history').select('*').eq('id', chat_id).eq('user_id', user.id).single().execute()
+        result = client.table('chat_history').select('*').eq('id', chat_id).eq('user_id', user.id).single().execute()
         
         if result.data:
             return jsonify(result.data), 200
@@ -2375,9 +2405,9 @@ def cleanup_idle_sessions():
             _finalize_session(session_id_to_clean)
 
 if __name__ == '__main__':
-    if supabase: 
+    if get_supabase_client():
         sync_agents_from_s3_to_supabase()
-    else: 
+    else:
         logger.warning("Skipping agent sync because Supabase client failed to initialize.")
     
     idle_cleanup_thread = threading.Thread(target=cleanup_idle_sessions, daemon=True)

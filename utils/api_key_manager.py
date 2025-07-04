@@ -4,6 +4,7 @@ import time
 from typing import Optional, Dict, Any
 from supabase import Client
 import threading
+from api_server import get_supabase_client # Import our new resilient client getter
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ API_KEY_CACHE: Dict[str, Dict[str, Any]] = {}
 CACHE_LOCK = threading.Lock()
 CACHE_TTL_SECONDS = 900  # 15 minutes
 
-def get_api_key(agent_name: str, service_name: str, supabase_client: Client) -> str:
+def get_api_key(agent_name: str, service_name: str) -> str:
     """
     Retrieves the API key for a given agent and service.
     1. Checks a local cache.
@@ -23,8 +24,7 @@ def get_api_key(agent_name: str, service_name: str, supabase_client: Client) -> 
 
     Args:
         agent_name (str): The name of the agent.
-        service_name (str): The service name ('anthropic' or 'openai').
-        supabase_client (Client): An initialized Supabase client instance.
+        service_name (str): The service name ('anthropic', 'openai', or 'google').
 
     Returns:
         str: The appropriate API key.
@@ -49,24 +49,28 @@ def get_api_key(agent_name: str, service_name: str, supabase_client: Client) -> 
             logger.info(f"CACHE HIT for API key: {cache_key}")
             return cached_entry['key']
 
-    # 2. Cache miss, query database
+    # 2. Cache miss, attempt to query database
     logger.info(f"CACHE MISS for API key: {cache_key}. Querying database.")
     final_key = fallback_key # Default to fallback
 
-    try:
-        # First, get the agent_id from the agent_name
-        agent_res = supabase_client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
-        
-        if agent_res.data:
-            agent_id = agent_res.data[0]['id']
+    supabase_client = get_supabase_client()
+    if not supabase_client:
+        logger.error(f"Cannot query for API key {cache_key}: Supabase client is not available. Using fallback.")
+    else:
+        try:
+            # First, get the agent_id from the agent_name
+            agent_res = supabase_client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
             
-            # Now, query for the API key using the agent_id
-            key_res = supabase_client.table("agent_api_keys") \
-                .select("api_key") \
-                .eq("agent_id", agent_id) \
-                .eq("service_name", service_name) \
-                .limit(1) \
-                .execute()
+            if agent_res.data:
+                agent_id = agent_res.data[0]['id']
+                
+                # Now, query for the API key using the agent_id
+                key_res = supabase_client.table("agent_api_keys") \
+                    .select("api_key") \
+                    .eq("agent_id", agent_id) \
+                    .eq("service_name", service_name) \
+                    .limit(1) \
+                    .execute()
 
             if key_res.data:
                 custom_key = key_res.data[0]['api_key']
@@ -77,13 +81,13 @@ def get_api_key(agent_name: str, service_name: str, supabase_client: Client) -> 
                     logger.warning(f"Found DB entry for agent '{agent_name}' but key is empty. Using fallback.")
             else:
                 logger.info(f"No custom '{service_name}' key found for agent '{agent_name}'. Using fallback.")
-        else:
-            logger.warning(f"Agent '{agent_name}' not found in DB. Using fallback key for '{service_name}'.")
+            else:
+                logger.warning(f"Agent '{agent_name}' not found in DB. Using fallback key for '{service_name}'.")
 
-    except Exception as e:
-        logger.error(f"Error fetching API key for {cache_key} from Supabase: {e}", exc_info=True)
-        # On DB error, fall back to the environment variable key
-        final_key = fallback_key
+        except Exception as e:
+            logger.error(f"Error fetching API key for {cache_key} from Supabase: {e}", exc_info=True)
+            # On DB error, fall back to the environment variable key
+            final_key = fallback_key
 
     # 3. Update cache
     with CACHE_LOCK:
