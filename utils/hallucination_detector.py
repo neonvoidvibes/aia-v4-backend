@@ -219,27 +219,32 @@ class HallucinationDetector:
 
     def _check_initial_transcript_repetition(self, new_text: str, history_manager: TranscriptHistoryManager) -> bool:
         """
-        Checks if the new transcript is a repetition of the initial utterance.
-        This is specifically to catch hallucinations where the first few words of a session are repeated later.
+        Checks if the new transcript's prefix is a repetition of the initial utterance's prefix.
+        This is specifically to catch hallucinations where the first few words of a session are repeated later,
+        often prepended to a new, valid transcript.
         """
-        if not history_manager.initial_transcript or len(history_manager.history) < 2:
+        if not history_manager.initial_transcript or not history_manager.history:
             return False
 
-        initial_normalized = history_manager.initial_transcript['normalized_text']
+        initial_prefix_stored = history_manager.initial_transcript['normalized_text']
+        initial_prefix_words = initial_prefix_stored.split()
         new_words = new_text.split()
-        
-        # Only check for short, hallucinated repetitions
-        if len(new_words) <= 4:
-            initial_words = initial_normalized.split()
-            
-            # Compare the new text against the corresponding first few words of the initial transcript
-            if len(initial_words) >= len(new_words):
-                initial_prefix = " ".join(initial_words[:len(new_words)])
+
+        # Check for 2, 3, and 4-word prefix matches. These are strong signals for this type of hallucination.
+        # We use a high threshold to avoid false positives, with a stricter threshold for shorter phrases.
+        for len_to_compare in [4, 3, 2]:
+            threshold = 0.9 if len_to_compare > 2 else 0.95  # Stricter for 2-word phrases
+
+            if len(new_words) >= len_to_compare and len(initial_prefix_words) >= len_to_compare:
+                new_prefix = " ".join(new_words[:len_to_compare])
+                initial_prefix = " ".join(initial_prefix_words[:len_to_compare])
                 
-                # Use a tuned similarity threshold to catch close variations and misspellings
-                similarity = SequenceMatcher(None, new_text, initial_prefix).ratio()
-                if similarity > 0.6:
-                    logger.warning(f"Initial transcript repetition detected. Similarity: {similarity:.2f}. New: '{new_text}', Initial Prefix: '{initial_prefix}'")
+                similarity = SequenceMatcher(None, new_prefix, initial_prefix).ratio()
+                if similarity > threshold:
+                    logger.warning(
+                        f"Initial {len_to_compare}-word prefix repetition detected. "
+                        f"Similarity: {similarity:.2f}. New: '{new_prefix}', Initial: '{initial_prefix}'"
+                    )
                     return True
         
         return False
