@@ -306,7 +306,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
 
     user = verify_user(token)
     if not user: 
-        return None, (jsonify({"error": "Unauthorized: Invalid or missing token"}), 401)
+        return None, jsonify({"error": "Unauthorized: Invalid or missing token"}, 401)
     
     if not agent_name:
         logger.debug(f"Authorization check: User {user.id} authenticated. No specific agent access check required for this route.")
@@ -346,7 +346,7 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
 
     except Exception as e:
         logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
-        return user, (jsonify({"error": "Internal server error during authorization"}), 500)
+        return None, jsonify({"error": "Internal server error during authorization"}, 500)
 
 import httpx
 
@@ -396,12 +396,7 @@ def supabase_auth_required(agent_required: bool = True):
                 return jsonify({"error": "Authorization service is temporarily unavailable. Please try again."}), 503
 
             if error_response:
-                status_code = getattr(error_response, 'status_code', 500)
-                try:
-                    error_json = error_response.get_json()
-                except Exception:
-                    error_json = {"error": "Unknown authorization error"}
-                return jsonify(error_json), status_code
+                return error_response
             return f(user=user, *args, **kwargs)
         return decorated_function
     return decorator
@@ -1499,6 +1494,44 @@ def transcribe_uploaded_file(user: SupabaseUser):
                     logger.error(f"Error cleaning up temporary file {temp_filepath}: {e_clean}")
     
     return jsonify({"error": "File not processed correctly"}), 400
+
+@app.route('/api/recordings/list', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def list_recordings(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agentName') or data.get('agent')
+    if not agent_name:
+        return jsonify({"error": "agentName or agent is required"}), 400
+
+    logger.info(f"Listing recordings for agent: {agent_name}")
+    
+    # Construct the S3 prefix for the agent's recordings
+    s3_prefix = f"organizations/river/agents/{agent_name}/recordings/"
+    
+    try:
+        s3_objects = list_s3_objects_metadata(s3_prefix)
+        
+        # The list_s3_objects_metadata function returns a list of dicts with 'Key', 'Size', 'LastModified'
+        # We need to format this into the structure the frontend expects.
+        recordings = [
+            {
+                "s3Key": obj['Key'],
+                "filename": os.path.basename(obj['Key']),
+                "timestamp": obj['LastModified'].isoformat() if obj.get('LastModified') else None,
+                "size": obj['Size']
+            }
+            for obj in s3_objects
+            if not obj['Key'].endswith('/') # Filter out folder markers
+        ]
+        
+        # Sort by timestamp descending
+        recordings.sort(key=lambda r: r['timestamp'] or '', reverse=True)
+        
+        logger.info(f"Found {len(recordings)} recordings for agent '{agent_name}' at prefix '{s3_prefix}'.")
+        return jsonify(recordings), 200
+    except Exception as e:
+        logger.error(f"Error listing recordings from S3 for prefix '{s3_prefix}': {e}", exc_info=True)
+        return jsonify({"error": "Failed to list recordings from S3"}), 500
 
 @app.route('/api/s3/list', methods=['GET'])
 @supabase_auth_required(agent_required=False)
