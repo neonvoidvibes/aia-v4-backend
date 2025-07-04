@@ -1827,7 +1827,7 @@ def handle_chat(user: SupabaseUser):
             last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
             
             # Fetch agent-specific keys for RAG (OpenAI) and Chat (Anthropic/Google)
-            openai_key_for_rag = get_api_key(agent_name, 'openai', supabase)
+            openai_key_for_rag = get_api_key(agent_name, 'openai')
             
             # Determine which LLM provider key to get
             if model_selection.startswith('gemini'):
@@ -1837,7 +1837,7 @@ def handle_chat(user: SupabaseUser):
             else: # Default to anthropic for 'claude' models or unknown
                 llm_provider = 'anthropic'
             
-            llm_api_key = get_api_key(agent_name, llm_provider, supabase)
+            llm_api_key = get_api_key(agent_name, llm_provider)
             
             if last_actual_user_message_for_rag:
                 rag_start_time = time.time()
@@ -2096,7 +2096,7 @@ def save_chat_memory_log(user: SupabaseUser):
 
     try:
         # Step 1: Enrich the chat log
-        google_api_key = get_api_key(agent_name, 'google', supabase)
+        google_api_key = get_api_key(agent_name, 'google')
         if not google_api_key:
             return jsonify({"error": "Enrichment service not configured (missing API key)"}), 500
         
