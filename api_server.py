@@ -1,8 +1,10 @@
 import os
+from dotenv import load_dotenv
+load_dotenv() # Load environment variables at the very top
+
 import sys
 import logging
 from flask import Flask, jsonify, request, Response, stream_with_context, g
-from dotenv import load_dotenv
 import threading 
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -45,8 +47,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, re
 from flask_cors import CORS
 
 from transcription_service import process_audio_segment_and_update_s3
-
-load_dotenv()
 
 def setup_logging(debug=False):
     log_filename = 'api_server.log'; root_logger = logging.getLogger(); log_level = logging.DEBUG if debug else logging.INFO
