@@ -549,9 +549,8 @@ def start_audio_recording(user: SupabaseUser):
     data = g.get('json_data', {})
     agent_name = data.get('agent')
     language_setting = data.get('transcriptionLanguage', 'any')
-    vad_aggressiveness = data.get('vad_aggressiveness', 2) # Default to 2 (Balanced)
     
-    logger.info(f"Start audio recording: agent='{agent_name}', language='{language_setting}', VAD Aggressiveness: {vad_aggressiveness}")
+    logger.info(f"Start audio recording: agent='{agent_name}', language='{language_setting}'")
 
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
@@ -589,26 +588,8 @@ def start_audio_recording(user: SupabaseUser):
         "is_first_blob_received": False,
         "vad_enabled": False,
         "last_successful_transcript": "",
-        "vad_aggressiveness": vad_aggressiveness,
     }
     logger.info(f"Audio recording session {session_id} started for agent {agent_name} by user {user.id}.")
-
-    # Initialize VAD session if enabled
-    if VAD_IMPORT_SUCCESS and vad_bridge:
-        try:
-            vad_success = vad_bridge.create_vad_session(
-                session_id=session_id,
-                existing_session_data=active_sessions[session_id],
-                main_session_lock=session_locks[session_id]
-            )
-            if vad_success:
-                active_sessions[session_id]["vad_enabled"] = True
-                logger.info(f"VAD session {session_id} created successfully for audio recording.")
-            else:
-                logger.warning(f"Failed to create VAD session {session_id} for audio recording, falling back to original transcription")
-        except Exception as e:
-            logger.error(f"Error creating VAD session {session_id} for audio recording: {e}", exc_info=True)
-            logger.warning(f"VAD session creation failed for {session_id}, falling back to original transcription")
     
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')

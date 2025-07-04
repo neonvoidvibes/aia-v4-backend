@@ -40,14 +40,12 @@ class VADIntegrationBridge:
         vad_aggressiveness = int(os.getenv('VAD_AGGRESSIVENESS', '3'))
         
         try:
-            # The VAD manager is now initialized with a default aggressiveness.
-            # The actual aggressiveness will be determined per-session.
             self.vad_manager = VADTranscriptionManager(
                 openai_api_key=openai_api_key,
                 base_temp_dir=base_temp_dir,
-                vad_aggressiveness=3 # Default to most aggressive
+                vad_aggressiveness=vad_aggressiveness
             )
-            logger.info(f"VAD Integration Bridge initialized with default VAD manager.")
+            logger.info(f"VAD Integration Bridge initialized with aggressiveness {vad_aggressiveness}")
         except Exception as e:
             logger.error(f"Failed to initialize VAD manager: {e}", exc_info=True)
             raise RuntimeError(f"VAD Integration Bridge initialization failed: {e}")
@@ -91,18 +89,13 @@ class VADIntegrationBridge:
                 session_temp_dir = self.vad_manager.get_session_temp_dir(session_id)
                 os.makedirs(session_temp_dir, exist_ok=True)
                 
-                # Get VAD aggressiveness from the session data, default to 3 if not present
-                vad_aggressiveness = existing_session_data.get('vad_aggressiveness', 3)
-                logger.info(f"Registering VAD session {session_id} with aggressiveness level: {vad_aggressiveness}")
-
-                # Store session metadata, including the aggressiveness level
+                # Store session metadata
                 self.session_metadata[session_id] = {
                     "created_at": time.time(),
                     "existing_session_data": existing_session_data,
                     "main_session_lock": main_session_lock,
                     "temp_dir": session_temp_dir,
-                    "is_active": True,
-                    "vad_aggressiveness": vad_aggressiveness
+                    "is_active": True
                 }
                 
                 self.global_stats["sessions_created"] += 1
@@ -175,18 +168,13 @@ class VADIntegrationBridge:
         try:
             # This is a direct, synchronous call to the VAD service's fast path.
             # It will perform VAD and submit the transcription task to the app's executor.
-            
-            # Retrieve the session-specific VAD aggressiveness
-            vad_aggressiveness_for_session = session_meta.get('vad_aggressiveness', 3)
-
             self.vad_manager.vad_service.process_audio_segment(
                 webm_blob_bytes=webm_blob_bytes,
                 session_id=session_id,
                 temp_dir=session_meta["temp_dir"],
                 language_setting=session_meta["existing_session_data"].get('language_setting_from_client', 'any'),
                 session_data=session_meta["existing_session_data"],
-                session_lock=session_meta["main_session_lock"],
-                vad_aggressiveness=vad_aggressiveness_for_session # Pass it down
+                session_lock=session_meta["main_session_lock"]
             )
             self.global_stats["audio_blobs_processed"] += 1
             return True
