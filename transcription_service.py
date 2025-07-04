@@ -521,7 +521,13 @@ def process_audio_segment_and_update_s3(
     # Check for hallucinations before further processing
     if transcription_result and transcription_result.get("text"):
         hallucination_manager = get_hallucination_manager(session_id)
-        is_valid, reason = hallucination_manager.process_transcript(transcription_result.get("text", "").strip())
+        is_valid, reason, corrected_transcript = hallucination_manager.process_transcript(transcription_result.get("text", "").strip())
+        
+        if corrected_transcript:
+            logger.info(f"Session {session_id}: Transcript was corrected by hallucination filter. New text: '{corrected_transcript}'")
+            transcription_result['text'] = corrected_transcript
+            is_valid = True # A corrected transcript is considered valid for processing
+
         if not is_valid:
             logger.warning(f"Session {session_id}: Hallucination detected for transcription from {temp_segment_wav_path}. Reason: {reason}. Skipping S3 update and analyzing context health.")
             stats = hallucination_manager.get_statistics()

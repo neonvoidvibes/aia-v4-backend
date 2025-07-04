@@ -164,7 +164,7 @@ class HallucinationDetector:
         
         logger.info(f"HallucinationDetector initialized with threshold={similarity_threshold}")
     
-    def is_hallucination(self, new_transcript: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, str]:
+    def is_hallucination(self, new_transcript: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, str, Optional[str]]:
         """
         Determine if a new transcript is likely a hallucination.
         
@@ -173,10 +173,10 @@ class HallucinationDetector:
             history_manager: TranscriptHistoryManager instance with history
             
         Returns:
-            Tuple of (is_hallucination: bool, reason: str)
+            Tuple of (is_hallucination: bool, reason: str, corrected_transcript: Optional[str])
         """
         if not new_transcript or len(new_transcript.strip()) == 0:
-            return True, "empty_transcript"
+            return True, "empty_transcript", None
         
         # Normalize the new transcript
         normalized_new = history_manager._normalize_text(new_transcript)
@@ -185,69 +185,76 @@ class HallucinationDetector:
         word_count = len(normalized_new.split())
         if word_count < self.min_transcript_length:
             logger.debug(f"Transcript too short ({word_count} words): '{new_transcript}'")
-            return True, f"too_short_{word_count}_words"
+            return True, f"too_short_{word_count}_words", None
         
         # Check against known hallucination patterns
         pattern_match = self._check_hallucination_patterns(normalized_new)
         if pattern_match:
             logger.warning(f"Hallucination pattern detected: '{pattern_match}' in '{new_transcript}'")
-            return True, f"pattern_match_{pattern_match}"
+            return True, f"pattern_match_{pattern_match}", None
 
         # Check for repetition of the initial session transcript
-        initial_transcript_match = self._check_initial_transcript_repetition(normalized_new, history_manager)
-        if initial_transcript_match:
+        is_repetition, corrected_transcript = self._check_initial_transcript_repetition(new_transcript, history_manager)
+        if is_repetition:
             logger.warning(f"Initial transcript repetition detected: '{new_transcript}'")
-            return True, "initial_transcript_repetition"
+            return True, "initial_transcript_repetition", corrected_transcript
         
         # Check similarity against recent history
         recent_phrases = history_manager.get_recent_phrases(3)
         if not recent_phrases:
-            return False, "no_history"
+            return False, "no_history", None
         
         similarity_result = self._check_similarity(normalized_new, recent_phrases)
         if similarity_result[0]:
             logger.warning(f"Similarity hallucination detected: '{new_transcript}' similar to recent transcript")
-            return True, f"similarity_{similarity_result[1]:.3f}"
+            return True, f"similarity_{similarity_result[1]:.3f}", None
         
         # Check for internal repetition within the transcript
         internal_repetition = self._check_internal_repetition(normalized_new)
         if internal_repetition:
             logger.warning(f"Internal repetition detected: '{internal_repetition}' in '{new_transcript}'")
-            return True, f"internal_repetition_{internal_repetition}"
+            return True, f"internal_repetition_{internal_repetition}", None
         
-        return False, "valid"
+        return False, "valid", None
 
-    def _check_initial_transcript_repetition(self, new_text: str, history_manager: TranscriptHistoryManager) -> bool:
+    def _check_initial_transcript_repetition(self, new_text: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, Optional[str]]:
         """
         Checks if the new transcript's prefix is a repetition of the initial utterance's prefix.
-        This is specifically to catch hallucinations where the first few words of a session are repeated later,
-        often prepended to a new, valid transcript.
+        If a repetition is found, it returns the corrected transcript without the prepended hallucination.
         """
         if not history_manager.initial_transcript or not history_manager.history:
-            return False
+            return False, None
 
         initial_prefix_stored = history_manager.initial_transcript['normalized_text']
         initial_prefix_words = initial_prefix_stored.split()
-        new_words = new_text.split()
+        
+        # Use original text for reconstruction, but normalized for comparison
+        original_new_words = new_text.split()
+        normalized_new_words = history_manager._normalize_text(new_text).split()
 
-        # Check for 2, 3, and 4-word prefix matches. These are strong signals for this type of hallucination.
-        # We use a high threshold to avoid false positives, with a stricter threshold for shorter phrases.
+        # We check for 2, 3, and 4-word prefix matches
         for len_to_compare in [4, 3, 2]:
-            threshold = 0.9 if len_to_compare > 2 else 0.95  # Stricter for 2-word phrases
+            threshold = 0.9 if len_to_compare > 2 else 0.95
 
-            if len(new_words) >= len_to_compare and len(initial_prefix_words) >= len_to_compare:
-                new_prefix = " ".join(new_words[:len_to_compare])
+            if len(normalized_new_words) > len_to_compare and len(initial_prefix_words) >= len_to_compare:
+                new_prefix = " ".join(normalized_new_words[:len_to_compare])
                 initial_prefix = " ".join(initial_prefix_words[:len_to_compare])
                 
                 similarity = SequenceMatcher(None, new_prefix, initial_prefix).ratio()
+                
                 if similarity > threshold:
+                    # Find the end of the repeated segment in the original text
+                    # This is a simple heuristic assuming the word count is the same
+                    corrected_transcript = " ".join(original_new_words[len_to_compare:])
+                    
                     logger.warning(
                         f"Initial {len_to_compare}-word prefix repetition detected. "
-                        f"Similarity: {similarity:.2f}. New: '{new_prefix}', Initial: '{initial_prefix}'"
+                        f"Similarity: {similarity:.2f}. New: '{new_prefix}', Initial: '{initial_prefix}'. "
+                        f"Corrected transcript: '{corrected_transcript}'"
                     )
-                    return True
+                    return True, corrected_transcript
         
-        return False
+        return False, None
     
     def _check_hallucination_patterns(self, normalized_text: str) -> Optional[str]:
         """
@@ -390,20 +397,20 @@ class HallucinationManager:
         
         logger.info(f"HallucinationManager initialized for session {session_id}")
     
-    def process_transcript(self, transcript_text: str, timestamp: float = None) -> Tuple[bool, str]:
+    def process_transcript(self, transcript_text: str, timestamp: float = None) -> Tuple[bool, str, Optional[str]]:
         """
-        Process a new transcript and determine if it's valid or a hallucination.
+        Process a new transcript, check for hallucinations, and return a corrected version if applicable.
         
         Args:
             transcript_text: New transcript text
             timestamp: Unix timestamp (defaults to current time)
             
         Returns:
-            Tuple of (is_valid: bool, reason: str)
+            Tuple of (is_valid: bool, reason: str, corrected_transcript: Optional[str])
         """
         self.stats['total_transcripts'] += 1
         
-        is_hallucination, reason = self.detector.is_hallucination(
+        is_hallucination, reason, corrected_transcript = self.detector.is_hallucination(
             transcript_text, 
             self.history_manager
         )
@@ -412,15 +419,24 @@ class HallucinationManager:
             self.stats['hallucinations_detected'] += 1
             self.stats['hallucination_reasons'][reason] = self.stats['hallucination_reasons'].get(reason, 0) + 1
             
-            logger.warning(f"Session {self.session_id}: Hallucination detected - '{transcript_text}' (reason: {reason})")
-            return False, reason
+            # If we have a corrected transcript, the "hallucination" is that we've cleaned it.
+            # It's still a "valid" transcript in its corrected form.
+            if corrected_transcript:
+                logger.warning(f"Session {self.session_id}: Corrected hallucination. Reason: {reason}. Original: '{transcript_text}', Corrected: '{corrected_transcript}'")
+                # Add the corrected version to history
+                self.history_manager.add_transcript(corrected_transcript, timestamp)
+                self.stats['valid_transcripts'] += 1
+                return True, reason, corrected_transcript
+            else:
+                logger.warning(f"Session {self.session_id}: Uncorrectable hallucination detected. Reason: {reason}. Text: '{transcript_text}'")
+                return False, reason, None
         else:
             # Add to history only if it's valid
             self.history_manager.add_transcript(transcript_text, timestamp)
             self.stats['valid_transcripts'] += 1
             
             logger.debug(f"Session {self.session_id}: Valid transcript added - '{transcript_text[:50]}...'")
-            return True, reason
+            return True, reason, transcript_text
     
     def get_statistics(self) -> Dict[str, Any]:
         """
