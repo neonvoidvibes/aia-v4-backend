@@ -164,13 +164,14 @@ class HallucinationDetector:
         
         logger.info(f"HallucinationDetector initialized with threshold={similarity_threshold}")
     
-    def is_hallucination(self, new_transcript: str, history_manager: TranscriptHistoryManager) -> Tuple[bool, str, Optional[str]]:
+    def is_hallucination(self, new_transcript: str, history_manager: TranscriptHistoryManager, blocklist: set) -> Tuple[bool, str, Optional[str]]:
         """
         Determine if a new transcript is likely a hallucination.
         
         Args:
             new_transcript: New transcribed text to evaluate
             history_manager: TranscriptHistoryManager instance with history
+            blocklist: A set of normalized phrases to always filter.
             
         Returns:
             Tuple of (is_hallucination: bool, reason: str, corrected_transcript: Optional[str])
@@ -180,6 +181,11 @@ class HallucinationDetector:
         
         # Normalize the new transcript
         normalized_new = history_manager._normalize_text(new_transcript)
+        
+        # Check against the session-specific blocklist first
+        if normalized_new in blocklist:
+            logger.warning(f"Blocklist match detected: '{new_transcript}'")
+            return True, "blocklist_match", None
         
         # Check minimum length
         word_count = len(normalized_new.split())
@@ -387,6 +393,10 @@ class HallucinationManager:
         self.history_manager = TranscriptHistoryManager(max_history)
         self.detector = HallucinationDetector(similarity_threshold, min_transcript_length)
         
+        # Session-specific blocklisting for recurring hallucinations
+        self.hallucination_candidates: Dict[str, int] = {}
+        self.blocklist: set = set()
+        
         # Statistics
         self.stats = {
             'total_transcripts': 0,
@@ -412,22 +422,34 @@ class HallucinationManager:
         
         is_hallucination, reason, corrected_transcript = self.detector.is_hallucination(
             transcript_text, 
-            self.history_manager
+            self.history_manager,
+            self.blocklist
         )
         
         if is_hallucination:
             self.stats['hallucinations_detected'] += 1
             self.stats['hallucination_reasons'][reason] = self.stats['hallucination_reasons'].get(reason, 0) + 1
             
-            # If we have a corrected transcript, the "hallucination" is that we've cleaned it.
-            # It's still a "valid" transcript in its corrected form.
             if corrected_transcript:
                 logger.warning(f"Session {self.session_id}: Corrected hallucination. Reason: {reason}. Original: '{transcript_text}', Corrected: '{corrected_transcript}'")
-                # Add the corrected version to history
                 self.history_manager.add_transcript(corrected_transcript, timestamp)
                 self.stats['valid_transcripts'] += 1
                 return True, reason, corrected_transcript
             else:
+                # This is an uncorrectable hallucination (similarity, blocklist, etc.)
+                normalized_text = self.history_manager._normalize_text(transcript_text)
+                
+                # If it was a similarity match, consider it for the blocklist
+                if reason.startswith("similarity"):
+                    count = self.hallucination_candidates.get(normalized_text, 0) + 1
+                    self.hallucination_candidates[normalized_text] = count
+                    logger.info(f"Hallucination candidate '{normalized_text}' detected {count} time(s).")
+
+                    # Add to blocklist after 2 detections to prevent false positives
+                    if count >= 2:
+                        self.blocklist.add(normalized_text)
+                        logger.warning(f"'{normalized_text}' has been added to the session blocklist.")
+
                 logger.warning(f"Session {self.session_id}: Uncorrectable hallucination detected. Reason: {reason}. Text: '{transcript_text}'")
                 return False, reason, None
         else:
@@ -459,6 +481,8 @@ class HallucinationManager:
     def clear_session(self) -> None:
         """Clear all session data."""
         self.history_manager.clear_history()
+        self.hallucination_candidates.clear()
+        self.blocklist.clear()
         self.stats = {
             'total_transcripts': 0,
             'hallucinations_detected': 0,
