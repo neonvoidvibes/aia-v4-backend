@@ -25,7 +25,8 @@ from simple_websocket.errors import ConnectionClosed
 
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError
-from gotrue.types import User as SupabaseUser 
+from gotrue.types import User as SupabaseUser
+from utils.supabase_client import get_supabase_client
 
 from utils.retrieval_handler import RetrievalHandler
 from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder
@@ -196,33 +197,9 @@ try:
 except Exception as e: 
     logger.warning(f"Pinecone initialization failed: {e}")
 
-supabase: Optional[Client] = None
-supabase_lock = threading.Lock()
-
-def get_supabase_client() -> Optional[Client]:
-    """
-    Gets a thread-safe, resilient Supabase client, re-initializing if necessary.
-    """
-    global supabase
-    with supabase_lock:
-        # Check if the client is None or if the session might be stale/closed
-        if supabase is None or getattr(supabase.auth.session, 'access_token', None) is None:
-            logger.info("Supabase client is None or session is invalid, attempting to re-initialize.")
-            try:
-                supabase_url = os.environ.get("SUPABASE_URL")
-                supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-                if not supabase_url or not supabase_key:
-                    logger.error("Cannot initialize Supabase client: URL or Key is missing.")
-                    return None
-                supabase = create_client(supabase_url, supabase_key)
-                logger.info("Supabase client initialized successfully.")
-            except Exception as e:
-                logger.error(f"Failed to initialize Supabase client: {e}", exc_info=True)
-                supabase = None # Ensure it's None on failure
-    return supabase
-
-# Initial connection attempt at startup
-get_supabase_client()
+# The get_supabase_client logic is now in utils/supabase_client.py
+# We just need to call it to ensure it's initialized at startup.
+supabase = get_supabase_client()
 
 try:
     anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')

@@ -4,7 +4,7 @@ import time
 from typing import Optional, Dict, Any
 from supabase import Client
 import threading
-from api_server import get_supabase_client # Import our new resilient client getter
+from utils.supabase_client import get_supabase_client # Import from the new centralized module
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ API_KEY_CACHE: Dict[str, Dict[str, Any]] = {}
 CACHE_LOCK = threading.Lock()
 CACHE_TTL_SECONDS = 900  # 15 minutes
 
-def get_api_key(agent_name: str, service_name: str) -> str:
+def get_api_key(agent_name: str, service_name: str) -> Optional[str]:
     """
     Retrieves the API key for a given agent and service.
     1. Checks a local cache.
@@ -27,7 +27,7 @@ def get_api_key(agent_name: str, service_name: str) -> str:
         service_name (str): The service name ('anthropic', 'openai', or 'google').
 
     Returns:
-        str: The appropriate API key.
+        str: The appropriate API key, or None if not found.
     """
     cache_key = f"{agent_name}:{service_name}"
     fallback_env_var = ""
@@ -72,15 +72,15 @@ def get_api_key(agent_name: str, service_name: str) -> str:
                     .limit(1) \
                     .execute()
 
-            if key_res.data:
-                custom_key = key_res.data[0]['api_key']
-                if custom_key:
-                    final_key = custom_key
-                    logger.info(f"Found custom '{service_name}' key for agent '{agent_name}'.")
+                if key_res.data:
+                    custom_key = key_res.data[0]['api_key']
+                    if custom_key:
+                        final_key = custom_key
+                        logger.info(f"Found custom '{service_name}' key for agent '{agent_name}'.")
+                    else:
+                        logger.warning(f"Found DB entry for agent '{agent_name}' but key is empty. Using fallback.")
                 else:
-                    logger.warning(f"Found DB entry for agent '{agent_name}' but key is empty. Using fallback.")
-            else:
-                logger.info(f"No custom '{service_name}' key found for agent '{agent_name}'. Using fallback.")
+                    logger.info(f"No custom '{service_name}' key found for agent '{agent_name}'. Using fallback.")
             else:
                 logger.warning(f"Agent '{agent_name}' not found in DB. Using fallback key for '{service_name}'.")
 
@@ -99,5 +99,6 @@ def get_api_key(agent_name: str, service_name: str) -> str:
 
     if not final_key:
         logger.error(f"CRITICAL: API key for service '{service_name}' (agent: {agent_name}) is NOT SET, neither in DB nor in env var '{fallback_env_var}'.")
+        return None
 
     return final_key
