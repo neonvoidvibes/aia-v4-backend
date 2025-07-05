@@ -93,9 +93,21 @@ class EmbeddingHandler:
         logger.info(f"EmbeddingHandler: Initialized RecursiveCharacterTextSplitter (chunk={token_chunk_size}, overlap={token_chunk_overlap}, method={'tokens' if self.length_function is not len else 'characters'}).")
 
         self.pc = init_pinecone()
-        if not self.pc: raise RuntimeError("Failed Pinecone init")
-        self.index = create_or_verify_index(index_name)
-        if not self.index: raise RuntimeError(f"Failed index access '{index_name}'")
+        if not self.pc:
+            logger.error("EmbeddingHandler: Failed to initialize Pinecone client.")
+            self.index = None
+        else:
+            try:
+                # Check if the index exists without creating it.
+                if index_name in self.pc.list_indexes().names():
+                    self.index = self.pc.Index(index_name)
+                    logger.info(f"EmbeddingHandler: Successfully connected to existing Pinecone index '{index_name}'.")
+                else:
+                    logger.warning(f"EmbeddingHandler: Pinecone index '{index_name}' does not exist. Operations requiring an index will be skipped.")
+                    self.index = None
+            except Exception as e:
+                logger.error(f"EmbeddingHandler: Error checking for Pinecone index '{index_name}': {e}", exc_info=True)
+                self.index = None
 
     def generate_embedding(self, text: str) -> Optional[List[float]]:
         """Generate embedding vector for text."""

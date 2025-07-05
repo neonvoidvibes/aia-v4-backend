@@ -2673,25 +2673,37 @@ def delete_conversation(user: SupabaseUser):
         
         # --- Step 2: Clean up memory logs and Pinecone vectors if agent is known ---
         if agent_name:
-            embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
-            
-            # Delete full conversation memory
-            logger.info(f"Deleting full conversation memory for source_identifier: {chat_id}")
-            embedding_handler.delete_document(source_identifier=chat_id)
-            client.table('agent_memory_logs').delete().eq('source_identifier', chat_id).eq('agent_name', agent_name).execute()
+            try:
+                embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
+                if embedding_handler.index:
+                    # Delete full conversation memory
+                    logger.info(f"Deleting full conversation memory for source_identifier: {chat_id}")
+                    embedding_handler.delete_document(source_identifier=chat_id)
+                    
+                    # Delete individual message memories from this chat
+                    message_ids_in_chat = [msg['id'] for msg in messages if 'id' in msg]
+                    if message_ids_in_chat:
+                        like_patterns = [f"message_{msg_id}_%" for msg_id in message_ids_in_chat]
+                        individual_log_res = client.table('agent_memory_logs').select('id, source_identifier').eq('agent_name', agent_name).or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])).execute()
+                        if individual_log_res.data:
+                            logger.info(f"Found {len(individual_log_res.data)} individual message memories to delete for chat {chat_id}.")
+                            for log in individual_log_res.data:
+                                log_source_id = log['source_identifier']
+                                embedding_handler.delete_document(source_identifier=log_source_id)
+                                logger.info(f"Deleted vectors for individual memory log: {log_source_id}")
+                else:
+                    logger.warning(f"Agent '{agent_name}' does not have a Pinecone index. Skipping vector deletion.")
+            except Exception as e:
+                logger.error(f"Error during Pinecone cleanup for agent '{agent_name}': {e}", exc_info=True)
+                # Do not re-raise, allow Supabase deletion to proceed
 
-            # Delete individual message memories from this chat
+            # Always delete from Supabase regardless of Pinecone status
+            client.table('agent_memory_logs').delete().eq('source_identifier', chat_id).eq('agent_name', agent_name).execute()
             message_ids_in_chat = [msg['id'] for msg in messages if 'id' in msg]
             if message_ids_in_chat:
                 like_patterns = [f"message_{msg_id}_%" for msg_id in message_ids_in_chat]
-                individual_log_res = client.table('agent_memory_logs').select('id, source_identifier').eq('agent_name', agent_name).or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])).execute()
-                if individual_log_res.data:
-                    logger.info(f"Found {len(individual_log_res.data)} individual message memories to delete for chat {chat_id}.")
-                    for log in individual_log_res.data:
-                        log_source_id = log['source_identifier']
-                        embedding_handler.delete_document(source_identifier=log_source_id)
-                        client.table('agent_memory_logs').delete().eq('id', log['id']).execute()
-                        logger.info(f"Deleted individual memory log and vectors for {log_source_id}.")
+                client.table('agent_memory_logs').delete().eq('agent_name', agent_name).or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])).execute()
+            logger.info(f"Deleted all associated agent_memory_logs from Supabase for chat {chat_id}.")
 
         # --- Step 3: Delete the chat history record ---
         logger.info(f"Deleting chat_history record for id: {chat_id}")
