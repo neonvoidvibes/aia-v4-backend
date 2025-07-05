@@ -2297,6 +2297,7 @@ def save_chat_history(user: SupabaseUser):
     messages = data.get('messages', [])
     chat_id = data.get('chatId')
     title = data.get('title')
+    last_message_id = data.get('lastMessageId') # New field
 
     if not agent_name or not messages:
         return jsonify({'error': 'Agent name and messages are required'}), 400
@@ -2314,17 +2315,25 @@ def save_chat_history(user: SupabaseUser):
 
     try:
         if chat_id:
-            result = client.table('chat_history').update({
+            update_payload = {
                 'title': title,
-                'messages': messages
-            }).eq('id', chat_id).eq('user_id', user.id).execute()
+                'messages': messages,
+            }
+            if last_message_id:
+                update_payload['last_message_id_at_save'] = last_message_id
+
+            result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
         else:
-            result = client.table('chat_history').insert({
+            insert_payload = {
                 'user_id': user.id,
                 'agent_id': agent_id,
                 'title': title,
-                'messages': messages
-            }).execute()
+                'messages': messages,
+            }
+            if last_message_id:
+                insert_payload['last_message_id_at_save'] = last_message_id
+            
+            result = client.table('chat_history').insert(insert_payload).execute()
             chat_id = result.data[0]['id'] if result.data else None
             title = result.data[0]['title'] if result.data else title
         
@@ -2474,6 +2483,7 @@ def get_chat_history(user: SupabaseUser):
         chat_data['savedMessageIds'] = saved_message_ids
         chat_data['isConversationSaved'] = is_conversation_saved
         chat_data['lastConversationSaveTime'] = last_conversation_save_time
+        # The last_message_id_at_save is already in chat_data from the initial query
 
         return jsonify(chat_data), 200
 
