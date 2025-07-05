@@ -19,9 +19,10 @@ from langchain.text_splitter import MarkdownHeaderTextSplitter, RecursiveCharact
 from langchain_core.documents import Document
 
 # Local imports
-# from .document_handler import DocumentHandler # No longer needed, using splitter directly
-from .pinecone_utils import init_pinecone, create_or_verify_index
-import pinecone # Keep for potential direct use
+from .pinecone_utils import init_pinecone
+from .prompts import CORE_MEMORY_CLASSIFIER_PROMPT
+import pinecone
+from anthropic import Anthropic
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -45,12 +46,14 @@ class EmbeddingHandler:
         index_name: str = "magicchat",
         namespace: Optional[str] = None,
         chunk_size: int = 1500,
-        chunk_overlap: int = 150
+        chunk_overlap: int = 150,
+        anthropic_client: Optional[Anthropic] = None
     ):
         """Initialize embedding handler."""
         self.index_name = index_name
         self.namespace = namespace
         self.embedding_model_name = "text-embedding-ada-002"
+        self.anthropic_client = anthropic_client
 
         try:
             self.embeddings = OpenAIEmbeddings(model=self.embedding_model_name)
@@ -116,6 +119,35 @@ class EmbeddingHandler:
             return self.embeddings.embed_query(text)
         except Exception as e: logger.error(f"Embedding generation error: {e}", exc_info=True); return None
 
+    def _is_core_memory(self, text: str) -> bool:
+        """Uses an LLM to classify if a text snippet is a core memory."""
+        if not self.anthropic_client:
+            logger.warning("Anthropic client not available. Cannot classify core memory. Defaulting to False.")
+            return False
+        
+        # Limit text length to avoid excessive token usage for classification
+        max_chars_for_classification = 1000
+        truncated_text = text[:max_chars_for_classification]
+
+        try:
+            prompt = CORE_MEMORY_CLASSIFIER_PROMPT.format(user_text=truncated_text)
+            
+            message = self.anthropic_client.messages.create(
+                model="claude-3-haiku-20240307", # Using Haiku for speed and cost-effectiveness
+                max_tokens=10, # Response is just 'true' or 'false'
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0, # We want a deterministic classification
+            )
+            
+            response_text = message.content[0].text.strip().lower()
+            is_core = response_text == 'true'
+            logger.debug(f"Core memory classification for text snippet: '{truncated_text[:100]}...' -> Result: {is_core}")
+            return is_core
+
+        except Exception as e:
+            logger.error(f"Error during core memory classification: {e}", exc_info=True)
+            return False # Default to not being a core memory on error
+
     def embed_and_upsert(
         self,
         content: str,
@@ -156,6 +188,9 @@ class EmbeddingHandler:
                 # Use simple index 'i' for uniqueness as splitter might not add chunk_index
                 vector_id = f"{sanitized_id_part}_{i}"
 
+                # Classify if the chunk is a core memory
+                is_core = self._is_core_memory(chunk_content)
+
                 # Prepare metadata for Pinecone - Ensure required fields are present
                 # The splitter copies the base metadata, we add the content itself
                 pinecone_metadata = {
@@ -165,6 +200,7 @@ class EmbeddingHandler:
                     'total_chunks': len(documents), # Add total chunks for context
                     'supabase_log_id': metadata.get('supabase_log_id', -1), # Link to agent_memory_logs table
                     'source_identifier': metadata.get('source_identifier', 'unknown'), # Link to source session
+                    'is_core_memory': is_core, # Add the classification result
                 }
                 # Ensure agent_name is present if not added by splitter metadata copy
                 if 'agent_name' not in pinecone_metadata:
