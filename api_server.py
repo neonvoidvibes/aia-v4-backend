@@ -2627,6 +2627,87 @@ def delete_message(user: SupabaseUser):
         return jsonify({'error': 'An internal server error occurred'}), 500
 
 
+@app.route('/api/chat/history/delete_conversation', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def delete_conversation(user: SupabaseUser):
+    logger.info("--- DELETE CONVERSATION REQUEST START ---")
+    data = request.get_json()
+    chat_id = data.get('chat_id')
+    # The user_id from the request body is for confirmation, but the primary user ID is from the token.
+    requesting_user_id = data.get('user_id')
+    logger.info(f"Delete conversation request for user '{user.id}', chat '{chat_id}'")
+
+    if not chat_id:
+        logger.error("Delete conversation request missing chat_id.")
+        return jsonify({'error': 'chat_id is required'}), 400
+
+    # Optional: Verify that the user_id in the body matches the authenticated user
+    if requesting_user_id and user.id != requesting_user_id:
+        logger.error(f"User ID mismatch: token user '{user.id}' vs request user '{requesting_user_id}'")
+        return jsonify({'error': 'User ID mismatch'}), 403
+
+    client = get_supabase_client()
+    if not client:
+        logger.error("Supabase client not available for delete operation.")
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        # --- Step 1: Fetch chat and agent info ---
+        logger.info(f"Fetching chat_history for chat_id: {chat_id}")
+        chat_res = client.table('chat_history').select('messages, agent_id').eq('id', chat_id).eq('user_id', user.id).single().execute()
+        if not chat_res.data:
+            logger.error(f"Chat not found or access denied for chat_id: {chat_id}")
+            return jsonify({'error': 'Chat not found or access denied'}), 404
+
+        messages = chat_res.data.get('messages', [])
+        agent_id = chat_res.data.get('agent_id')
+        
+        agent_name = None
+        if agent_id:
+            agent_res = client.table('agents').select('name').eq('id', agent_id).single().execute()
+            if agent_res.data:
+                agent_name = agent_res.data['name']
+                logger.info(f"Agent name: {agent_name}")
+            else:
+                logger.warning(f"Could not find agent for agent_id {agent_id}. Memory logs may not be fully cleaned up.")
+        
+        # --- Step 2: Clean up memory logs and Pinecone vectors if agent is known ---
+        if agent_name:
+            embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
+            
+            # Delete full conversation memory
+            logger.info(f"Deleting full conversation memory for source_identifier: {chat_id}")
+            embedding_handler.delete_document(source_identifier=chat_id)
+            client.table('agent_memory_logs').delete().eq('source_identifier', chat_id).eq('agent_name', agent_name).execute()
+
+            # Delete individual message memories from this chat
+            message_ids_in_chat = [msg['id'] for msg in messages if 'id' in msg]
+            if message_ids_in_chat:
+                like_patterns = [f"message_{msg_id}_%" for msg_id in message_ids_in_chat]
+                individual_log_res = client.table('agent_memory_logs').select('id, source_identifier').eq('agent_name', agent_name).or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])).execute()
+                if individual_log_res.data:
+                    logger.info(f"Found {len(individual_log_res.data)} individual message memories to delete for chat {chat_id}.")
+                    for log in individual_log_res.data:
+                        log_source_id = log['source_identifier']
+                        embedding_handler.delete_document(source_identifier=log_source_id)
+                        client.table('agent_memory_logs').delete().eq('id', log['id']).execute()
+                        logger.info(f"Deleted individual memory log and vectors for {log_source_id}.")
+
+        # --- Step 3: Delete the chat history record ---
+        logger.info(f"Deleting chat_history record for id: {chat_id}")
+        delete_res = client.table('chat_history').delete().eq('id', chat_id).eq('user_id', user.id).execute()
+        if hasattr(delete_res, 'error') and delete_res.error:
+            logger.error(f"Failed to delete chat_history for chat {chat_id}: {delete_res.error}")
+            return jsonify({'error': 'Failed to delete chat history record'}), 500
+
+        logger.info(f"--- DELETE CONVERSATION REQUEST END ---")
+        return jsonify({'success': True, 'message': 'Conversation deleted successfully'})
+
+    except Exception as e:
+        logger.error(f"--- DELETE CONVERSATION REQUEST FAILED ---: Error deleting conversation {chat_id}: {e}", exc_info=True)
+        return jsonify({'error': 'An internal server error occurred'}), 500
+
+
 def cleanup_idle_sessions():
     while True:
         time.sleep(30)
