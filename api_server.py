@@ -2708,10 +2708,21 @@ def delete_conversation(user: SupabaseUser):
 
             # Always delete from Supabase regardless of Pinecone status
             client.table('agent_memory_logs').delete().eq('source_identifier', chat_id).eq('agent_name', agent_name).execute()
+            
             message_ids_in_chat = [msg['id'] for msg in messages if 'id' in msg]
             if message_ids_in_chat:
-                like_patterns = [f"message_{msg_id}_%" for msg_id in message_ids_in_chat]
-                client.table('agent_memory_logs').delete().eq('agent_name', agent_name).or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])).execute()
+                logger.info(f"Deleting {len(message_ids_in_chat)} individual message memories in batches.")
+                batch_size = 50  # Process 50 message deletions at a time
+                for i in range(0, len(message_ids_in_chat), batch_size):
+                    batch_ids = message_ids_in_chat[i:i + batch_size]
+                    like_patterns = [f'message_{msg_id}_%' for msg_id in batch_ids]
+                    logger.debug(f"Deleting batch {i//batch_size + 1} with {len(batch_ids)} message IDs.")
+                    try:
+                        client.table('agent_memory_logs').delete().eq('agent_name', agent_name).or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])).execute()
+                    except httpx.RemoteProtocolError as e:
+                        logger.error(f"Server disconnected during batch deletion of message memories. Batch {i//batch_size + 1} may have failed. Error: {e}")
+                        # Continue to the next batch, as this is not a fatal error for the overall deletion process.
+                        continue
             logger.info(f"Deleted all associated agent_memory_logs from Supabase for chat {chat_id}.")
 
         # --- Step 3: Delete the chat history record ---
