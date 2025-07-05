@@ -2138,7 +2138,8 @@ def save_chat_memory_log(user: SupabaseUser):
             "agent_name": agent_name,
             "source_identifier": session_id,
             "supabase_log_id": supabase_log_id,
-            "file_name": f"chat_memory_{session_id}.md" # A virtual filename
+            "file_name": f"chat_memory_{session_id}.md", # A virtual filename
+            "saved_at": datetime.now(timezone.utc).isoformat()
         }
         
         upsert_success = embedding_handler.embed_and_upsert(structured_content, metadata_for_embedding)
