@@ -2525,7 +2525,6 @@ def delete_message(user: SupabaseUser):
         agent_name = agent_res.data['name']
 
         # --- Step 2: Find and remove the message from the list ---
-        message_to_delete = None
         updated_messages = [msg for msg in messages if msg.get('id') != message_id_to_delete]
 
         if len(updated_messages) == len(messages):
@@ -2534,7 +2533,6 @@ def delete_message(user: SupabaseUser):
         # --- Step 3: Determine the new save marker ---
         new_last_save_marker_id = last_save_marker_id
         if last_save_marker_id == message_id_to_delete:
-            # If we deleted the marker message, move the marker to the new last message
             new_last_save_marker_id = updated_messages[-1]['id'] if updated_messages else None
         
         # --- Step 4: Update chat_history table ---
@@ -2555,25 +2553,31 @@ def delete_message(user: SupabaseUser):
         # Case A: The message was part of a full conversation save
         memory_log_res = client.table('agent_memory_logs').select('id').eq('source_identifier', chat_id).execute()
         if memory_log_res.data:
-            logger.info(f"Message was part of saved conversation {chat_id}. Re-enriching and re-indexing.")
-            # Re-enrich and re-save the entire conversation memory
-            google_api_key = get_api_key(agent_name, 'google')
-            if not google_api_key:
-                logger.error("Cannot re-enrich memory: Google API key not found.")
-            else:
-                structured_content, summary = enrich_chat_log(updated_messages, google_api_key)
-                client.table("agent_memory_logs").update({
-                    "structured_content": structured_content,
-                    "summary": summary
-                }).eq("source_identifier", chat_id).execute()
-                
+            if not updated_messages:
+                # If the last message was deleted, remove the memory log entirely
+                logger.info(f"Last message in saved conversation {chat_id} deleted. Removing memory log and vectors.")
                 embedding_handler.delete_document(source_identifier=chat_id)
-                embedding_handler.embed_and_upsert(structured_content, {
-                    "agent_name": agent_name,
-                    "source_identifier": chat_id,
-                    "file_name": f"chat_memory_{chat_id}.md"
-                })
-                logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
+                client.table('agent_memory_logs').delete().eq('source_identifier', chat_id).execute()
+            else:
+                # Re-enrich and re-save the conversation memory
+                logger.info(f"Message in saved conversation {chat_id} deleted. Re-enriching and re-indexing.")
+                google_api_key = get_api_key(agent_name, 'google')
+                if not google_api_key:
+                    logger.error("Cannot re-enrich memory: Google API key not found.")
+                else:
+                    structured_content, summary = enrich_chat_log(updated_messages, google_api_key)
+                    client.table("agent_memory_logs").update({
+                        "structured_content": structured_content,
+                        "summary": summary
+                    }).eq("source_identifier", chat_id).execute()
+                    
+                    embedding_handler.delete_document(source_identifier=chat_id)
+                    embedding_handler.embed_and_upsert(structured_content, {
+                        "agent_name": agent_name,
+                        "source_identifier": chat_id,
+                        "file_name": f"chat_memory_{chat_id}.md"
+                    })
+                    logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
 
         # Case B: The message was saved individually
         individual_log_res = client.table('agent_memory_logs').select('id, source_identifier').like('source_identifier', f'message_{message_id_to_delete}%').execute()
