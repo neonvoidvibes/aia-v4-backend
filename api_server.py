@@ -633,6 +633,7 @@ def _finalize_session(session_id: str):
             
         session_data["is_finalizing"] = True 
         session_data["is_active"] = False 
+        session_data["finalization_timestamp"] = time.time() # Mark when finalization started
         logger.info(f"Finalizing session {session_id} (marked is_finalizing=True, is_active=False).")
         
         current_fragment_bytes_final = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
@@ -713,31 +714,8 @@ def _finalize_session(session_id: str):
                 logger.info(f"WebSocket for session {session_id} close() called.")
             except Exception as e: 
                 logger.warning(f"Error closing WebSocket for session {session_id} during finalization: {e}", exc_info=True)
-    
-    if session_id in active_sessions: 
-        temp_session_audio_dir = session_data['temp_audio_session_dir']
-        if os.path.exists(temp_session_audio_dir):
-            try:
-                for root_dir, dirs, files in os.walk(temp_session_audio_dir, topdown=False):
-                    for name in files:
-                        try: os.remove(os.path.join(root_dir, name))
-                        except OSError as e_file: logger.warning(f"Error deleting file {os.path.join(root_dir, name)}: {e_file}")
-                    for name in dirs:
-                        try: os.rmdir(os.path.join(root_dir, name))
-                        except OSError as e_dir: logger.warning(f"Error deleting dir {os.path.join(root_dir, name)}: {e_dir}")
-                try: os.rmdir(temp_session_audio_dir) 
-                except OSError as e_main_dir: logger.warning(f"Error deleting main session dir {temp_session_audio_dir}: {e_main_dir}")
-                logger.info(f"Cleaned up temporary directory: {temp_session_audio_dir}")
-            except Exception as e:
-                logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
-
-        if session_id in active_sessions: 
-            del active_sessions[session_id]
-        if session_id in session_locks: 
-            del session_locks[session_id] 
-        logger.info(f"Session {session_id} finalized and removed from active sessions.")
-    else:
-        logger.warning(f"Session {session_id} was already removed from active_sessions before final cleanup phase.")
+        
+        logger.info(f"Session {session_id} has been marked as finalized. It will be cleaned up by the idle thread later.")
 
 @app.route('/api/s3/summarize-transcript', methods=['POST'])
 @supabase_auth_required(agent_required=False) # agentName will be in payload
@@ -920,26 +898,37 @@ def stop_audio_recording_route(user: SupabaseUser):
 
     logger.info(f"Stop audio recording request for session {session_id} by user {user.id}")
 
-    if session_id not in active_sessions:
-        logger.warning(f"Stop request for audio recording session {session_id}, but session not found.")
-        return jsonify({"status": "success", "message": "Session already stopped or not found", "session_id": session_id}), 200
+    with session_locks[session_id]:
+        if session_id not in active_sessions:
+            logger.warning(f"Stop request for audio recording session {session_id}, but session not found (already cleaned up).")
+            return jsonify({"status": "success", "message": "Session already stopped or not found", "session_id": session_id}), 200
 
-    session_data = active_sessions.get(session_id)
-    if session_data and session_data.get('session_type') != 'recording':
-        logger.warning(f"Stop audio recording request for session {session_id} which is not a recording session.")
-        # Let's stop it anyway to be safe.
-    
-    s3_key = session_data.get('s3_transcript_key') # Get the key before finalizing
-    
-    _finalize_session(session_id)
-    
-    return jsonify({
-        "status": "success",
-        "message": "Audio recording session stopped",
-        "session_id": session_id,
-        "s3Key": s3_key, # Return the S3 key of the finished recording
-        "recording_status": {"is_recording": False, "is_backend_processing_paused": False}
-    })
+        session_data = active_sessions[session_id]
+        
+        if session_data.get("is_finalizing"):
+            logger.info(f"Stop request for audio recording session {session_id}, which is already finalizing. Acknowledging.")
+            return jsonify({
+                "status": "success",
+                "message": "Audio recording session is already stopping.",
+                "session_id": session_id,
+                "s3Key": session_data.get('s3_transcript_key'),
+            }), 200
+
+        if session_data.get('session_type') != 'recording':
+            logger.warning(f"Stop audio recording request for session {session_id} which is not a recording session.")
+            # Let's stop it anyway to be safe.
+        
+        s3_key = session_data.get('s3_transcript_key') # Get the key before finalizing
+        
+        _finalize_session(session_id)
+        
+        return jsonify({
+            "status": "success",
+            "message": "Audio recording session stopped",
+            "session_id": session_id,
+            "s3Key": s3_key, # Return the S3 key of the finished recording
+            "recording_status": {"is_recording": False, "is_backend_processing_paused": False}
+        })
 
 @app.route('/api/audio-recording/pause', methods=['POST'])
 @supabase_auth_required(agent_required=False)
@@ -2380,21 +2369,60 @@ def get_chat_history(user: SupabaseUser):
 
 def cleanup_idle_sessions():
     while True:
-        time.sleep(30) # Check more frequently
+        time.sleep(30)
         now = time.time()
-        sessions_to_cleanup = []
-        for session_id, session_data in list(active_sessions.items()): 
-            # Finalize sessions that are active but have lost their websocket for a grace period
-            if session_data.get("is_active") and \
-               not session_data.get("is_finalizing") and \
-               session_data.get("websocket_connection") is None and \
-               now - session_data.get("last_activity_timestamp", 0) > 45: # 45s grace period for reconnect
-                logger.warning(f"Idle session cleanup: Session {session_id} has been active without a WebSocket for >45s. Marking for finalization.")
-                sessions_to_cleanup.append(session_id)
-        
-        for session_id_to_clean in sessions_to_cleanup:
-            logger.info(f"Idle session cleanup: Finalizing session {session_id_to_clean}")
-            _finalize_session(session_id_to_clean)
+        sessions_to_finalize = []
+        sessions_to_delete = []
+
+        # Create a copy of items to avoid issues with modifying the dictionary while iterating
+        current_sessions = list(active_sessions.items())
+
+        for session_id, session_data in current_sessions:
+            with session_locks[session_id]:
+                # Case 1: Session is active but has lost its WebSocket connection.
+                # This is for unexpected disconnects.
+                if session_data.get("is_active") and \
+                   not session_data.get("is_finalizing") and \
+                   session_data.get("websocket_connection") is None and \
+                   now - session_data.get("last_activity_timestamp", 0) > 45: # 45s grace period for reconnect
+                    logger.warning(f"Idle session cleanup: Session {session_id} has been active without a WebSocket for >45s. Marking for finalization.")
+                    sessions_to_finalize.append(session_id)
+                
+                # Case 2: Session has been finalized and is waiting for garbage collection.
+                # This handles gracefully stopped sessions after a delay.
+                elif not session_data.get("is_active") and \
+                     session_data.get("is_finalizing") and \
+                     now - session_data.get("finalization_timestamp", 0) > 120: # 2-minute grace period
+                    logger.info(f"Idle session cleanup: Session {session_id} was finalized >120s ago. Marking for deletion.")
+                    sessions_to_delete.append(session_id)
+
+        # Finalize sessions that need it
+        for session_id_to_finalize in sessions_to_finalize:
+            logger.info(f"Idle session cleanup: Finalizing disconnected session {session_id_to_finalize}")
+            _finalize_session(session_id_to_finalize)
+
+        # Delete sessions that have been finalized for a while
+        for session_id_to_delete in sessions_to_delete:
+            logger.info(f"Idle session cleanup: Deleting garbage-collected session {session_id_to_delete}")
+            with session_locks[session_id_to_delete]:
+                if session_id_to_delete in active_sessions:
+                    session_data = active_sessions[session_id_to_delete]
+                    temp_session_audio_dir = session_data.get('temp_audio_session_dir')
+                    
+                    if temp_session_audio_dir and os.path.exists(temp_session_audio_dir):
+                        try:
+                            # Using shutil.rmtree is more robust for non-empty directories
+                            import shutil
+                            shutil.rmtree(temp_session_audio_dir)
+                            logger.info(f"Cleaned up temporary directory: {temp_session_audio_dir}")
+                        except Exception as e:
+                            logger.error(f"Error cleaning up temp directory {temp_session_audio_dir}: {e}")
+                    
+                    del active_sessions[session_id_to_delete]
+                
+                if session_id_to_delete in session_locks:
+                    del session_locks[session_id_to_delete]
+            logger.info(f"Session {session_id_to_delete} fully cleaned up and removed.")
 
 if __name__ == '__main__':
     if get_supabase_client():
