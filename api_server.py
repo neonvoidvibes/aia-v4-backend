@@ -2329,7 +2329,6 @@ def list_chat_history(user: SupabaseUser):
             return jsonify([])
         agent_id = agent_result.data['id']
 
-        # 1. Fetch chat history, including the messages JSON
         history_result = client.table('chat_history') \
             .select('id, title, updated_at, agent_id, messages') \
             .eq('user_id', user.id) \
@@ -2341,7 +2340,6 @@ def list_chat_history(user: SupabaseUser):
 
         chat_ids = [chat['id'] for chat in history_result.data]
         
-        # 2. Fetch all memory logs for this agent
         memory_logs_result = client.table('agent_memory_logs') \
             .select('source_identifier') \
             .eq('agent_name', agent_name) \
@@ -2359,7 +2357,6 @@ def list_chat_history(user: SupabaseUser):
                     if len(parts) > 1:
                         saved_message_ids.add(parts[1])
 
-        # 3. Create a map of message IDs to their chat ID
         message_to_chat_map = {}
         for chat in history_result.data:
             if isinstance(chat.get('messages'), list):
@@ -2367,19 +2364,19 @@ def list_chat_history(user: SupabaseUser):
                     if isinstance(message, dict) and 'id' in message:
                         message_to_chat_map[message['id']] = chat['id']
 
-        # 4. Determine which chats have saved messages
         chats_with_saved_messages = set()
         for msg_id in saved_message_ids:
             if msg_id in message_to_chat_map:
                 chats_with_saved_messages.add(message_to_chat_map[msg_id])
 
-        # 5. Format the final response
         formatted_history = []
         for chat in history_result.data:
             chat_id = chat['id']
             is_convo_saved = chat_id in saved_conversation_ids
             has_saved_messages = chat_id in chats_with_saved_messages
 
+            # The 'messages' field can be large, so we don't return it in the list view.
+            # The 'get' endpoint will return the full message payload.
             formatted_history.append({
                 'id': chat_id,
                 'title': chat['title'],
@@ -2405,7 +2402,6 @@ def get_chat_history(user: SupabaseUser):
         return jsonify({'error': 'Chat ID is required or DB is unavailable'}), 400
 
     try:
-        # 1. Fetch the main chat history entry
         chat_result = client.table('chat_history').select('*, agents(name)').eq('id', chat_id).eq('user_id', user.id).single().execute()
         
         if not chat_result.data:
@@ -2414,44 +2410,48 @@ def get_chat_history(user: SupabaseUser):
         chat_data = chat_result.data
         agent_name = chat_data.get('agents', {}).get('name')
         if not agent_name:
-            # This case can happen if the agent was deleted but the chat history remains.
-            # We'll log a warning and proceed without memory info.
             logger.warning(f"Could not determine agent name for chat ID {chat_id}. Memory info will be incomplete.")
             return jsonify(chat_data)
 
-        # 2. Check for saved memories associated with this chat
         saved_message_ids = {}
         is_conversation_saved = False
         last_conversation_save_time = None
 
-        # Query for all memory logs that could be related
-        memory_logs_result = client.table('agent_memory_logs') \
-            .select('source_identifier, created_at') \
+        # Check for full conversation save first
+        convo_memory_log_res = client.table('agent_memory_logs') \
+            .select('created_at') \
             .eq('agent_name', agent_name) \
-            .like('source_identifier', f"%{chat_id}%") \
-            .execute()
+            .eq('source_identifier', chat_id) \
+            .order('created_at', desc=True) \
+            .limit(1).execute()
 
-        if memory_logs_result.data:
-            for log in memory_logs_result.data:
-                source_id = log['source_identifier']
-                created_at = log['created_at']
-                
-                # Check for full conversation save
-                if source_id == chat_id:
-                    is_conversation_saved = True
-                    # Keep the latest save time
-                    if last_conversation_save_time is None or created_at > last_conversation_save_time:
-                        last_conversation_save_time = created_at
-                
-                # Check for individual message saves
-                # Example source_identifier: "message_clxne1b0q000108l3d9g6c2z1_1623456789012"
-                if source_id.startswith('message_'):
-                    parts = source_id.split('_')
-                    if len(parts) > 1:
-                        message_id = parts[1]
-                        saved_message_ids[message_id] = created_at
+        if convo_memory_log_res.data:
+            is_conversation_saved = True
+            last_conversation_save_time = convo_memory_log_res.data[0]['created_at']
 
-        # 3. Augment the chat data with memory info
+        # Check for individual message saves within this chat
+        message_ids_in_chat = [msg['id'] for msg in chat_data.get('messages', []) if 'id' in msg]
+        if message_ids_in_chat:
+            # Create a list of 'like' patterns for the query
+            like_patterns = [f"message_{msg_id}_%" for msg_id in message_ids_in_chat]
+            
+            # Use 'or' filter to match any of the patterns
+            message_memory_logs_res = client.table('agent_memory_logs') \
+                .select('source_identifier, created_at') \
+                .eq('agent_name', agent_name) \
+                .or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])) \
+                .execute()
+
+            if message_memory_logs_res.data:
+                for log in message_memory_logs_res.data:
+                    source_id = log['source_identifier']
+                    created_at = log['created_at']
+                    if source_id.startswith('message_'):
+                        parts = source_id.split('_')
+                        if len(parts) > 1 and parts[1] in message_ids_in_chat:
+                            message_id = parts[1]
+                            saved_message_ids[message_id] = created_at
+        
         chat_data['savedMessageIds'] = saved_message_ids
         chat_data['isConversationSaved'] = is_conversation_saved
         chat_data['lastConversationSaveTime'] = last_conversation_save_time
