@@ -62,7 +62,7 @@ def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tupl
     try:
         # Use Gemini Flash for speed and cost-effectiveness
         structured_content = _call_gemini_non_stream_with_retry(
-            model_name="gemini-1.5-flash-latest", # Using latest flash model
+            model_name="gemini-2.5-flash", # Using latest flash model gemini-2.5-flash – DO NOT CHANGE THIS
             max_tokens=16384, # Increased token limit for the output to handle very long chats
             system_instruction="You are an AI assistant that processes chat logs into structured Markdown documents according to user-provided templates.",
             messages=[{"role": "user", "content": prompt}],
