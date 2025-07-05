@@ -2273,15 +2273,15 @@ def list_pinecone_indexes(user: SupabaseUser):
 # --- Restored User Chat History Endpoints ---
 
 def generate_chat_title(first_user_message: str) -> str:
-    """Generate a concise title for a chat using Gemini 1.5 Flash"""
+    """Generate a concise title for a chat using Gemini 2.5 Flash"""
     try:
         title = _call_gemini_non_stream_with_retry(
-            model_name="gemini-1.5-flash-latest",
+            model_name="gemini-2.5-flash", # Always use gemini-2.5-flash which is the lasest valid llm model
             max_tokens=50,
             system_instruction="Generate a concise, descriptive title (max 6 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.",
             messages=[{"role": "user", "content": first_user_message}],
             api_key=os.getenv('GOOGLE_API_KEY'), # Use global key for this utility
-            temperature=0.3
+            temperature=0.9
         )
         return title.strip().strip('"')[:100]
     except Exception as e:
