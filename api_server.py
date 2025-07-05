@@ -2494,52 +2494,66 @@ def get_chat_history(user: SupabaseUser):
 @app.route('/delete_message', methods=['POST'])
 @supabase_auth_required(agent_required=False)
 def delete_message(user: SupabaseUser):
+    logger.info("--- DELETE MESSAGE REQUEST START ---")
     data = request.get_json()
     chat_id = data.get('chat_id')
     message_id_to_delete = data.get('message_id')
     requesting_user_id = data.get('user_id')
+    logger.info(f"Delete request for user '{requesting_user_id}', chat '{chat_id}', message '{message_id_to_delete}'")
 
     if not all([chat_id, message_id_to_delete, requesting_user_id]):
+        logger.error("Delete request missing required fields.")
         return jsonify({'error': 'chat_id, message_id, and user_id are required'}), 400
 
     if user.id != requesting_user_id:
+        logger.error(f"User ID mismatch: token user '{user.id}' vs request user '{requesting_user_id}'")
         return jsonify({'error': 'User ID mismatch'}), 403
 
     client = get_supabase_client()
     if not client:
+        logger.error("Supabase client not available for delete operation.")
         return jsonify({'error': 'Database connection failed'}), 500
 
     try:
         # --- Step 1: Fetch chat and agent info ---
+        logger.info(f"Fetching chat_history for chat_id: {chat_id}")
         chat_res = client.table('chat_history').select('messages, agent_id, last_message_id_at_save').eq('id', chat_id).eq('user_id', user.id).single().execute()
         if not chat_res.data:
+            logger.error(f"Chat not found or access denied for chat_id: {chat_id}")
             return jsonify({'error': 'Chat not found or access denied'}), 404
 
         messages = chat_res.data.get('messages', [])
         agent_id = chat_res.data.get('agent_id')
         last_save_marker_id = chat_res.data.get('last_message_id_at_save')
+        logger.info(f"Found chat with {len(messages)} messages. Agent ID: {agent_id}, Save Marker: {last_save_marker_id}")
         
         agent_res = client.table('agents').select('name').eq('id', agent_id).single().execute()
         if not agent_res.data:
+            logger.error(f"Agent not found for agent_id: {agent_id}")
             return jsonify({'error': 'Agent not found for this chat'}), 404
         agent_name = agent_res.data['name']
+        logger.info(f"Agent name: {agent_name}")
 
         # --- Step 2: Find and remove the message from the list ---
         updated_messages = [msg for msg in messages if msg.get('id') != message_id_to_delete]
 
         if len(updated_messages) == len(messages):
+            logger.error(f"Message {message_id_to_delete} not found in chat history for chat {chat_id}")
             return jsonify({'error': 'Message not found in chat history'}), 404
+        logger.info(f"Message {message_id_to_delete} removed. New message count: {len(updated_messages)}")
 
         # --- Step 3: Determine the new save marker ---
         new_last_save_marker_id = last_save_marker_id
         if last_save_marker_id == message_id_to_delete:
             new_last_save_marker_id = updated_messages[-1]['id'] if updated_messages else None
+            logger.info(f"Save marker was on deleted message. New marker: {new_last_save_marker_id}")
         
         # --- Step 4: Update chat_history table ---
         update_payload = {
             'messages': updated_messages,
             'last_message_id_at_save': new_last_save_marker_id
         }
+        logger.info(f"Updating chat_history for {chat_id} with {len(updated_messages)} messages.")
         update_res = client.table('chat_history').update(update_payload).eq('id', chat_id).execute()
         if hasattr(update_res, 'error') and update_res.error:
             logger.error(f"Failed to update chat_history for chat {chat_id}: {update_res.error}")
@@ -2548,19 +2562,23 @@ def delete_message(user: SupabaseUser):
         logger.info(f"Successfully deleted message {message_id_to_delete} from chat_history {chat_id}")
 
         # --- Step 5: Synchronously update memory logs and Pinecone ---
+        logger.info("Starting memory and vector DB update process...")
         embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
         
         # Case A: The message was part of a full conversation save
+        logger.info(f"Checking for full conversation memory log with source_identifier: {chat_id}")
         memory_log_res = client.table('agent_memory_logs').select('id').eq('source_identifier', chat_id).execute()
         if memory_log_res.data:
+            logger.info(f"Found full conversation memory log for chat {chat_id}. Processing update.")
             if not updated_messages:
                 # If the last message was deleted, remove the memory log entirely
-                logger.info(f"Last message in saved conversation {chat_id} deleted. Removing memory log and vectors.")
+                logger.info(f"Conversation {chat_id} is now empty. Deleting memory log and vectors.")
                 embedding_handler.delete_document(source_identifier=chat_id)
                 client.table('agent_memory_logs').delete().eq('source_identifier', chat_id).execute()
+                logger.info(f"Deleted memory log and vectors for chat {chat_id}.")
             else:
                 # Re-enrich and re-save the conversation memory
-                logger.info(f"Message in saved conversation {chat_id} deleted. Re-enriching and re-indexing.")
+                logger.info(f"Re-enriching and re-indexing memory for chat {chat_id}.")
                 google_api_key = get_api_key(agent_name, 'google')
                 if not google_api_key:
                     logger.error("Cannot re-enrich memory: Google API key not found.")
@@ -2570,24 +2588,34 @@ def delete_message(user: SupabaseUser):
                         "structured_content": structured_content,
                         "summary": summary
                     }).eq("source_identifier", chat_id).execute()
+                    logger.info(f"Updated agent_memory_logs for {chat_id} in Supabase.")
                     
                     embedding_handler.delete_document(source_identifier=chat_id)
+                    logger.info(f"Deleted old vectors for {chat_id}.")
                     embedding_handler.embed_and_upsert(structured_content, {
                         "agent_name": agent_name,
                         "source_identifier": chat_id,
                         "file_name": f"chat_memory_{chat_id}.md"
                     })
                     logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
+        else:
+            logger.info(f"No full conversation memory log found for chat {chat_id}.")
 
         # Case B: The message was saved individually
+        logger.info(f"Checking for individually saved message memory for message_id: {message_id_to_delete}")
         individual_log_res = client.table('agent_memory_logs').select('id, source_identifier').like('source_identifier', f'message_{message_id_to_delete}%').execute()
         if individual_log_res.data:
+            logger.info(f"Found {len(individual_log_res.data)} individually saved memory logs for message {message_id_to_delete}.")
             for log in individual_log_res.data:
                 log_source_id = log['source_identifier']
                 logger.info(f"Deleting individually saved message memory: {log_source_id}")
                 embedding_handler.delete_document(source_identifier=log_source_id)
                 client.table('agent_memory_logs').delete().eq('id', log['id']).execute()
+                logger.info(f"Deleted log and vectors for {log_source_id}.")
+        else:
+            logger.info(f"No individually saved memory logs found for message {message_id_to_delete}.")
 
+        logger.info("--- DELETE MESSAGE REQUEST END ---")
         return jsonify({
             'success': True, 
             'message': 'Message deleted successfully',
@@ -2595,7 +2623,7 @@ def delete_message(user: SupabaseUser):
         })
 
     except Exception as e:
-        logger.error(f"Error deleting message {message_id_to_delete} from chat {chat_id}: {e}", exc_info=True)
+        logger.error(f"--- DELETE MESSAGE REQUEST FAILED ---: Error deleting message {message_id_to_delete} from chat {chat_id}: {e}", exc_info=True)
         return jsonify({'error': 'An internal server error occurred'}), 500
 
 
