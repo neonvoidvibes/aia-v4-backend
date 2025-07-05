@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 # A simple heuristic to split the message list into chunks for the LLM
 # This avoids creating a single massive prompt string.
-# We aim for chunks of roughly 20 messages.
-MESSAGES_PER_CHUNK = 20
+# We aim for chunks of roughly 10 messages to be safe.
+MESSAGES_PER_CHUNK = 10
 
 def _format_chat_for_enrichment(messages: List[Dict[str, Any]]) -> str:
     """Formats a list of chat messages into a simple string log."""
@@ -58,10 +58,11 @@ def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tupl
         return "", "Empty chat session."
 
     unprocessed_messages = list(messages)
-    full_structured_log = ""
+    full_structured_log_parts = []
     is_first_chunk = True
-    max_loops = (len(messages) // MESSAGES_PER_CHUNK) + 5  # Safety break
+    max_loops = (len(messages) // MESSAGES_PER_CHUNK) + 5
     loop_count = 0
+    total_turns_processed = 0
 
     while unprocessed_messages and loop_count < max_loops:
         loop_count += 1
@@ -72,12 +73,12 @@ def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tupl
             prompt = ENRICHMENT_PROMPT_TEMPLATE.format(chat_log_string=chat_log_chunk_string)
         else:
             prompt = ENRICHMENT_CONTINUATION_PROMPT_TEMPLATE.format(
-                previous_structured_log=full_structured_log,
+                start_turn_number=total_turns_processed + 1,
                 chat_log_string=chat_log_chunk_string
             )
         
         try:
-            logger.info(f"Processing chunk of {len(messages_in_chunk)} messages (Loop {loop_count})...")
+            logger.info(f"Processing chunk of {len(messages_in_chunk)} messages (Loop {loop_count}, starting turn {total_turns_processed + 1})...")
             partial_content = _call_gemini_non_stream_with_retry(
                 model_name="gemini-2.5-flash",
                 max_tokens=16384,
@@ -89,51 +90,48 @@ def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tupl
 
             if not partial_content:
                 logger.error(f"Log enrichment failed on loop {loop_count}: Gemini returned an empty response.")
-                # If it fails, we stop and return what we have so far to avoid losing progress.
                 break
 
-            processed_turns = _count_turns_in_markdown(partial_content)
-            logger.info(f"Chunk processed. Model returned {processed_turns} turns for {len(messages_in_chunk)} messages sent.")
+            processed_turns_in_chunk = _count_turns_in_markdown(partial_content)
+            logger.info(f"Chunk processed. Model returned {processed_turns_in_chunk} turns for {len(messages_in_chunk)} messages sent.")
 
-            # Append the new content, handling the YAML header on the first run
             if is_first_chunk:
-                full_structured_log = partial_content
+                full_structured_log_parts.append(partial_content)
                 is_first_chunk = False
             else:
-                # Strip any potential repeated headers from continuation calls
-                partial_content = re.sub(r'^---\s*\n.*?\n---\s*\n', '', partial_content, flags=re.DOTALL)
-                full_structured_log += "\n\n" + partial_content
+                full_structured_log_parts.append(partial_content)
 
-            # Update the list of unprocessed messages
-            if processed_turns > 0 and processed_turns <= len(messages_in_chunk):
-                unprocessed_messages = unprocessed_messages[processed_turns:]
+            if processed_turns_in_chunk > 0 and processed_turns_in_chunk <= len(messages_in_chunk):
+                unprocessed_messages = unprocessed_messages[processed_turns_in_chunk:]
+                total_turns_processed += processed_turns_in_chunk
             else:
-                # If the model returns 0 turns or an unexpected number, stop to prevent infinite loops.
-                logger.warning(f"Stopping enrichment loop due to unexpected turn count ({processed_turns}) from model.")
+                logger.warning(f"Stopping enrichment loop due to unexpected turn count ({processed_turns_in_chunk}) from model.")
                 break
         
         except CircuitBreakerOpen as e:
             logger.error(f"Log enrichment failed: {e}")
-            break # Stop processing if the service is unavailable
+            break
         except Exception as e:
             logger.error(f"An unexpected error occurred during log enrichment loop: {e}", exc_info=True)
-            break # Stop on other unexpected errors
+            break
 
     if loop_count >= max_loops:
         logger.error(f"Enrichment process exited due to exceeding max loop count ({max_loops}).")
 
-    if not full_structured_log:
+    if not full_structured_log_parts:
         logger.error("Enrichment resulted in an empty final document.")
         return _format_chat_for_enrichment(messages), "Failed to enrich log."
 
-    summary = _extract_summary_from_enriched_log(full_structured_log)
+    # Stitch the document together
+    final_log = ""
+    if full_structured_log_parts:
+        # The first part should contain the YAML header
+        final_log = full_structured_log_parts[0]
+        # Append the rest of the parts
+        for part in full_structured_log_parts[1:]:
+            final_log += "\n\n" + part
+
+    summary = _extract_summary_from_enriched_log(final_log)
     logger.info(f"Successfully enriched chat log. Final summary: '{summary}'")
     
-    # Final cleanup to ensure no duplicate headers exist
-    parts = full_structured_log.split('---')
-    if len(parts) > 3: # More than one YAML block
-        final_log = f"---\n{parts[1]}---\n" + "\n".join(p.strip() for p in parts[2:])
-    else:
-        final_log = full_structured_log
-
     return final_log, summary

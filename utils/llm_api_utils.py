@@ -174,7 +174,17 @@ def _call_gemini_non_stream_with_retry(model_name: str, max_tokens: int, system_
             gemini_messages = [{'role': 'model' if msg['role'] == 'assistant' else 'user', 'parts': [msg['content']]} for msg in messages]
             
             response = model.generate_content(gemini_messages, stream=False, generation_config=generation_config)
-            return response.text
+            
+            # Safely extract text, even if the finish reason is MAX_TOKENS or other non-standard reasons.
+            try:
+                return response.text
+            except ValueError:
+                logger.warning(f"Could not use `response.text` accessor (finish_reason: {response.candidates[0].finish_reason}). Extracting content manually.")
+                if response.parts:
+                    return "".join(part.text for part in response.parts)
+                # If there are no parts, it's a genuinely empty response or a safety block.
+                logger.error("Gemini response was blocked or empty with no content parts.")
+                return ""
         finally:
             if api_key != original_global_key and original_global_key:
                 genai.configure(api_key=original_global_key)
