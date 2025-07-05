@@ -1776,19 +1776,6 @@ def handle_chat(user: SupabaseUser):
             logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
             logger.info(f"Stream settings - Listen: {transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}")
 
-            llm_messages_from_client = []
-            for msg in incoming_messages:
-                if msg.get("role") in ["user", "assistant"]:
-                    timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
-                    formatted_content = f"[Sent at: {timestamp}] {msg['content']}"
-                    llm_messages_from_client.append({"role": msg["role"], "content": formatted_content})
-
-            if not llm_messages_from_client:
-                logger.warning("Stream: No user/assistant messages from client.")
-                # You might want to yield a specific message here or just close the stream
-                yield f"data: {json.dumps({'error': 'No message content provided.'})}\n\n"
-                return
-
             # --- System Prompt and Context Assembly ---
             s3_load_start_time = time.time()
             objective_function = get_objective_function(agent_name)
@@ -1817,8 +1804,7 @@ def handle_chat(user: SupabaseUser):
                 final_system_prompt += objective_function
 
             # Then add frameworks, context, docs, etc.
-            timestamp_instructions = "\n\n## Message Timestamp Instructions\n- Each message in the history is prepended with a timestamp (e.g., `[Sent at: YYYY-MM-DDTHH:MM:SS.ssssssZ]`).\n- This timestamp is for your contextual awareness of the conversation's timeline.\n- **CRITICAL:** Do NOT replicate this timestamping format in your responses. Your answers should only contain the content you intend to communicate to the user."
-            final_system_prompt += source_instr + transcript_handling_instructions + timestamp_instructions
+            final_system_prompt += source_instr + transcript_handling_instructions
             if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
             if event_context: final_system_prompt += "\n\n## Context\n" + event_context
             if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
@@ -1827,7 +1813,9 @@ def handle_chat(user: SupabaseUser):
 
             # --- RAG ---
             rag_context_block = ""
-            last_actual_user_message_for_rag = next((msg['content'] for msg in reversed(llm_messages_from_client) if msg['role'] == 'user'), None)
+            # We need the original, unformatted message for RAG
+            last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
+            last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
             
             # Fetch agent-specific keys for RAG (OpenAI) and Chat (Anthropic/Google)
             openai_key_for_rag = get_api_key(agent_name, 'openai')
@@ -1906,6 +1894,30 @@ def handle_chat(user: SupabaseUser):
                     )
                     final_llm_messages.append({'role': 'user', 'content': transcript_message_content})
 
+            # --- Timestamped History Injection ---
+            # This block formats the history with timestamps and injects it as a single context message.
+            # This is more robust against mimicry than prepending to every message.
+            timestamped_history_lines = [
+                "This is the conversation history with timestamps for your reference. Do not replicate this format in your responses."
+            ]
+            for msg in incoming_messages:
+                if msg.get("role") in ["user", "assistant"]:
+                    # Fallback to now() if createdAt is missing, though it should be present.
+                    timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    timestamped_history_lines.append(f"[{timestamp}] {role}: {content}")
+            
+            # Join the lines into a single block
+            history_context_block = "\n".join(timestamped_history_lines)
+            
+            # The final message list sent to the LLM
+            # We replace the original message history with our formatted block.
+            # The last user message is appended separately to make it the immediate prompt.
+            llm_messages_from_client = [
+                {"role": "user", "content": f"=== CURRENT CHAT HISTORY ===\n{history_context_block}\n=== END CURRENT CHAT HISTORY ==="},
+                {"role": "user", "content": last_actual_user_message_for_rag if last_actual_user_message_for_rag else ""}
+            ]
             final_llm_messages.extend(llm_messages_from_client)
 
             # --- Call LLM and Stream ---
