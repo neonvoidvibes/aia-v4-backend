@@ -1,6 +1,8 @@
 """Utilities for retrieving relevant document context for chat."""
 import logging
 import traceback
+import time
+import math
 from typing import List, Optional, Dict, Any
 
 # Attempt early tiktoken import
@@ -162,14 +164,49 @@ class RetrievalHandler:
 
             if not all_matches: logger.warning("No matches found across namespaces."); return []
 
-            # 5. Process & Rank (no change here)
-            logger.debug(f"Total raw matches: {len(all_matches)}")
+            # 5. Process & Rank with Time-Decay
+            logger.debug(f"Total raw matches: {len(all_matches)}. Applying time-decay re-ranking...")
+            decay_rate = 0.05 # Controls how quickly scores decay. Higher is faster.
+            current_time = time.time()
+
+            for match in all_matches:
+                original_score = match.score
+                if match.metadata:
+                    is_core = match.metadata.get('is_core_memory', False)
+                    saved_at = match.metadata.get('saved_at') # Expects a Unix timestamp
+
+                    if is_core:
+                        logger.debug(f"Re-ranking ID {match.id}: Core memory, skipping decay. Score remains {original_score:.4f}")
+                        continue
+
+                    if saved_at:
+                        try:
+                            age_seconds = current_time - float(saved_at)
+                            age_days = age_seconds / (24 * 3600)
+                            if age_days > 0:
+                                decay_factor = math.exp(-decay_rate * age_days)
+                                match.score = original_score * decay_factor
+                                logger.debug(f"Re-ranking ID {match.id}: Original Score={original_score:.4f}, Age={age_days:.2f} days, New Score={match.score:.4f}")
+                            else:
+                                # Age is negative or zero, no decay
+                                logger.debug(f"Re-ranking ID {match.id}: Recent memory (age <= 0), no decay. Score remains {original_score:.4f}")
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Could not process 'saved_at' timestamp for match {match.id} ('{saved_at}'). Error: {e}. Skipping decay.")
+                    else:
+                        logger.debug(f"Re-ranking ID {match.id}: No 'saved_at' timestamp. Skipping decay.")
+                else:
+                    logger.debug(f"Re-ranking ID {match.id}: No metadata. Skipping decay.")
+
+            # Sort again after applying time-decay
             all_matches.sort(key=lambda x: x.score, reverse=True)
             top_matches = all_matches[:k]
-            logger.debug(f"Top {len(top_matches)} matches after sort:")
-            for i, match in enumerate(top_matches): logger.debug(f"  Rank {i+1}: ID={match.id}, Score={match.score:.4f}")
 
-            # 6. Convert to Documents (no change here)
+            logger.info(f"Top {len(top_matches)} matches after time-decay re-ranking:")
+            for i, match in enumerate(top_matches):
+                logger.info(f"  Rank {i+1}: ID={match.id}, Final Score={match.score:.4f}")
+
+
+            # 6. Convert to Documents
             docs = []
             for match in top_matches:
                 if not match.metadata: logger.warning(f"Match {match.id} lacks metadata."); continue
