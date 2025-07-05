@@ -1786,7 +1786,7 @@ def handle_chat(user: SupabaseUser):
             s3_load_time = time.time() - s3_load_start_time
             logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
             
-            source_instr = "\n\n## Source Attribution Requirements\n1. ALWAYS specify exact source file name (e.g., `frameworks_base.md`, `context_aID-river_eID-20240116.txt`, `transcript_...txt`, `doc_XYZ.pdf`) for info using Markdown footnotes exactly like `[1]` (*not* [^1]). \n2. Place the footnote reference **immediately AFTER THE PUNCTUATION** at the end of a sentence (e.g., `...end of sentence.[1]` (*not* `[^1]`, not `...end of sentence[1].`)).\n3. List all cited sources at the end of your response using standard Markdown footnote syntax (e.g., `[1] source_file_name.ext`). **Important: DO NOT add any heading (like \"### Sources\"), horizontal lines (`---`), or other formatting. Sources will appear below assistant message.**"
+            source_instr = "" # This instruction is now redundant and has been removed as per user request.
             transcript_handling_instructions = (
                 "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
                 "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting. Very important: DO NOT summarize or analyze its content unless specifically asked by the user.\n"
@@ -1804,7 +1804,7 @@ def handle_chat(user: SupabaseUser):
                 final_system_prompt += objective_function
 
             # Then add frameworks, context, docs, etc.
-            final_system_prompt += source_instr + transcript_handling_instructions
+            final_system_prompt += transcript_handling_instructions
             if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
             if event_context: final_system_prompt += "\n\n## Context\n" + event_context
             if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
@@ -1896,13 +1896,16 @@ def handle_chat(user: SupabaseUser):
 
             # --- Timestamped History Injection ---
             # This block formats the history with timestamps and injects it as a single context message.
-            timestamped_history_lines = [] # Instruction removed as requested.
+            # This is more robust against mimicry than prepending to every message.
+            timestamped_history_lines = [
+                "This is the conversation history with timestamps for your reference. Do not replicate this format in your responses."
+            ]
 
             # We iterate through all messages and skip the last user message, which is sent separately.
             for msg in incoming_messages:
                 if msg is last_user_message_obj: # last_user_message_obj is defined above in the RAG section
                     continue
-                
+
                 if msg.get("role") in ["user", "assistant"]:
                     # Fallback to now() if createdAt is missing, though it should be present.
                     timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
