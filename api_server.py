@@ -1776,11 +1776,12 @@ def handle_chat(user: SupabaseUser):
             logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
             logger.info(f"Stream settings - Listen: {transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}")
 
-            llm_messages_from_client = [
-                {"role": msg["role"], "content": msg["content"]}
-                for msg in incoming_messages
-                if msg.get("role") in ["user", "assistant"]
-            ]
+            llm_messages_from_client = []
+            for msg in incoming_messages:
+                if msg.get("role") in ["user", "assistant"]:
+                    timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
+                    formatted_content = f"[Sent at: {timestamp}] {msg['content']}"
+                    llm_messages_from_client.append({"role": msg["role"], "content": formatted_content})
 
             if not llm_messages_from_client:
                 logger.warning("Stream: No user/assistant messages from client.")
@@ -1816,7 +1817,8 @@ def handle_chat(user: SupabaseUser):
                 final_system_prompt += objective_function
 
             # Then add frameworks, context, docs, etc.
-            final_system_prompt += source_instr + transcript_handling_instructions
+            timestamp_instructions = "\n\n## Message Timestamp Instructions\n- Each message in the history is prepended with a timestamp (e.g., `[Sent at: YYYY-MM-DDTHH:MM:SS.ssssssZ]`).\n- This timestamp is for your contextual awareness of the conversation's timeline.\n- **CRITICAL:** Do NOT replicate this timestamping format in your responses. Your answers should only contain the content you intend to communicate to the user."
+            final_system_prompt += source_instr + transcript_handling_instructions + timestamp_instructions
             if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
             if event_context: final_system_prompt += "\n\n## Context\n" + event_context
             if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
