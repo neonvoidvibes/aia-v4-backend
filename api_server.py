@@ -2586,27 +2586,27 @@ def delete_message(user: SupabaseUser):
                 logger.info(f"Deleted memory log and vectors for chat {chat_id}.")
             else:
                 # Re-enrich and re-save the conversation memory
-        logger.info(f"Re-enriching and re-indexing memory for chat {chat_id}.")
-        google_api_key = get_api_key(agent_name, 'google')
-        if not google_api_key:
-            logger.error("Cannot re-enrich memory: Google API key not found.")
-        else:
-            structured_content, summary = enrich_chat_log(updated_messages, google_api_key)
-            client.table("agent_memory_logs").update({
-                "structured_content": structured_content,
-                "summary": summary
-            }).eq("source_identifier", chat_id).execute()
-            logger.info(f"Updated agent_memory_logs for {chat_id} in Supabase.")
-            
-            embedding_handler.delete_document(source_identifier=chat_id)
-            logger.info(f"Deleted old vectors for {chat_id}.")
-            embedding_handler.embed_and_upsert(structured_content, {
-                "agent_name": agent_name,
-                "source_identifier": chat_id,
-                "file_name": f"chat_memory_{chat_id}.md",
-                "saved_at": datetime.now(timezone.utc).timestamp()
-            })
-            logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
+                logger.info(f"Re-enriching and re-indexing memory for chat {chat_id}.")
+                google_api_key = get_api_key(agent_name, 'google')
+                if not google_api_key:
+                    logger.error("Cannot re-enrich memory: Google API key not found.")
+                else:
+                    structured_content, summary = enrich_chat_log(updated_messages, google_api_key)
+                    client.table("agent_memory_logs").update({
+                        "structured_content": structured_content,
+                        "summary": summary
+                    }).eq("source_identifier", chat_id).execute()
+                    logger.info(f"Updated agent_memory_logs for {chat_id} in Supabase.")
+                    
+                    embedding_handler.delete_document(source_identifier=chat_id)
+                    logger.info(f"Deleted old vectors for {chat_id}.")
+                    embedding_handler.embed_and_upsert(structured_content, {
+                        "agent_name": agent_name,
+                        "source_identifier": chat_id,
+                        "file_name": f"chat_memory_{chat_id}.md",
+                        "saved_at": datetime.now(timezone.utc).timestamp()
+                    })
+                    logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
         else:
             logger.info(f"No full conversation memory log found for chat {chat_id}.")
 

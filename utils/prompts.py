@@ -27,3 +27,72 @@ Based on this, analyze the following text. Respond with only the word 'true' or 
 **User Text:**
 "{user_text}"
 """
+
+ENRICHMENT_PROMPT_TEMPLATE = """
+You are a sophisticated data enrichment agent. Your task is to process a raw chat log and transform it into a structured, machine-readable JSON format.
+
+**Instructions:**
+1.  **Summarize the Conversation:** Create a concise, one-sentence summary of the entire conversation's main topic or goal.
+2.  **Identify Key Entities:** Extract and categorize key entities mentioned (e.g., people, projects, technologies, key dates).
+3.  **Extract Action Items:** List any explicit tasks, to-dos, or action items mentioned.
+4.  **Identify Key Decisions:** Document any significant decisions made during the conversation.
+5.  **Detect User Sentiment:** Analyze the overall sentiment of the user throughout the conversation (e.g., positive, negative, neutral, mixed).
+6.  **Format as JSON:** Present the entire output as a single, valid JSON object. Do not include any text or formatting outside of the JSON structure.
+
+**Raw Chat Log:**
+```json
+{chat_log_json}
+```
+
+**JSON Output Structure:**
+{{
+  "summary": "A brief, one-sentence summary of the conversation.",
+  "entities": {{
+    "people": ["Person A", "Person B"],
+    "projects": ["Project X"],
+    "technologies": ["Python", "React"],
+    "dates": ["2023-10-27"]
+  }},
+  "action_items": [
+    "Schedule a follow-up meeting.",
+    "Send the report to the team."
+  ],
+  "decisions": [
+    "The team will adopt the new framework for Project X."
+  ],
+  "user_sentiment": "neutral"
+}}
+"""
+
+ENRICHMENT_CONTINUATION_PROMPT_TEMPLATE = """
+You are a data enrichment agent continuing a task. You previously processed a large chat log and generated a partial JSON output. The process was interrupted.
+
+Your task is to complete the JSON object based on the remaining part of the chat log.
+
+**Instructions:**
+1.  **Review the Partial JSON:** You will be given the JSON you have generated so far.
+2.  **Analyze the Remaining Log:** You will be given the rest of the raw chat log.
+3.  **Complete the JSON:** Continue populating the JSON object based on the new information. Do NOT repeat information already present in the partial JSON. Your output should be only the closing part of the JSON object, starting from the first incomplete or new field.
+
+**Partial JSON Generated So Far:**
+```json
+{partial_json}
+```
+
+**Remaining Raw Chat Log:**
+```json
+{remaining_chat_log_json}
+```
+
+**Your Output:**
+Continue the JSON from where it left off. For example, if the partial JSON ended mid-way through "action_items", your output might look like this:
+```json
+    "Send the report to the team."
+  ],
+  "decisions": [
+    "The team will adopt the new framework for Project X."
+  ],
+  "user_sentiment": "neutral"
+}}
+```
+"""
