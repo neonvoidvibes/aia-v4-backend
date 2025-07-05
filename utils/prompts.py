@@ -1,29 +1,29 @@
 # utils/prompts.py
 
 ENRICHMENT_PROMPT_TEMPLATE = """
-**CRITICAL INSTRUCTION: YOUR TASK IS TO CONVERT A RAW CHAT LOG INTO A STRUCTURED MARKDOWN DOCUMENT.**
+**PRIMARY DIRECTIVE: You are a document conversion engine. Your only function is to convert a raw chat log into a single, complete, structured Markdown document. You MUST process the entire input log from start to finish without any truncation.**
 
-**Rule 1: Output Format**
-Your entire output MUST be a single Markdown document. It MUST start with a **YAML frontmatter block** (YAML code enclosed by `---` lines) containing a `summary` field. After the frontmatter, create a `### Turn X` section for each message. Each turn MUST contain `**Speaker:**` and `**Raw Text:**` fields.
+**OUTPUT SPECIFICATION:**
 
-**Rule 2: Content Processing**
-You MUST process the *entire* chat log provided, from the beginning to the `=== END OF LOG ===` marker. Do NOT truncate, summarize, or omit any part of the conversation.
+1.  **YAML Frontmatter:**
+    - The document MUST begin with a YAML frontmatter block.
+    - This block MUST be enclosed by `---` delimiters.
+    - It MUST contain a single key: `summary`, with a 1-2 sentence summary of the ENTIRE conversation from start to finish.
 
-**Rule 3: Tagging**
-For each turn, you MUST add structured tags below the `**Raw Text:**` to capture key information. Use the format `[type: tag_type] [key: value]...`.
+2.  **Conversation Turns:**
+    - After the frontmatter, create a `### Turn X` heading for each message in the log.
+    - Each turn section MUST contain `**Speaker:**` and `**Raw Text:**` fields.
+    - The `**Raw Text:**` MUST be the verbatim content of the message.
 
-**Available Tag Types:**
-- `[type: decision]`: For explicit decisions made.
-- `[type: action_item]`: For tasks assigned.
-- `[type: fact]`: For objective statements.
-- `[type: sentiment]`: For emotional tone.
-- `[type: contrasting_viewpoint]`: To link two differing opinions.
-- `[type: rationale]`: To explain the "why" behind an action or statement.
+3.  **Structured Tagging:**
+    - Below the `**Raw Text:**` for each turn, you MUST add structured tags.
+    - Tags MUST follow the format: `[type: tag_type] [key: value]...`
+    - **Available Tag Types:** `decision`, `action_item`, `fact`, `sentiment`, `contrasting_viewpoint`, `rationale`.
 
-**EXAMPLE OUTPUT:**
+**EXAMPLE OF CORRECT OUTPUT:**
 ```markdown
 ---
-summary: "The user proposes a new feature, and the assistant raises a concern about the project timeline."
+summary: "A user and an assistant discuss adding a feature, weighing market opportunity against timeline concerns."
 ---
 
 ### Turn 1
@@ -38,9 +38,29 @@ summary: "The user proposes a new feature, and the assistant raises a concern ab
 [type: fact] [subject: code freeze] [predicate: is_approaching]
 ```
 
-**DO NOT ADD ANY COMMENTARY. YOUR RESPONSE MUST BE ONLY THE MARKDOWN DOCUMENT.**
+**EXECUTION INSTRUCTIONS:**
+- Adhere strictly to the `OUTPUT SPECIFICATION` and `EXAMPLE`.
+- Do not add any commentary, apologies, or text outside of the specified Markdown structure.
+- Your single task is to convert the following log. Begin now.
 
 **Raw Chat Log to Process:**
+{chat_log_string}
+=== END OF LOG ===
+"""
+
+ENRICHMENT_CONTINUATION_PROMPT_TEMPLATE = """
+**PRIMARY DIRECTIVE: You are a document conversion engine. Your only function is to continue converting a raw chat log into a single, complete, structured Markdown document. You MUST process the entire input log from start to finish without any truncation.**
+
+**OUTPUT SPECIFICATION:**
+- You MUST continue the `### Turn X` sequence from the previous part.
+- Each turn section MUST contain `**Speaker:**` and `**Raw Text:**` fields.
+- The `**Raw Text:**` MUST be the verbatim content of the message.
+- You MUST add structured tags below the `**Raw Text:**` for each turn.
+
+**PREVIOUSLY PROCESSED DOCUMENT (DO NOT REPEAT THIS):**
+{previous_structured_log}
+
+**CONTINUE FROM HERE (NEXT RAW LOG CHUNK):**
 {chat_log_string}
 === END OF LOG ===
 """
