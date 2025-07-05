@@ -359,7 +359,7 @@ retry_strategy_supabase = retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry_error_callback=log_retry_error,
-    retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException, httpx.ConnectError))
+    retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError))
 )
 
 @retry_strategy_supabase
