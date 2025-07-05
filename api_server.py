@@ -2510,75 +2510,85 @@ def delete_message(user: SupabaseUser):
         return jsonify({'error': 'Database connection failed'}), 500
 
     try:
-        # 1. Fetch the current chat history
-        chat_res = client.table('chat_history').select('messages, agent_id').eq('id', chat_id).eq('user_id', user.id).single().execute()
+        # --- Step 1: Fetch chat and agent info ---
+        chat_res = client.table('chat_history').select('messages, agent_id, last_message_id_at_save').eq('id', chat_id).eq('user_id', user.id).single().execute()
         if not chat_res.data:
             return jsonify({'error': 'Chat not found or access denied'}), 404
 
         messages = chat_res.data.get('messages', [])
         agent_id = chat_res.data.get('agent_id')
+        last_save_marker_id = chat_res.data.get('last_message_id_at_save')
         
         agent_res = client.table('agents').select('name').eq('id', agent_id).single().execute()
         if not agent_res.data:
             return jsonify({'error': 'Agent not found for this chat'}), 404
         agent_name = agent_res.data['name']
 
-        # 2. Find and remove the message
+        # --- Step 2: Find and remove the message from the list ---
         message_to_delete = None
-        updated_messages = []
-        for msg in messages:
-            if msg.get('id') == message_id_to_delete:
-                message_to_delete = msg
-            else:
-                updated_messages.append(msg)
+        updated_messages = [msg for msg in messages if msg.get('id') != message_id_to_delete]
 
-        if message_to_delete is None:
+        if len(updated_messages) == len(messages):
             return jsonify({'error': 'Message not found in chat history'}), 404
 
-        # 3. Update the chat history in Supabase
-        update_res = client.table('chat_history').update({'messages': updated_messages}).eq('id', chat_id).execute()
+        # --- Step 3: Determine the new save marker ---
+        new_last_save_marker_id = last_save_marker_id
+        if last_save_marker_id == message_id_to_delete:
+            # If we deleted the marker message, move the marker to the new last message
+            new_last_save_marker_id = updated_messages[-1]['id'] if updated_messages else None
+        
+        # --- Step 4: Update chat_history table ---
+        update_payload = {
+            'messages': updated_messages,
+            'last_message_id_at_save': new_last_save_marker_id
+        }
+        update_res = client.table('chat_history').update(update_payload).eq('id', chat_id).execute()
         if hasattr(update_res, 'error') and update_res.error:
             logger.error(f"Failed to update chat_history for chat {chat_id}: {update_res.error}")
             return jsonify({'error': 'Failed to save updated chat history'}), 500
 
         logger.info(f"Successfully deleted message {message_id_to_delete} from chat_history {chat_id}")
 
-        # 4. Handle deletion from memory (Supabase log + Pinecone)
-        # This part runs silently in the background
-        def background_memory_deletion():
-            try:
-                embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
+        # --- Step 5: Synchronously update memory logs and Pinecone ---
+        embedding_handler = EmbeddingHandler(index_name=agent_name, namespace=agent_name)
+        
+        # Case A: The message was part of a full conversation save
+        memory_log_res = client.table('agent_memory_logs').select('id').eq('source_identifier', chat_id).execute()
+        if memory_log_res.data:
+            logger.info(f"Message was part of saved conversation {chat_id}. Re-enriching and re-indexing.")
+            # Re-enrich and re-save the entire conversation memory
+            google_api_key = get_api_key(agent_name, 'google')
+            if not google_api_key:
+                logger.error("Cannot re-enrich memory: Google API key not found.")
+            else:
+                structured_content, summary = enrich_chat_log(updated_messages, google_api_key)
+                client.table("agent_memory_logs").update({
+                    "structured_content": structured_content,
+                    "summary": summary
+                }).eq("source_identifier", chat_id).execute()
                 
-                # Case A: The message was part of a full conversation save
-                memory_log_res = client.table('agent_memory_logs').select('id, structured_content').eq('source_identifier', chat_id).execute()
-                if memory_log_res.data:
-                    for log in memory_log_res.data:
-                        # This is a simplified approach. A real implementation would need to parse the structured_content,
-                        # remove the specific message, and then re-enrich/re-save, which is complex.
-                        # For now, we'll just delete the whole conversation memory if one of its messages is deleted.
-                        # This is safer than leaving a corrupted memory.
-                        logger.info(f"Message was part of saved conversation {log['id']}. Deleting conversation from memory.")
-                        embedding_handler.delete_document(source_identifier=chat_id)
-                        client.table('agent_memory_logs').delete().eq('id', log['id']).execute()
+                embedding_handler.delete_document(source_identifier=chat_id)
+                embedding_handler.embed_and_upsert(structured_content, {
+                    "agent_name": agent_name,
+                    "source_identifier": chat_id,
+                    "file_name": f"chat_memory_{chat_id}.md"
+                })
+                logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
 
-                # Case B: The message was saved individually
-                individual_memory_source_id = f"message_{message_id_to_delete}"
-                # We need to check for IDs that start with this, e.g., message_xyz_123456
-                individual_log_res = client.table('agent_memory_logs').select('id, source_identifier').like('source_identifier', f'{individual_memory_source_id}%').execute()
+        # Case B: The message was saved individually
+        individual_log_res = client.table('agent_memory_logs').select('id, source_identifier').like('source_identifier', f'message_{message_id_to_delete}%').execute()
+        if individual_log_res.data:
+            for log in individual_log_res.data:
+                log_source_id = log['source_identifier']
+                logger.info(f"Deleting individually saved message memory: {log_source_id}")
+                embedding_handler.delete_document(source_identifier=log_source_id)
+                client.table('agent_memory_logs').delete().eq('id', log['id']).execute()
 
-                if individual_log_res.data:
-                    for log in individual_log_res.data:
-                        logger.info(f"Deleting individually saved message memory: {log['source_identifier']}")
-                        embedding_handler.delete_document(source_identifier=log['source_identifier'])
-                        client.table('agent_memory_logs').delete().eq('id', log['id']).execute()
-
-            except Exception as e:
-                logger.error(f"Background memory deletion failed for message {message_id_to_delete}: {e}", exc_info=True)
-
-        # Run the memory cleanup in a background thread
-        app.executor.submit(background_memory_deletion)
-
-        return jsonify({'success': True, 'message': 'Message deleted successfully'})
+        return jsonify({
+            'success': True, 
+            'message': 'Message deleted successfully',
+            'new_last_message_id_at_save': new_last_save_marker_id
+        })
 
     except Exception as e:
         logger.error(f"Error deleting message {message_id_to_delete} from chat {chat_id}: {e}", exc_info=True)
