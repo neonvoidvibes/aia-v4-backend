@@ -2329,17 +2329,63 @@ def list_chat_history(user: SupabaseUser):
             return jsonify([])
         agent_id = agent_result.data['id']
 
-        result = client.table('chat_history') \
+        # 1. Fetch chat history
+        history_result = client.table('chat_history') \
             .select('id, title, updated_at, agent_id') \
             .eq('user_id', user.id) \
             .eq('agent_id', agent_id) \
             .order('updated_at', desc=True).limit(100).execute()
 
-        formatted_history = [{
-            'id': chat['id'], 'title': chat['title'],
-            'updatedAt': chat['updated_at'], 'agentId': chat['agent_id'],
-            'agentName': agent_name
-        } for chat in result.data]
+        if not history_result.data:
+            return jsonify([])
+
+        chat_ids = [chat['id'] for chat in history_result.data]
+
+        # 2. Fetch all relevant memory logs for this agent in one go
+        memory_logs_result = client.table('agent_memory_logs') \
+            .select('source_identifier') \
+            .eq('agent_name', agent_name) \
+            .in_('source_identifier', chat_ids) \
+            .execute()
+        
+        # Also fetch logs for individual messages that might belong to these chats
+        # This part is a bit tricky as we don't store chat_id with message saves.
+        # For now, we can only check for full conversation saves.
+        # We will add logic for individual messages later if needed.
+        
+        saved_conversation_ids = set()
+        if memory_logs_result.data:
+            for log in memory_logs_result.data:
+                # Check for full conversation saves
+                if log['source_identifier'] in chat_ids:
+                    saved_conversation_ids.add(log['source_identifier'])
+
+        # We need a more robust way to check for individual message saves.
+        # A possible approach is to query for source_identifiers starting with 'message_'
+        # and then parsing the message ID, but we don't have a mapping from message ID to chat ID here.
+        # For now, we'll rely on the conversation save status.
+        # This part can be enhanced later.
+        
+        # 3. Format the response
+        formatted_history = []
+        for chat in history_result.data:
+            chat_id = chat['id']
+            is_convo_saved = chat_id in saved_conversation_ids
+            
+            # Placeholder for hasSavedMessages logic
+            # To implement this properly, we would need to adjust how individual messages are saved
+            # to include a chat_id, or perform a more complex query.
+            has_saved_messages = False # Defaulting to false for now
+
+            formatted_history.append({
+                'id': chat_id,
+                'title': chat['title'],
+                'updatedAt': chat['updated_at'],
+                'agentId': chat['agent_id'],
+                'agentName': agent_name,
+                'isConversationSaved': is_convo_saved,
+                'hasSavedMessages': has_saved_messages 
+            })
 
         return jsonify(formatted_history)
     except Exception as e:
