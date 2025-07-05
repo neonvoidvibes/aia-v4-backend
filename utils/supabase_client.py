@@ -43,6 +43,3 @@ def get_supabase_client() -> Optional[Client]:
                 supabase_client = None # Ensure it's None on failure
                 
     return supabase_client
-
-# Initial connection attempt at startup
-get_supabase_client()
