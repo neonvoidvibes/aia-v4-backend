@@ -2402,12 +2402,58 @@ def get_chat_history(user: SupabaseUser):
         return jsonify({'error': 'Chat ID is required or DB is unavailable'}), 400
 
     try:
-        result = client.table('chat_history').select('*').eq('id', chat_id).eq('user_id', user.id).single().execute()
+        # 1. Fetch the main chat history entry
+        chat_result = client.table('chat_history').select('*, agents(name)').eq('id', chat_id).eq('user_id', user.id).single().execute()
         
-        if result.data:
-            return jsonify(result.data), 200
-        else:
+        if not chat_result.data:
             return jsonify({'error': 'Chat not found or access denied'}), 404
+
+        chat_data = chat_result.data
+        agent_name = chat_data.get('agents', {}).get('name')
+        if not agent_name:
+            # This case can happen if the agent was deleted but the chat history remains.
+            # We'll log a warning and proceed without memory info.
+            logger.warning(f"Could not determine agent name for chat ID {chat_id}. Memory info will be incomplete.")
+            return jsonify(chat_data)
+
+        # 2. Check for saved memories associated with this chat
+        saved_message_ids = {}
+        is_conversation_saved = False
+        last_conversation_save_time = None
+
+        # Query for all memory logs that could be related
+        memory_logs_result = client.table('agent_memory_logs') \
+            .select('source_identifier, created_at') \
+            .eq('agent_name', agent_name) \
+            .like('source_identifier', f"%{chat_id}%") \
+            .execute()
+
+        if memory_logs_result.data:
+            for log in memory_logs_result.data:
+                source_id = log['source_identifier']
+                created_at = log['created_at']
+                
+                # Check for full conversation save
+                if source_id == chat_id:
+                    is_conversation_saved = True
+                    # Keep the latest save time
+                    if last_conversation_save_time is None or created_at > last_conversation_save_time:
+                        last_conversation_save_time = created_at
+                
+                # Check for individual message saves
+                # Example source_identifier: "message_clxne1b0q000108l3d9g6c2z1_1623456789012"
+                if source_id.startswith('message_'):
+                    parts = source_id.split('_')
+                    if len(parts) > 1:
+                        message_id = parts[1]
+                        saved_message_ids[message_id] = created_at
+
+        # 3. Augment the chat data with memory info
+        chat_data['savedMessageIds'] = saved_message_ids
+        chat_data['isConversationSaved'] = is_conversation_saved
+        chat_data['lastConversationSaveTime'] = last_conversation_save_time
+
+        return jsonify(chat_data), 200
 
     except Exception as e:
         logger.error(f"Error getting chat history for ID '{chat_id}': {e}", exc_info=True)
