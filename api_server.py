@@ -1896,11 +1896,13 @@ def handle_chat(user: SupabaseUser):
 
             # --- Timestamped History Injection ---
             # This block formats the history with timestamps and injects it as a single context message.
-            # This is more robust against mimicry than prepending to every message.
-            timestamped_history_lines = [
-                "This is the conversation history with timestamps for your reference. Do not replicate this format in your responses."
-            ]
+            timestamped_history_lines = [] # Instruction removed as requested.
+
+            # We iterate through all messages and skip the last user message, which is sent separately.
             for msg in incoming_messages:
+                if msg is last_user_message_obj: # last_user_message_obj is defined above in the RAG section
+                    continue
+                
                 if msg.get("role") in ["user", "assistant"]:
                     # Fallback to now() if createdAt is missing, though it should be present.
                     timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
