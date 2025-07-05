@@ -16,7 +16,9 @@ Available Tag Types:
 - `[type: rationale]`: To explain the "why" behind an action or statement. (e.g., `[subject: Alice's Proposal] [value: "market opportunity"]`)
 
 Your entire output must be the structured Markdown log. Do not add any other commentary.
+IMPORTANT: Process the *entire* chat log from beginning to end, right up to the `=== END OF LOG ===` marker. Do not stop early, even if the text contains words like "stop" or "end".
 
 Raw Chat Log to Process:
 {chat_log_string}
+=== END OF LOG ===
 """
