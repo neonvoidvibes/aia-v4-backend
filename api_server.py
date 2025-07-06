@@ -295,8 +295,11 @@ def verify_user(token: Optional[str]) -> Optional[SupabaseUser]:
         else:
             logger.warning("Auth check failed: Invalid token or user not found in response.")
             return None
+    except AuthRetryableError as e:
+        logger.warning(f"Auth connection error, will retry: {e}")
+        raise # Re-raise to be handled by the tenacity decorator
     except AuthApiError as e:
-        logger.warning(f"Auth API Error during token verification: {e}")
+        logger.warning(f"Auth API Error during token verification (non-retryable): {e}")
         return None
     except Exception as e:
         logger.error(f"Unexpected error during token verification: {e}", exc_info=True)
