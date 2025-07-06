@@ -29,70 +29,49 @@ Based on this, analyze the following text. Respond with only the word 'true' or 
 """
 
 ENRICHMENT_PROMPT_TEMPLATE = """
-You are a sophisticated data enrichment agent. Your task is to process a raw chat log and transform it into a structured, machine-readable JSON format.
+You are a sophisticated data enrichment agent. Your task is to process a raw chat log and transform it into a structured Markdown document.
 
 **Instructions:**
-1.  **Summarize the Conversation:** Create a concise, one-sentence summary of the entire conversation's main topic or goal.
-2.  **Identify Key Entities:** Extract and categorize key entities mentioned (e.g., people, projects, technologies, key dates).
-3.  **Extract Action Items:** List any explicit tasks, to-dos, or action items mentioned.
-4.  **Identify Key Decisions:** Document any significant decisions made during the conversation.
-5.  **Detect User Sentiment:** Analyze the overall sentiment of the user throughout the conversation (e.g., positive, negative, neutral, mixed).
-6.  **Format as JSON:** Present the entire output as a single, valid JSON object. Do not include any text or formatting outside of the JSON structure.
+1.  **Create a YAML Frontmatter:** Start the document with a YAML block (---).
+2.  **Summarize the Conversation:** Inside the YAML block, create a `summary` field with a concise, one-sentence summary of the conversation's main topic or goal.
+3.  **Structure the Chat:** After the YAML block, transcribe the chat log. Each user/assistant exchange is a "Turn".
+4.  **Format Turns:** Start each turn with `### Turn X`, where X is the turn number, starting from 1.
+5.  **Preserve Roles:** Within each turn, label the messages with `**User:**` and `**Assistant:**`.
+
+**Example Output:**
+---
+summary: "User and assistant discussed project planning and task delegation for the upcoming quarter."
+---
+
+### Turn 1
+**User:** Hi, I want to talk about the plan for Q3.
+**Assistant:** Of course. I have the preliminary document open. What are your thoughts?
+
+### Turn 2
+**User:** I think we need to allocate more resources to Project Alpha.
+**Assistant:** I agree. I will update the resource allocation chart.
 
 **Raw Chat Log:**
-```json
-{chat_log_json}
-```
-
-**JSON Output Structure:**
-{{
-  "summary": "A brief, one-sentence summary of the conversation.",
-  "entities": {{
-    "people": ["Person A", "Person B"],
-    "projects": ["Project X"],
-    "technologies": ["Python", "React"],
-    "dates": ["2023-10-27"]
-  }},
-  "action_items": [
-    "Schedule a follow-up meeting.",
-    "Send the report to the team."
-  ],
-  "decisions": [
-    "The team will adopt the new framework for Project X."
-  ],
-  "user_sentiment": "neutral"
-}}
+{chat_log_string}
 """
 
 ENRICHMENT_CONTINUATION_PROMPT_TEMPLATE = """
-You are a data enrichment agent continuing a task. You previously processed a large chat log and generated a partial JSON output. The process was interrupted.
-
-Your task is to complete the JSON object based on the remaining part of the chat log.
+You are a data enrichment agent continuing a task. You are processing a chat log in chunks. You have already processed some turns, and now you need to continue from where you left off.
 
 **Instructions:**
-1.  **Review the Partial JSON:** You will be given the JSON you have generated so far.
-2.  **Analyze the Remaining Log:** You will be given the rest of the raw chat log.
-3.  **Complete the JSON:** Continue populating the JSON object based on the new information. Do NOT repeat information already present in the partial JSON. Your output should be only the closing part of the JSON object, starting from the first incomplete or new field.
+1.  **Continue Turn Numbering:** You will be given the starting turn number for this new chunk.
+2.  **Structure the Chat:** Transcribe the provided chat log chunk, starting from the given turn number.
+3.  **Format Turns:** Start each turn with `### Turn X`.
+4.  **Preserve Roles:** Within each turn, label the messages with `**User:**` and `**Assistant:**`.
+5.  **Do NOT include a YAML frontmatter.** You are only appending turns to an existing document.
 
-**Partial JSON Generated So Far:**
-```json
-{partial_json}
-```
+**Example Output (if start_turn_number is 3):**
+### Turn 3
+**User:** Also, let's schedule a review for next week.
+**Assistant:** Will do. I've added it to the calendar for Wednesday.
 
-**Remaining Raw Chat Log:**
-```json
-{remaining_chat_log_json}
-```
+**Start Turn Number:** {start_turn_number}
 
-**Your Output:**
-Continue the JSON from where it left off. For example, if the partial JSON ended mid-way through "action_items", your output might look like this:
-```json
-    "Send the report to the team."
-  ],
-  "decisions": [
-    "The team will adopt the new framework for Project X."
-  ],
-  "user_sentiment": "neutral"
-}}
-```
+**Raw Chat Log Chunk:**
+{chat_log_string}
 """
