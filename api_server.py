@@ -2458,10 +2458,11 @@ def get_chat_history(user: SupabaseUser):
         saved_message_ids = {}
         is_conversation_saved = False
         last_conversation_save_time = None
+        conversation_memory_id = None
 
         # Check for full conversation save first
         convo_memory_log_res = client.table('agent_memory_logs') \
-            .select('created_at') \
+            .select('id, created_at') \
             .eq('agent_name', agent_name) \
             .eq('source_identifier', chat_id) \
             .order('created_at', desc=True) \
@@ -2470,6 +2471,7 @@ def get_chat_history(user: SupabaseUser):
         if convo_memory_log_res.data:
             is_conversation_saved = True
             last_conversation_save_time = convo_memory_log_res.data[0]['created_at']
+            conversation_memory_id = convo_memory_log_res.data[0]['id']
 
         # Check for individual message saves within this chat
         message_ids_in_chat = [msg['id'] for msg in chat_data.get('messages', []) if 'id' in msg]
@@ -2479,7 +2481,7 @@ def get_chat_history(user: SupabaseUser):
             
             # Use 'or' filter to match any of the patterns
             message_memory_logs_res = client.table('agent_memory_logs') \
-                .select('source_identifier, created_at') \
+                .select('id, source_identifier, created_at') \
                 .eq('agent_name', agent_name) \
                 .or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])) \
                 .execute()
@@ -2488,15 +2490,20 @@ def get_chat_history(user: SupabaseUser):
                 for log in message_memory_logs_res.data:
                     source_id = log['source_identifier']
                     created_at = log['created_at']
+                    memory_id = log['id']
                     if source_id.startswith('message_'):
                         parts = source_id.split('_')
                         if len(parts) > 1 and parts[1] in message_ids_in_chat:
                             message_id = parts[1]
-                            saved_message_ids[message_id] = created_at
+                            saved_message_ids[message_id] = {
+                                "savedAt": created_at,
+                                "memoryId": memory_id
+                            }
         
         chat_data['savedMessageIds'] = saved_message_ids
         chat_data['isConversationSaved'] = is_conversation_saved
         chat_data['lastConversationSaveTime'] = last_conversation_save_time
+        chat_data['conversationMemoryId'] = conversation_memory_id
         # The last_message_id_at_save is already in chat_data from the initial query
 
         return jsonify(chat_data), 200
