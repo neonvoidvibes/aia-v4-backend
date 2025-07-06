@@ -2070,8 +2070,7 @@ def embed_recording_route(user: SupabaseUser):
 
         embedding_handler = EmbeddingHandler(
             index_name=agent_name,
-            namespace=agent_name,
-            anthropic_client=anthropic_client
+            namespace=agent_name
         )
         
         # A virtual filename for metadata purposes
@@ -2149,8 +2148,7 @@ def save_chat_memory_log(user: SupabaseUser):
         # Step 3 & 4: Re-index in Pinecone (Delete then Upsert)
         embedding_handler = EmbeddingHandler(
             index_name=agent_name,
-            namespace=agent_name,
-            anthropic_client=anthropic_client
+            namespace=agent_name
         )
         
         # Delete old vectors for this session to prevent stale data

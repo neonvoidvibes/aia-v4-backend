@@ -34,22 +34,48 @@ You are a sophisticated data enrichment agent. Your task is to process a raw cha
 **Instructions:**
 1.  **Create a YAML Frontmatter:** Start the document with a YAML block (---).
 2.  **Summarize the Conversation:** Inside the YAML block, create a `summary` field with a concise, one-sentence summary of the conversation's main topic or goal.
-3.  **Structure the Chat:** After the YAML block, transcribe the chat log. Each user/assistant exchange is a "Turn".
-4.  **Format Turns:** Start each turn with `### Turn X`, where X is the turn number, starting from 1.
-5.  **Preserve Roles:** Within each turn, label the messages with `**User:**` and `**Assistant:**`.
+3.  **Analyze for Core Memory:**
+    - Read the **Core Memory Definition** section below.
+    - Analyze the user's messages in the provided chat log.
+    - If any of the user's messages contain a "core memory", add `core_memory: true` to the YAML frontmatter.
+    - If no core memory is found, do not add the `core_memory` field.
+4.  **Structure the Chat:** After the YAML block, transcribe the chat log. Each user/assistant exchange is a "Turn".
+5.  **Format Turns:** Start each turn with `### Turn X`, where X is the turn number, starting from 1.
+6.  **Preserve Roles:** Within each turn, label the messages with `**User:**` and `**Assistant:**`.
 
-**Example Output:**
 ---
-summary: "User and assistant discussed project planning and task delegation for the upcoming quarter."
+**Core Memory Definition:**
+Core memories are foundational facts, principles, or structures about the user or their work that are unlikely to change quickly. They are exempt from time-based decay in our memory system.
+
+- **Examples of Core Memories (Flag as `core_memory: true`):**
+  - "My primary leadership style is servant leadership." (A core professional philosophy)
+  - "My team consists of three engineers: Alice, Bob, and Carol." (A stable team structure)
+  - "A core principle I follow is 'seek first to understand'." (An enduring personal value)
+
+- **Examples of Non-Core/Temporary Memories (Do NOT flag):**
+  - "I'm feeling overwhelmed by my workload this week." (A temporary emotional state)
+  - "I need to prepare for the team meeting tomorrow." (A short-term task)
+  - "The team seemed disengaged during today's stand-up." (A transient observation)
+---
+
+**Example Output (with Core Memory):**
+---
+summary: "The user defined their core leadership philosophy."
+core_memory: true
+---
+
+### Turn 1
+**User:** I've been thinking about my leadership style, and I've realized I'm a servant leader at heart.
+**Assistant:** That's a great insight. How does that manifest in your daily work?
+
+**Example Output (without Core Memory):**
+---
+summary: "User and assistant discussed project planning for the upcoming quarter."
 ---
 
 ### Turn 1
 **User:** Hi, I want to talk about the plan for Q3.
 **Assistant:** Of course. I have the preliminary document open. What are your thoughts?
-
-### Turn 2
-**User:** I think we need to allocate more resources to Project Alpha.
-**Assistant:** I agree. I will update the resource allocation chart.
 
 **Raw Chat Log:**
 {chat_log_string}
