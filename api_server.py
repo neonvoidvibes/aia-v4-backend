@@ -1850,12 +1850,8 @@ def handle_chat(user: SupabaseUser):
                         if retrieved_docs:
                             items = []
                             for d in retrieved_docs:
-                                age_days_str = d.metadata.get('age_days', 'Unknown')
-                                age_info = f"Age: {age_days_str} days" if age_days_str != "Unknown" else "Age: Unknown"
-                                if "N/A" in str(age_days_str):
-                                    age_info = "Age: N/A (Core Memory)"
-                                
-                                items.append(f"--- START Context Source: {d.metadata.get('file_name','Unknown')} ({age_info}, Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---")
+                                age_display = d.metadata.get('age_display', 'Unknown')
+                                items.append(f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Age: {age_display}, Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---")
                             
                             rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
                         else:
@@ -1901,6 +1897,10 @@ def handle_chat(user: SupabaseUser):
                         f"=== END LATEST TRANSCRIPT ==="
                     )
                     final_llm_messages.append({'role': 'user', 'content': transcript_message_content})
+
+            # --- Add Current Time to System Prompt ---
+            current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
+            final_system_prompt += f"\n\n## Current Time\nYour internal clock shows the current date and time is: **{current_utc_time}**."
 
             # --- Timestamped History Injection ---
             # This block formats the history with timestamps and injects it as a single context message.

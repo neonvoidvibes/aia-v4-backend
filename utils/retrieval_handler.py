@@ -195,24 +195,29 @@ class RetrievalHandler:
 
                             age_seconds = current_time - saved_at_ts
                             age_days = age_seconds / (24 * 3600)
-                            match.metadata['age_days'] = f"{age_days:.2f}"
+                            
+                            if age_days < 1:
+                                age_hours = age_seconds / 3600
+                                match.metadata['age_display'] = f"{age_hours:.1f} hours"
+                            else:
+                                match.metadata['age_display'] = f"{age_days:.2f} days"
 
                             if age_days > 0:
                                 decay_factor = math.exp(-decay_rate * age_days)
                                 match.score = original_score * decay_factor
-                                logger.info(f"Re-ranking ID {match.id}: Original Score={original_score:.4f}, Age={age_days:.2f} days, New Score={match.score:.4f}")
+                                logger.info(f"Re-ranking ID {match.id}: Original Score={original_score:.4f}, Age={match.metadata['age_display']}, New Score={match.score:.4f}")
                             else:
                                 logger.info(f"Re-ranking ID {match.id}: Recent memory (age <= 0), no decay. Score remains {original_score:.4f}")
                         except (ValueError, TypeError) as e:
                             logger.warning(f"Could not process 'saved_at' timestamp for match {match.id} ('{saved_at}'). Error: {e}. Skipping decay.")
-                            match.metadata['age_days'] = "Unknown"
+                            match.metadata['age_display'] = "Unknown"
                     else:
                         logger.info(f"Re-ranking ID {match.id}: No 'saved_at' timestamp. Skipping decay.")
-                        match.metadata['age_days'] = "Unknown"
+                        match.metadata['age_display'] = "Unknown"
                 else:
                     logger.info(f"Re-ranking ID {match.id}: No metadata. Skipping decay.")
                     if match.metadata is None: match.metadata = {}
-                    match.metadata['age_days'] = "Unknown"
+                    match.metadata['age_display'] = "Unknown"
 
             # Sort again after applying time-decay
             all_matches.sort(key=lambda x: x.score, reverse=True)
@@ -229,6 +234,9 @@ class RetrievalHandler:
                 if not match.metadata: logger.warning(f"Match {match.id} lacks metadata."); continue
                 content = match.metadata.get('content')
                 if not content: logger.warning(f"Match {match.id} metadata lacks 'content'."); continue
+                # Ensure age_display is set for core memories if it wasn't before
+                if match.metadata.get('is_core_memory'):
+                    match.metadata['age_display'] = "N/A (Core Memory)"
                 doc_metadata = {k: v for k, v in match.metadata.items() if k != 'content'}
                 doc_metadata['score'] = match.score; doc_metadata['vector_id'] = match.id
                 docs.append(Document(page_content=content, metadata=doc_metadata))
