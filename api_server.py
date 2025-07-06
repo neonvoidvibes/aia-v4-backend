@@ -1808,7 +1808,7 @@ def handle_chat(user: SupabaseUser):
             if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
             if event_context: final_system_prompt += "\n\n## Context\n" + event_context
             if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
-            rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n3. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n4. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n5. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
+            rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
             final_system_prompt += rag_usage_instructions
 
             # --- RAG ---
@@ -1848,7 +1848,15 @@ def handle_chat(user: SupabaseUser):
                         )
                         retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=5)
                         if retrieved_docs:
-                            items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for i, d in enumerate(retrieved_docs)]
+                            items = []
+                            for d in retrieved_docs:
+                                age_days_str = d.metadata.get('age_days', 'Unknown')
+                                age_info = f"Age: {age_days_str} days" if age_days_str != "Unknown" else "Age: Unknown"
+                                if "N/A" in str(age_days_str):
+                                    age_info = "Age: N/A (Core Memory)"
+                                
+                                items.append(f"--- START Context Source: {d.metadata.get('file_name','Unknown')} ({age_info}, Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---")
+                            
                             rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
                         else:
                             rag_context_block = "\n\n[Note: No relevant documents found for this query via RAG.]"

@@ -174,42 +174,45 @@ class RetrievalHandler:
                 original_score = match.score
                 if match.metadata:
                     is_core = match.metadata.get('is_core_memory', False)
-                    saved_at = match.metadata.get('saved_at') # Expects a Unix timestamp
+                    saved_at = match.metadata.get('saved_at')
+                    age_days = None
 
                     if is_core:
                         logger.info(f"Re-ranking ID {match.id}: Core memory, skipping decay. Score remains {original_score:.4f}")
+                        match.metadata['age_days'] = "N/A (Core Memory)"
                         continue
 
                     if saved_at:
                         try:
                             saved_at_ts = 0
                             if isinstance(saved_at, str):
-                                # Clean up potential whitespace and newlines, then parse ISO 8601 format
                                 saved_at_dt = datetime.fromisoformat(saved_at.strip())
-                                # If the parsed datetime is naive, assume UTC. Otherwise, use its own timezone.
                                 if saved_at_dt.tzinfo is None:
                                     saved_at_dt = saved_at_dt.replace(tzinfo=timezone.utc)
                                 saved_at_ts = saved_at_dt.timestamp()
                             else:
-                                # Handle cases where it might already be a Unix timestamp
                                 saved_at_ts = float(saved_at)
 
                             age_seconds = current_time - saved_at_ts
                             age_days = age_seconds / (24 * 3600)
-                            
+                            match.metadata['age_days'] = f"{age_days:.2f}"
+
                             if age_days > 0:
                                 decay_factor = math.exp(-decay_rate * age_days)
                                 match.score = original_score * decay_factor
                                 logger.info(f"Re-ranking ID {match.id}: Original Score={original_score:.4f}, Age={age_days:.2f} days, New Score={match.score:.4f}")
                             else:
-                                # Age is negative or zero, no decay
                                 logger.info(f"Re-ranking ID {match.id}: Recent memory (age <= 0), no decay. Score remains {original_score:.4f}")
                         except (ValueError, TypeError) as e:
                             logger.warning(f"Could not process 'saved_at' timestamp for match {match.id} ('{saved_at}'). Error: {e}. Skipping decay.")
+                            match.metadata['age_days'] = "Unknown"
                     else:
                         logger.info(f"Re-ranking ID {match.id}: No 'saved_at' timestamp. Skipping decay.")
+                        match.metadata['age_days'] = "Unknown"
                 else:
                     logger.info(f"Re-ranking ID {match.id}: No metadata. Skipping decay.")
+                    if match.metadata is None: match.metadata = {}
+                    match.metadata['age_days'] = "Unknown"
 
             # Sort again after applying time-decay
             all_matches.sort(key=lambda x: x.score, reverse=True)
