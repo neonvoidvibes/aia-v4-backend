@@ -2151,7 +2151,8 @@ def save_chat_memory_log(user: SupabaseUser):
             return jsonify({"error": "Failed to save memory log to database", "details": str(upsert_res.error)}), 500
         
         supabase_log_id = upsert_res.data[0]['id']
-        logger.info(f"Save Memory Log: Successfully upserted log to Supabase. ID: {supabase_log_id}")
+        created_at_timestamp = upsert_res.data[0]['created_at']
+        logger.info(f"Save Memory Log: Successfully upserted log to Supabase. ID: {supabase_log_id}, Created At: {created_at_timestamp}")
 
         # Step 3 & 4: Re-index in Pinecone (Delete then Upsert)
         embedding_handler = EmbeddingHandler(
@@ -2172,7 +2173,7 @@ def save_chat_memory_log(user: SupabaseUser):
             "source_identifier": session_id,
             "supabase_log_id": supabase_log_id,
             "file_name": f"chat_memory_{session_id}.md", # A virtual filename
-            "saved_at": datetime.now(timezone.utc).isoformat()
+            "created_at": created_at_timestamp 
         }
         
         upsert_success = embedding_handler.embed_and_upsert(structured_content, metadata_for_embedding)

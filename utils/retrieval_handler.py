@@ -174,7 +174,7 @@ class RetrievalHandler:
                 original_score = match.score
                 if match.metadata:
                     is_core = match.metadata.get('is_core_memory', False)
-                    saved_at = match.metadata.get('saved_at')
+                    created_at = match.metadata.get('created_at')
                     age_days = None
 
                     if is_core:
@@ -182,18 +182,21 @@ class RetrievalHandler:
                         match.metadata['age_days'] = "N/A (Core Memory)"
                         continue
 
-                    if saved_at:
+                    if created_at:
                         try:
-                            saved_at_ts = 0
-                            if isinstance(saved_at, str):
-                                saved_at_dt = datetime.fromisoformat(saved_at.strip())
-                                if saved_at_dt.tzinfo is None:
-                                    saved_at_dt = saved_at_dt.replace(tzinfo=timezone.utc)
-                                saved_at_ts = saved_at_dt.timestamp()
+                            created_at_ts = 0
+                            if isinstance(created_at, str):
+                                # Handle ISO format strings with or without 'Z'
+                                if created_at.endswith('Z'):
+                                    created_at = created_at[:-1] + '+00:00'
+                                created_at_dt = datetime.fromisoformat(created_at)
+                                if created_at_dt.tzinfo is None:
+                                    created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
+                                created_at_ts = created_at_dt.timestamp()
                             else:
-                                saved_at_ts = float(saved_at)
+                                created_at_ts = float(created_at)
 
-                            age_seconds = current_time - saved_at_ts
+                            age_seconds = current_time - created_at_ts
                             age_days = age_seconds / (24 * 3600)
                             
                             if age_days < 1:
@@ -209,10 +212,10 @@ class RetrievalHandler:
                             else:
                                 logger.info(f"Re-ranking ID {match.id}: Recent memory (age <= 0), no decay. Score remains {original_score:.4f}")
                         except (ValueError, TypeError) as e:
-                            logger.warning(f"Could not process 'saved_at' timestamp for match {match.id} ('{saved_at}'). Error: {e}. Skipping decay.")
+                            logger.warning(f"Could not process 'created_at' timestamp for match {match.id} ('{created_at}'). Error: {e}. Skipping decay.")
                             match.metadata['age_display'] = "Unknown"
                     else:
-                        logger.info(f"Re-ranking ID {match.id}: No 'saved_at' timestamp. Skipping decay.")
+                        logger.info(f"Re-ranking ID {match.id}: No 'created_at' timestamp. Skipping decay.")
                         match.metadata['age_display'] = "Unknown"
                 else:
                     logger.info(f"Re-ranking ID {match.id}: No metadata. Skipping decay.")
