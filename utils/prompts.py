@@ -63,21 +63,20 @@ Core memories are foundational facts, principles, or structures about the user o
   - "The team seemed disengaged during today's stand-up." (A transient observation)
 
 **Triplet Definition:**
-Your goal is to build a knowledge graph by extracting factual triplets. These triplets should capture not just simple facts, but also the **relationships, properties, and hierarchies** between different entities (people, projects, concepts, etc.). Think of each triplet as an edge in a graph that connects two nodes.
+Your goal is to create a knowledge graph by extracting the most important entities, concepts, and their relationships from the conversation. You have the freedom to **think for yourself** to determine the most meaningful nodes (subjects, objects) and connections (predicates), but you **must** express them in the following structured format.
 
--   **Format:** Use different `type` values to capture more dimension.
-    -   `[type: relationship] [subject: Entity 1] [predicate: describes relationship] [object: Entity 2]`
-    -   `[type: attribute] [subject: Entity] [predicate: has attribute] [object: Attribute Value]`
-    -   `[type: situation] [subject: Entity] [predicate: is involved in] [object: A situation or challenge]`
+-   **Your Task:** Distill the conversation into a list of triplets.
+-   **Guiding Principle:** Capture the "who, what, when, where, and why" of the conversation.
+-   **Mandatory Format:** Each triplet MUST be a single string in the format `[type: T] [subject: S] [predicate: P] [object: O]`.
 
 -   **Example of a "Graph-like" Extraction:**
     -   **Original Sentence:** "The user mentioned their second son, River, is struggling with the family's financial challenges, which impacts the user's ability to focus on the Dark Zen Garden project."
-    -   **Good Triplets (notice the connections):**
-        -   `[type: relationship] [subject: River] [predicate: is son of] [object: user]`
+    -   **Good Triplets (Creative thinking + Structured format):**
+        -   `[type: relationship] [subject: user] [predicate: has son] [object: River]`
         -   `[type: attribute] [subject: River] [predicate: is] [object: second son]`
-        -   `[type: situation] [subject: River] [predicate: is struggling with] [object: family's financial challenges]`
-        -   `[type: relationship] [subject: family's financial challenges] [predicate: impacts] [object: user's focus]`
-        -   `[type: relationship] [subject: user's focus] [predicate: is needed for] [object: Dark Zen Garden project]`
+        -   `[type: situation] [subject: River] [predicate: experiences] [object: family's financial challenges]`
+        -   `[type: cause_and_effect] [subject: family's financial challenges] [predicate: impacts] [object: user's focus]`
+        -   `[type: requirement] [subject: Dark Zen Garden project] [predicate: requires] [object: user's focus]`
 ---
 
 **Example Output (with Core Memory and Triplets):**
@@ -85,7 +84,7 @@ Your goal is to build a knowledge graph by extracting factual triplets. These tr
 summary: "The user defined their core leadership philosophy and a key project requirement."
 core_memory: true
 triplets:
-  - "[type: relationship] [subject: Dark Zen Garden] [predicate: requires] [object: a perfectly organized, bug-free environment]"
+  - "[type: requirement] [subject: Dark Zen Garden] [predicate: requires] [object: a perfectly organized, bug-free environment]"
 ---
 
 ### Turn 1
