@@ -63,11 +63,21 @@ Core memories are foundational facts, principles, or structures about the user o
   - "The team seemed disengaged during today's stand-up." (A transient observation)
 
 **Triplet Definition:**
-Triplets are structured representations of factual information. They capture the essential relationship between a subject, a predicate, and an object.
-- **Format:** `[type: fact] [subject: Subject Name] [predicate: relationship] [object: Object Name]`
-- **Example of a Good Triplet:**
-  - **Original sentence:** "The Dark Zen Garden requires a perfectly organized, bug-free environment."
-  - **Triplet:** `[type: fact] [subject: Dark Zen Garden] [predicate: requires] [object: perfectly organized, bug-free environment]`
+Your goal is to build a knowledge graph by extracting factual triplets. These triplets should capture not just simple facts, but also the **relationships, properties, and hierarchies** between different entities (people, projects, concepts, etc.). Think of each triplet as an edge in a graph that connects two nodes.
+
+-   **Format:** Use different `type` values to capture more dimension.
+    -   `[type: relationship] [subject: Entity 1] [predicate: describes relationship] [object: Entity 2]`
+    -   `[type: attribute] [subject: Entity] [predicate: has attribute] [object: Attribute Value]`
+    -   `[type: situation] [subject: Entity] [predicate: is involved in] [object: A situation or challenge]`
+
+-   **Example of a "Graph-like" Extraction:**
+    -   **Original Sentence:** "The user mentioned their second son, River, is struggling with the family's financial challenges, which impacts the user's ability to focus on the Dark Zen Garden project."
+    -   **Good Triplets (notice the connections):**
+        -   `[type: relationship] [subject: River] [predicate: is son of] [object: user]`
+        -   `[type: attribute] [subject: River] [predicate: is] [object: second son]`
+        -   `[type: situation] [subject: River] [predicate: is struggling with] [object: family's financial challenges]`
+        -   `[type: relationship] [subject: family's financial challenges] [predicate: impacts] [object: user's focus]`
+        -   `[type: relationship] [subject: user's focus] [predicate: is needed for] [object: Dark Zen Garden project]`
 ---
 
 **Example Output (with Core Memory and Triplets):**
@@ -75,7 +85,7 @@ Triplets are structured representations of factual information. They capture the
 summary: "The user defined their core leadership philosophy and a key project requirement."
 core_memory: true
 triplets:
-  - "[type: fact] [subject: Dark Zen Garden] [predicate: requires] [object: a perfectly organized, bug-free environment]"
+  - "[type: relationship] [subject: Dark Zen Garden] [predicate: requires] [object: a perfectly organized, bug-free environment]"
 ---
 
 ### Turn 1
