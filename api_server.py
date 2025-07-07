@@ -2134,7 +2134,7 @@ def save_chat_memory_log(user: SupabaseUser):
         if not google_api_key:
             return jsonify({"error": "Enrichment service not configured (missing API key)"}), 500
         
-        structured_content, summary = enrich_chat_log(messages, google_api_key)
+        structured_content, summary, triplets = enrich_chat_log(messages, google_api_key)
         
         # Step 2: Upsert the log into Supabase
         upsert_data = {
@@ -2176,7 +2176,8 @@ def save_chat_memory_log(user: SupabaseUser):
             "source_identifier": session_id,
             "supabase_log_id": supabase_log_id,
             "file_name": f"chat_memory_{session_id}.md", # A virtual filename
-            "created_at": created_at_timestamp 
+            "created_at": created_at_timestamp,
+            "triplets": triplets # Pass the triplets to the embedding handler
         }
         
         upsert_success = embedding_handler.embed_and_upsert(structured_content, metadata_for_embedding)

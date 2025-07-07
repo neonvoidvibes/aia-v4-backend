@@ -37,6 +37,7 @@ ffmpeg
 # Utilities
 typing-extensions>=4.7.0 # Already present
 tenacity>=8.2.0,<9.0.0   # Already present
+PyYAML>=6.0              # Added for parsing YAML in enriched logs
 
 # Optional, might be pulled in:
 # regex (likely by whisper/openai)

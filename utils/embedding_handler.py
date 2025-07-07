@@ -5,6 +5,7 @@ import logging
 import re
 import urllib.parse
 import traceback
+import yaml
 from typing import List, Optional, Dict, Any
 
 # Attempt early tiktoken import
@@ -36,18 +37,23 @@ def sanitize_for_pinecone_id(input_string: str) -> str:
         logger.error(f"Empty sanitized ID for: {input_string}"); return "sanitized_empty"
     return sanitized
 
-def _extract_core_memory_flag(log: str) -> bool:
-    """Extracts the core_memory boolean flag from the YAML frontmatter."""
+def _extract_yaml_from_enriched_log(log: str) -> Dict[str, Any]:
+    """Extracts the YAML frontmatter from the enriched log and parses it."""
     try:
         match = re.search(r'---\s*\n(.*?)\n---', log, re.DOTALL)
         if match:
-            frontmatter = match.group(1)
-            core_memory_match = re.search(r'core_memory:\s*(true|false)', frontmatter, re.IGNORECASE)
-            if core_memory_match:
-                return core_memory_match.group(1).lower() == 'true'
+            frontmatter_str = match.group(1)
+            # Use safe_load to parse the YAML string
+            parsed_yaml = yaml.safe_load(frontmatter_str)
+            if isinstance(parsed_yaml, dict):
+                return parsed_yaml
+            else:
+                logger.warning(f"Parsed YAML is not a dictionary: {parsed_yaml}")
+    except yaml.YAMLError as e:
+        logger.warning(f"Could not parse YAML from enriched log frontmatter: {e}")
     except Exception as e:
-        logger.warning(f"Could not extract core_memory flag from log frontmatter: {e}")
-    return False
+        logger.warning(f"An unexpected error occurred during YAML extraction: {e}")
+    return {}
 
 class EmbeddingHandler:
     """Handles document embedding generation and storage."""
@@ -139,10 +145,15 @@ class EmbeddingHandler:
             original_file_name = metadata.get('file_name')
             if not original_file_name: logger.error("Missing 'file_name' in metadata."); return False
 
-            # Determine if the content is a core memory from the YAML frontmatter
-            is_core_memory_log = _extract_core_memory_flag(content)
+            # Extract metadata from the YAML frontmatter
+            enriched_metadata = _extract_yaml_from_enriched_log(content)
+            is_core_memory_log = enriched_metadata.get('core_memory', False)
+            triplets = enriched_metadata.get('triplets', [])
+
             if is_core_memory_log:
                 logger.info(f"Core memory flag found in '{original_file_name}'. All chunks will be marked as core.")
+            if triplets:
+                logger.info(f"Found {len(triplets)} triplets in '{original_file_name}'.")
 
             # Unified splitting logic for all documents.
             source_type = metadata.get('source', 'default')
@@ -177,6 +188,7 @@ class EmbeddingHandler:
                     'supabase_log_id': metadata.get('supabase_log_id', -1),
                     'source_identifier': metadata.get('source_identifier', 'unknown'),
                     'is_core_memory': is_core_memory_log, # Apply the log-level flag to every chunk
+                    'triplets': triplets, # Add the extracted triplets
                 }
                 if 'agent_name' not in pinecone_metadata:
                      pinecone_metadata['agent_name'] = metadata.get('agent_name', 'unknown')

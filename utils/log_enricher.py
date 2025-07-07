@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import yaml
 from typing import List, Dict, Any, Tuple
 
 from utils.prompts import ENRICHMENT_PROMPT_TEMPLATE, ENRICHMENT_CONTINUATION_PROMPT_TEMPLATE
@@ -23,26 +24,43 @@ def _format_chat_for_enrichment(messages: List[Dict[str, Any]]) -> str:
             log_lines.append(f"{role}: {content}")
     return "\n".join(log_lines)
 
-def _extract_summary_from_enriched_log(log: str) -> str:
-    """Extracts the summary from the YAML frontmatter of the enriched log using regex."""
+def _extract_yaml_from_enriched_log(log: str) -> Dict[str, Any]:
+    """Extracts the YAML frontmatter from the enriched log and parses it."""
     try:
         match = re.search(r'---\s*\n(.*?)\n---', log, re.DOTALL)
         if match:
-            frontmatter = match.group(1)
-            summary_match = re.search(r'summary:\s*(?:"(.*?)"|\'(.*?)\'|(.*))', frontmatter)
-            if summary_match:
-                summary = next((s for s in summary_match.groups() if s is not None), None)
-                if summary:
-                    return summary.strip()
+            frontmatter_str = match.group(1)
+            # Use safe_load to parse the YAML string
+            parsed_yaml = yaml.safe_load(frontmatter_str)
+            if isinstance(parsed_yaml, dict):
+                return parsed_yaml
+            else:
+                logger.warning(f"Parsed YAML is not a dictionary: {parsed_yaml}")
+    except yaml.YAMLError as e:
+        logger.warning(f"Could not parse YAML from enriched log frontmatter: {e}")
     except Exception as e:
-        logger.warning(f"Could not extract summary from enriched log frontmatter using regex: {e}")
-    return "Summary could not be extracted."
+        logger.warning(f"An unexpected error occurred during YAML extraction: {e}")
+    return {}
+
+def _extract_summary_from_enriched_log(log: str) -> str:
+    """Extracts the summary from the YAML frontmatter of the enriched log."""
+    yaml_data = _extract_yaml_from_enriched_log(log)
+    return yaml_data.get('summary', 'Summary could not be extracted.')
+
+def _extract_triplets_from_enriched_log(log: str) -> List[str]:
+    """Extracts the triplets from the YAML frontmatter of the enriched log."""
+    yaml_data = _extract_yaml_from_enriched_log(log)
+    triplets = yaml_data.get('triplets', [])
+    if isinstance(triplets, list):
+        return triplets
+    logger.warning(f"Triplets field was not a list: {triplets}")
+    return []
 
 def _count_turns_in_markdown(markdown_text: str) -> int:
     """Counts the number of '### Turn X' occurrences in the structured output."""
     return len(re.findall(r'^### Turn \d+', markdown_text, re.MULTILINE))
 
-def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tuple[str, str]:
+def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tuple[str, str, List[str]]:
     """
     Takes a chat history and enriches it using a looping, chunked approach to ensure completeness.
 
@@ -51,11 +69,11 @@ def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tupl
         google_api_key: The API key for Google Gemini.
 
     Returns:
-        A tuple containing (structured_content, summary).
+        A tuple containing (structured_content, summary, triplets).
     """
     logger.info(f"Starting enrichment for chat log with {len(messages)} messages.")
     if not messages:
-        return "", "Empty chat session."
+        return "", "Empty chat session.", []
 
     unprocessed_messages = list(messages)
     full_structured_log_parts = []
@@ -120,7 +138,7 @@ def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tupl
 
     if not full_structured_log_parts:
         logger.error("Enrichment resulted in an empty final document.")
-        return _format_chat_for_enrichment(messages), "Failed to enrich log."
+        return _format_chat_for_enrichment(messages), "Failed to enrich log.", []
 
     # Stitch the document together
     final_log = ""
@@ -132,6 +150,7 @@ def enrich_chat_log(messages: List[Dict[str, Any]], google_api_key: str) -> Tupl
             final_log += "\n\n" + part
 
     summary = _extract_summary_from_enriched_log(final_log)
-    logger.info(f"Successfully enriched chat log. Final summary: '{summary}'")
+    triplets = _extract_triplets_from_enriched_log(final_log)
+    logger.info(f"Successfully enriched chat log. Final summary: '{summary}', Found {len(triplets)} triplets.")
     
-    return final_log, summary
+    return final_log, summary, triplets
