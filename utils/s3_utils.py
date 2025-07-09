@@ -9,6 +9,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Tuple, Callable
 import threading # For s3_client_lock
+from werkzeug.utils import secure_filename
 
 # Configure logging for this module
 logger = logging.getLogger(__name__)
@@ -426,6 +427,44 @@ def get_objective_function(agent_name: Optional[str] = None) -> Optional[str]:
     if final_objective_function: logger.info(f"Final objective function loaded, length: {len(final_objective_function)}")
     else: logger.warning("No objective function file found (neither agent-specific nor base).")
     return final_objective_function if final_objective_function else None
+
+
+def write_agent_doc(agent_name: str, doc_name: str, content: str) -> bool:
+    """
+    Creates or updates a specific documentation file for an agent and invalidates the cache.
+    The doc_name should be a simple filename, e.g., 'project_overview.md'.
+    """
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error(f"S3 client or bucket not available for writing agent doc.")
+        return False
+
+    # Enforce the directory structure for security.
+    # Sanitize doc_name to prevent path traversal attacks (e.g., '..').
+    safe_doc_name = secure_filename(doc_name)
+    if not safe_doc_name:
+        logger.error(f"Invalid doc_name provided: '{doc_name}'")
+        return False
+
+    file_key = f"organizations/river/agents/{agent_name}/docs/{safe_doc_name}"
+    
+    try:
+        s3.put_object(Bucket=aws_s3_bucket, Key=file_key, Body=content.encode('utf-8'), ContentType='text/plain; charset=utf-8')
+        logger.info(f"Successfully wrote agent doc to S3 key: {file_key}")
+
+        # CRITICAL: Invalidate the cache for the entire agent docs collection.
+        # The get_agent_docs function caches all docs under a single key.
+        docs_cache_key = f"agent_docs_{agent_name}"
+        with S3_CACHE_LOCK:
+            if docs_cache_key in S3_FILE_CACHE:
+                del S3_FILE_CACHE[docs_cache_key]
+                logger.info(f"CACHE INVALIDATED for agent docs: '{docs_cache_key}' after write.")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error writing agent doc to {file_key}: {e}", exc_info=True)
+        return False
 
 
 def save_chat_to_s3(agent_name: str, chat_content: str, event_id: Optional[str], is_saved: bool = False, filename: Optional[str] = None) -> tuple[bool, Optional[str]]:

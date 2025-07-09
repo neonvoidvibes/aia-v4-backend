@@ -36,7 +36,7 @@ from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
     list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries, get_objective_function,
-    S3_CACHE_LOCK, S3_FILE_CACHE
+    write_agent_doc, S3_CACHE_LOCK, S3_FILE_CACHE
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.pinecone_utils import init_pinecone
@@ -1640,6 +1640,27 @@ def manage_s3_file(user: SupabaseUser):
         return jsonify({"message": f"Save as Memory action for {s3_key_to_manage} received, summarization logic pending."}), 501 # Not Implemented
     
     return jsonify({"error": f"Unsupported action: {action_to_perform}"}), 400
+
+@app.route('/api/agent/docs/update', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def update_agent_doc(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agent')
+    doc_name = data.get('doc_name') # e.g., "api_specifications.md"
+    content = data.get('content')
+
+    if not all([doc_name, content is not None]):
+        return jsonify({"error": "Missing 'doc_name' or 'content' in request body"}), 400
+
+    # The user has already been authorized for this agent by the decorator.
+    # Now we call our new, specific utility function.
+    success = write_agent_doc(agent_name, doc_name, content)
+
+    if success:
+        return jsonify({"status": "success", "message": f"Documentation '{doc_name}' for agent '{agent_name}' updated successfully."}), 200
+    else:
+        return jsonify({"error": "Failed to update documentation file in S3"}), 500
+
 
 @app.route('/api/agent/warm-up', methods=['POST'])
 @supabase_auth_required(agent_required=True)
