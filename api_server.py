@@ -351,6 +351,10 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         logger.info(f"Access Granted: User {user.id} authorized for agent {agent_name} (ID: {agent_id}).")
         return user, None 
 
+    except (httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+        # Re-raise exceptions that the retry decorator should handle
+        logger.warning(f"Retryable network error during agent access check: {e}")
+        raise e
     except Exception as e:
         logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
         return None, jsonify({"error": "Internal server error during authorization"}, 500)
