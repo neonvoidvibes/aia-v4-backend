@@ -30,6 +30,7 @@ from gotrue.errors import AuthApiError, AuthRetryableError
 from gotrue.types import User as SupabaseUser
 from utils.supabase_client import get_supabase_client
 
+from langchain_core.documents import Document
 from utils.retrieval_handler import RetrievalHandler
 from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder
 from utils.s3_utils import (
