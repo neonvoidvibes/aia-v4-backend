@@ -171,7 +171,7 @@ class RetrievalHandler:
 
             # 5. Process & Rank with Time-Decay
             logger.debug(f"Total raw matches: {len(all_matches)}. Applying time-decay re-ranking...")
-            decay_rate = 0.05 # Controls how quickly scores decay. Higher is faster.
+            decay_rate = 0.025 # Controls how quickly scores decay. Higher is faster.
             current_time = time.time()
 
             for match in all_matches:
@@ -179,6 +179,7 @@ class RetrievalHandler:
                 if match.metadata:
                     is_core = match.metadata.get('is_core_memory', False)
                     created_at = match.metadata.get('created_at')
+                    access_count = match.metadata.get('access_count', 0)
                     age_days = None
 
                     if is_core:
@@ -210,9 +211,17 @@ class RetrievalHandler:
                                 match.metadata['age_display'] = f"{age_days:.2f} days"
 
                             if age_days > 0:
-                                decay_factor = math.exp(-decay_rate * age_days)
+                                # Reinforcement factor: Logarithmic growth to prevent runaway scores
+                                # Adding 1 to access_count to avoid log(0) and ensure base is > 1
+                                reinforcement_factor = math.log(1 + access_count)
+                                
+                                # The effective decay is reduced by how much the memory has been reinforced
+                                # We add a small epsilon to avoid division by zero if reinforcement_factor is 0
+                                effective_decay_rate = decay_rate / (1 + reinforcement_factor)
+                                
+                                decay_factor = math.exp(-effective_decay_rate * age_days)
                                 match.score = original_score * decay_factor
-                                logger.info(f"Re-ranking ID {match.id}: Original Score={original_score:.4f}, Age={match.metadata['age_display']}, New Score={match.score:.4f}")
+                                logger.info(f"Re-ranking ID {match.id}: Original Score={original_score:.4f}, Age={match.metadata['age_display']}, Accesses={access_count}, New Score={match.score:.4f}")
                             else:
                                 logger.info(f"Re-ranking ID {match.id}: Recent memory (age <= 0), no decay. Score remains {original_score:.4f}")
                         except (ValueError, TypeError) as e:
@@ -253,3 +262,44 @@ class RetrievalHandler:
             return docs
 
         except Exception as e: logger.error(f"Context retrieval error: {e}", exc_info=True); return []
+
+    def reinforce_memories(self, docs: List[Document]):
+        """Increments the access_count for a list of documents."""
+        if not self.index:
+            logger.warning("Cannot reinforce memories: Pinecone index not available.")
+            return
+
+        logger.info(f"Reinforcing {len(docs)} memories...")
+        for doc in docs:
+            try:
+                vector_id = doc.metadata.get('vector_id')
+                if not vector_id:
+                    logger.warning(f"Cannot reinforce document, missing 'vector_id' in metadata: {doc.metadata}")
+                    continue
+
+                # Fetch the latest metadata to get the current access_count
+                try:
+                    fetch_response = self.index.fetch(ids=[vector_id], namespace=self.namespace)
+                    if not fetch_response.vectors:
+                        logger.warning(f"Could not fetch vector {vector_id} for reinforcement.")
+                        continue
+                    
+                    current_metadata = fetch_response.vectors[vector_id].metadata
+                    current_count = current_metadata.get('access_count', 0)
+                except Exception as fetch_e:
+                    logger.error(f"Failed to fetch metadata for reinforcement of {vector_id}: {fetch_e}")
+                    continue # Skip if we can't be sure of the current count
+
+                new_count = current_count + 1
+                
+                # Update the metadata for the vector
+                self.index.update(
+                    id=vector_id,
+                    set_metadata={'access_count': new_count},
+                    namespace=self.namespace
+                )
+                logger.debug(f"Reinforced memory {vector_id}, new access_count: {new_count}")
+
+            except Exception as e:
+                logger.error(f"Failed to reinforce memory for doc: {doc.metadata.get('vector_id', 'N/A')}. Error: {e}", exc_info=True)
+        logger.info("Memory reinforcement complete.")

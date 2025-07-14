@@ -273,6 +273,14 @@ def main():
                         if response_text:
                             print(response_text)
                             conversation_history.append({"role": "assistant", "content": response_text})
+
+                            # Reinforce the memories that were used
+                            if retriever and retrieved_docs:
+                                try:
+                                    retriever.reinforce_memories(retrieved_docs)
+                                except Exception as e:
+                                    logger.error(f"Failed to reinforce memories: {e}", exc_info=True)
+                                    
                             msgs_archive = conversation_history[last_archive_idx:]
                             if msgs_archive:
                                  content = format_chat_history(msgs_archive)
