@@ -51,7 +51,8 @@ class RetrievalHandler:
         agent_name: Optional[str] = None,
         session_id: Optional[str] = None,
         event_id: Optional[str] = None,
-        top_k: int = 10, # Keep moderate top_k for now
+        final_top_k: int = 10,
+        initial_fetch_k: int = 100, # Fetch a larger pool for better re-ranking
         anthropic_client: Optional[Anthropic] = None, # Expect client instance
         openai_api_key: Optional[str] = None # Agent-specific key
     ):
@@ -63,7 +64,8 @@ class RetrievalHandler:
         self.namespace = agent_name
         self.session_id = session_id
         self.event_id = event_id if event_id and event_id != '0000' else None
-        self.top_k = top_k
+        self.final_top_k = final_top_k
+        self.initial_fetch_k = initial_fetch_k
         self.embedding_model_name = "text-embedding-ada-002"
         self.anthropic_client = anthropic_client # Store client instance
 
@@ -87,7 +89,7 @@ class RetrievalHandler:
                 self.index = None
             else:
                 self.index = pc.Index(self.index_name)
-                logger.info(f"Retriever: Connected to index '{self.index_name}'. Default top_k={self.top_k}")
+                logger.info(f"Retriever: Connected to index '{self.index_name}'. Initial fetch k={self.initial_fetch_k}, Final k={self.final_top_k}")
         except Exception as e:
             logger.error(f"Retriever: Error connecting to or checking index '{self.index_name}': {e}", exc_info=True)
             self.index = None # Ensure index is None on any error
@@ -132,7 +134,8 @@ class RetrievalHandler:
             logger.info("Retriever: Skipping context retrieval as Pinecone index is not available.")
             return []
             
-        k = top_k or self.top_k
+        final_k = top_k or self.final_top_k
+        initial_k = self.initial_fetch_k
         logger.debug(f"Retriever: Original query: '{query[:100]}...' (is_tx={is_transcript})")
 
         # 1. Transform the query
@@ -142,7 +145,7 @@ class RetrievalHandler:
         else:
             logger.info("Retriever: Using original query (transformation failed or unchanged).")
 
-        logger.debug(f"Retriever: Attempting retrieve top {k}. Base ns: {self.namespace}, Event ID filter: {self.event_id}")
+        logger.debug(f"Retriever: Attempting retrieve top {initial_k} for re-ranking. Base ns: {self.namespace}, Event ID filter: {self.event_id}")
 
         try:
             # 2. Generate embedding for the (potentially transformed) query
@@ -158,9 +161,9 @@ class RetrievalHandler:
             query_filter = {"agent_name": self.namespace}
             if self.event_id:
                 query_filter["event_id"] = self.event_id
-            logger.debug(f"Querying index='{self.index_name}', ns='{self.namespace}', filter={query_filter}, top_k={k}")
+            logger.debug(f"Querying index='{self.index_name}', ns='{self.namespace}', filter={query_filter}, top_k={initial_k}")
             try:
-                response = self.index.query(vector=query_embedding, top_k=k, namespace=self.namespace, filter=query_filter, include_metadata=True)
+                response = self.index.query(vector=query_embedding, top_k=initial_k, namespace=self.namespace, filter=query_filter, include_metadata=True)
                 if response.matches: all_matches.extend(response.matches)
             except Exception as query_e: logger.error(f"Pinecone query error for namespace '{self.namespace}': {query_e}", exc_info=True)
 
@@ -225,7 +228,7 @@ class RetrievalHandler:
 
             # Sort again after applying time-decay
             all_matches.sort(key=lambda x: x.score, reverse=True)
-            top_matches = all_matches[:k]
+            top_matches = all_matches[:final_k]
 
             logger.info(f"Top {len(top_matches)} matches after time-decay re-ranking:")
             for i, match in enumerate(top_matches):
