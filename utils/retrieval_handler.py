@@ -19,12 +19,21 @@ from anthropic import Anthropic # Import Anthropic client
 logger = logging.getLogger(__name__)
 
 # Define a default transform prompt
-DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more effective for searching a vector database containing document chunks. Focus on extracting key entities (people, projects, organizations), topics, dates, and the core question intent.
+DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more effective for searching a vector database. Your goal is to broaden the query slightly to catch related terms, but you must preserve the original keywords and intent.
 
-**Crucially:**
-1.  **Do NOT invent or add specific topics or subjects** (like 'machine learning', 'artificial intelligence', 'data science', etc.) if they are not explicitly mentioned or clearly implied in the original User Query.
-2.  For very broad or vague queries like "list terms", "what are the terms", or just "terms", prioritize searching for documents explicitly related to glossaries, definitions, or "Terms and Conditions". If unsure, it's better to use the original query terms directly or slightly rephrase for clarity (e.g., "definitions of terms", "glossary of terms") rather than adding unrelated topics.
-3.  Retain the core keywords and intent of the original query.
+**Guidelines:**
+1.  **Preserve Core Keywords:** The most important keywords from the original query MUST be present in the rewritten query.
+2.  **Simple is Better:** If the query is already specific and clear (e.g., asking about "tvättbjörn"), do not change it much. You might add synonyms if appropriate, but the original term is vital.
+3.  **Extract Entities:** Identify and retain key entities (people, projects, dates).
+4.  **No Hallucinations:** Do NOT add new topics or subjects that are not in the original query.
+
+**Example 1:**
+User Query: 'kan du se något om en tvättbjörn'
+Rewritten Query: 'information about tvättbjörn raccoon'
+
+**Example 2:**
+User Query: 'what were the key decisions in the mobius project meeting on May 1st'
+Rewritten Query: 'key decisions summary mobius project meeting May 1st'
 
 Output only the rewritten query, no preamble.
 
@@ -38,7 +47,7 @@ class RetrievalHandler:
 
     def __init__(
         self,
-        index_name: str = "magicchat",
+        index_name: str = "river",
         agent_name: Optional[str] = None,
         session_id: Optional[str] = None,
         event_id: Optional[str] = None,
@@ -140,28 +149,20 @@ class RetrievalHandler:
             try:
                 if not hasattr(self, 'embeddings'): raise RuntimeError("Embeddings missing")
                 # Embed the transformed query
-                query_embedding = self.embeddings.embed_query(transformed_query)
+                query_embedding = self.embeddings.embed_query(transformed_query) # This line remains correct
                 logger.debug(f"Retriever: Query embedding generated (first 5): {query_embedding[:5]}...")
             except Exception as e: logger.error(f"Retriever: Embedding error: {e}", exc_info=True); return []
-
-            # 3. Define namespaces & filters (no change here)
-            namespaces = [self.namespace]
-            event_ns = f"{self.namespace}-{self.event_id}" if self.event_id else None
-            if event_ns and event_ns != self.namespace: namespaces.append(event_ns); logger.debug(f"Adding event ns: {event_ns}")
-
-            # 4. Perform queries (no change here)
+    
+            # 4. Perform query against the agent's namespace within the single shared index.
             all_matches = []
-            for ns in namespaces:
-                query_filter = {"agent_name": self.namespace}
-                if self.event_id: query_filter["event_id"] = self.event_id; logger.debug(f"Adding event_id filter: {self.event_id}")
-                else: logger.debug("No specific event_id filter applied.")
-                logger.debug(f"Querying ns='{ns}', filter={query_filter}, top_k={k}")
-                try:
-                    response = self.index.query(vector=query_embedding, top_k=k, namespace=ns, filter=query_filter, include_metadata=True)
-                    logger.debug(f"Raw response ns '{ns}': {response}")
-                    if response.matches: logger.info(f"Found {len(response.matches)} matches in ns '{ns}'."); all_matches.extend(response.matches)
-                    else: logger.info(f"No matches in ns '{ns}'.")
-                except Exception as query_e: logger.error(f"Pinecone query error ns '{ns}': {query_e}", exc_info=True)
+            query_filter = {"agent_name": self.namespace}
+            if self.event_id:
+                query_filter["event_id"] = self.event_id
+            logger.debug(f"Querying index='{self.index_name}', ns='{self.namespace}', filter={query_filter}, top_k={k}")
+            try:
+                response = self.index.query(vector=query_embedding, top_k=k, namespace=self.namespace, filter=query_filter, include_metadata=True)
+                if response.matches: all_matches.extend(response.matches)
+            except Exception as query_e: logger.error(f"Pinecone query error for namespace '{self.namespace}': {query_e}", exc_info=True)
 
             if not all_matches: logger.warning("No matches found across namespaces."); return []
 

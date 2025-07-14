@@ -60,7 +60,7 @@ class EmbeddingHandler:
 
     def __init__(
         self,
-        index_name: str = "magicchat",
+        index_name: str = "river",
         namespace: Optional[str] = None,
         chunk_size: int = 1500,
         chunk_overlap: int = 150

@@ -62,7 +62,7 @@ class RollingTranscriptManager:
         # Use {agent}-{event} as namespace
         namespace = f"{agent_name}-{event_id}" if event_id else f"{agent_name}-0000"
         self.embed_handler = EmbeddingHandler(
-            index_name="magicchat",
+            index_name="river",
             namespace=namespace
         )
         

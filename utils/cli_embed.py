@@ -24,7 +24,7 @@ def embed_file(file_path: str, agent_name: str, index_name: str, metadata: dict 
     try:
         # Initialize embedding handler (handles Pinecone connection and embedding logic)
         embed_handler = EmbeddingHandler(
-            index_name=index_name,
+            index_name="river",
             namespace=agent_name  # Use agent name as namespace for upload target
         )
 
@@ -104,7 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description='Embed text or PDF files into Pinecone')
     parser.add_argument('file', help='Path to text/PDF file or directory of files to embed')
     parser.add_argument('--agent', required=True, help='Agent name (e.g., "yggdrasil") used for namespace and metadata')
-    parser.add_argument('--index', default='magicchat', help='Pinecone index name')
+    parser.add_argument('--index', default='river', help='Pinecone index name (default: river)')
     parser.add_argument('--event', help='Optional event ID for metadata filtering')
 
     args = parser.parse_args()
