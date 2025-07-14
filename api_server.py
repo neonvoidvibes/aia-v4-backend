@@ -1841,6 +1841,7 @@ def handle_chat(user: SupabaseUser):
 
             # --- RAG ---
             rag_context_block = ""
+            retrieved_docs_for_reinforcement = [] # Initialize here
             # We need the original, unformatted message for RAG
             last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
             last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
@@ -1875,6 +1876,7 @@ def handle_chat(user: SupabaseUser):
                             openai_api_key=openai_key_for_rag
                         )
                         retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=5)
+                        retrieved_docs_for_reinforcement = retrieved_docs # Store for reinforcement
                         if retrieved_docs:
                             items = []
                             for d in retrieved_docs:
@@ -2012,10 +2014,16 @@ def handle_chat(user: SupabaseUser):
                                 text_delta = chunk.delta.text
                                 sse_data = json.dumps({'delta': text_delta})
                                 yield f"data: {sse_data}\n\n"
-
-                sse_done_data = json.dumps({'done': True})
-                yield f"data: {sse_done_data}\n\n"
-                logger.info(f"Stream for chat with agent {agent_name} (model: {model_selection}) completed successfully.")
+                
+                # After successful stream, include doc IDs in the final message for the frontend to use
+                doc_ids_for_reinforcement = [doc.metadata.get('vector_id') for doc in retrieved_docs_for_reinforcement if doc.metadata.get('vector_id')]
+                
+                sse_done_data = {
+                    'done': True,
+                    'retrieved_doc_ids': doc_ids_for_reinforcement
+                }
+                yield f"data: {json.dumps(sse_done_data)}\n\n"
+                logger.info(f"Stream for chat with agent {agent_name} (model: {model_selection}) completed successfully. Sent {len(doc_ids_for_reinforcement)} doc IDs for reinforcement.")
 
             except CircuitBreakerOpen as e:
                 logger.error(f"Circuit breaker is open. Aborting stream. Error: {e}")
@@ -2082,6 +2090,42 @@ def sync_agents_from_s3_to_supabase():
     logger.info("Agent Sync: Synchronization finished.")
 
 # Chat History Management Endpoints
+@app.route('/api/memory/reinforce', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def reinforce_memory_route(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agent')
+    doc_ids = data.get('doc_ids')
+
+    if not all([agent_name, doc_ids]):
+        return jsonify({"error": "agent and doc_ids are required"}), 400
+    
+    if not isinstance(doc_ids, list):
+        return jsonify({"error": "doc_ids must be a list"}), 400
+
+    logger.info(f"Reinforcement request for agent '{agent_name}', docs: {doc_ids}")
+
+    try:
+        # We need to initialize a retriever to get access to the reinforce_memories method
+        # This is lightweight as it doesn't perform a query.
+        retriever = RetrievalHandler(
+            index_name="river",
+            agent_name=agent_name,
+            anthropic_client=anthropic_client, # Pass the global client
+            openai_api_key=get_api_key(agent_name, 'openai')
+        )
+        
+        # Create dummy Document objects with just the necessary metadata
+        docs_to_reinforce = [Document(page_content="", metadata={"vector_id": doc_id}) for doc_id in doc_ids]
+        
+        retriever.reinforce_memories(docs_to_reinforce)
+        
+        return jsonify({"status": "success", "message": f"Reinforced {len(doc_ids)} memories."}), 200
+
+    except Exception as e:
+        logger.error(f"Error during memory reinforcement for agent '{agent_name}': {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred during reinforcement."}), 500
+
 # --- New "Intelligent Log" Memory Endpoints ---
 from utils.log_enricher import enrich_chat_log
 from utils.embedding_handler import EmbeddingHandler
