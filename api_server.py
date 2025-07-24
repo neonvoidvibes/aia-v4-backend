@@ -2361,7 +2361,6 @@ def list_pinecone_indexes(user: SupabaseUser):
         logger.error(f"Internal API: Error listing Pinecone indexes: {e}", exc_info=True)
         return jsonify({"error": "Failed to list Pinecone indexes"}), 500
 
-
 # --- Restored User Chat History Endpoints ---
 
 def generate_chat_title(first_user_message: str) -> str:
