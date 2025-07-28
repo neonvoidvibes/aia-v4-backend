@@ -112,13 +112,20 @@ atexit.register(on_shutdown)
 
 def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
     """
-    Verifies that the user ID from the token matches the user ID embedded in the S3 key.
+    Verifies S3 object access. For user-specific files (like transcripts), it checks for an
+    embedded user ID. For shared files (like agent docs), it checks for a valid path.
     This is a security measure to prevent Insecure Direct Object Reference (IDOR).
     """
     if not s3_key or not user:
         return False
     
-    # Attempt to extract user ID from the filename pattern uID-xxxxx
+    # Allow access to agent documentation, as it's not user-specific data.
+    # The path is organizations/river/agents/{agent_name}/docs/{filename}
+    if '/agents/' in s3_key and '/docs/' in s3_key:
+        logger.debug(f"S3 Ownership check PASSED for user {user.id} on agent doc key {s3_key}")
+        return True
+
+    # Attempt to extract user ID from the filename pattern uID-xxxxx for user-specific files
     match = re.search(r'_uID-([a-f0-9\-]+)', s3_key) # Find the pattern anywhere in the key
     if match:
         owner_id = match.group(1)
@@ -129,10 +136,8 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
             logger.warning(f"SECURITY: IDOR attempt - User {user.id} tried to access S3 key owned by {owner_id}. Key: {s3_key}")
             return False
             
-    # Deny by default if the key does not conform to the ownership pattern.
-    # This is a strict security posture. If other files need to be accessed, a different
-    # authorization mechanism (e.g., a database lookup) would be required.
-    logger.warning(f"SECURITY: Access denied for user {user.id} on key {s3_key} because it lacks an ownership identifier (uID).")
+    # Deny by default if the key does not conform to any of the allowed patterns.
+    logger.warning(f"SECURITY: Access denied for user {user.id} on key {s3_key} because it lacks an ownership identifier (uID) and is not a recognized shared resource path.")
     return False
 
 UPLOAD_FOLDER = 'tmp/uploaded_transcriptions/'
