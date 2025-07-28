@@ -16,6 +16,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import uuid 
 from collections import defaultdict
 import subprocess 
+import re
 from werkzeug.utils import secure_filename # Added for file uploads
 
 from utils.api_key_manager import get_api_key # Import the new key manager
@@ -108,6 +109,31 @@ def on_shutdown():
 
 import atexit
 atexit.register(on_shutdown)
+
+def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
+    """
+    Verifies that the user ID from the token matches the user ID embedded in the S3 key.
+    This is a security measure to prevent Insecure Direct Object Reference (IDOR).
+    """
+    if not s3_key or not user:
+        return False
+    
+    # Attempt to extract user ID from the filename pattern uID-xxxxx
+    match = re.search(r'_uID-([a-f0-9\-]+)', s3_key) # Find the pattern anywhere in the key
+    if match:
+        owner_id = match.group(1)
+        if owner_id == user.id:
+            logger.debug(f"S3 Ownership check PASSED for user {user.id} on key {s3_key}")
+            return True
+        else:
+            logger.warning(f"SECURITY: IDOR attempt - User {user.id} tried to access S3 key owned by {owner_id}. Key: {s3_key}")
+            return False
+            
+    # Deny by default if the key does not conform to the ownership pattern.
+    # This is a strict security posture. If other files need to be accessed, a different
+    # authorization mechanism (e.g., a database lookup) would be required.
+    logger.warning(f"SECURITY: Access denied for user {user.id} on key {s3_key} because it lacks an ownership identifier (uID).")
+    return False
 
 UPLOAD_FOLDER = 'tmp/uploaded_transcriptions/'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -1575,6 +1601,11 @@ def view_s3_document(user: SupabaseUser):
     logger.info(f"Received request /api/s3/view from user: {user.id}") 
     s3_key = request.args.get('s3Key')
     if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
+
+    # IDOR Prevention: Verify ownership of the S3 key
+    if not verify_s3_key_ownership(s3_key, user):
+        return jsonify({"error": "Access denied to this resource"}), 403
+
     try:
         from utils.s3_utils import read_file_content as s3_read_content 
         content = s3_read_content(s3_key, f"S3 file for viewing ({s3_key})")
@@ -1591,6 +1622,11 @@ def manage_s3_file(user: SupabaseUser):
     data = g.get('json_data', {})
     s3_key_to_manage = data.get('s3Key')
     action_to_perform = data.get('action')
+
+    # IDOR Prevention: Verify ownership of the S3 key before any action
+    if not verify_s3_key_ownership(s3_key_to_manage, user):
+        return jsonify({"error": "Access denied to this resource"}), 403
+        
     agent_name_param = data.get('agentName')
     event_id_param = data.get('eventId')
 
@@ -1743,6 +1779,11 @@ def download_s3_document(user: SupabaseUser):
     logger.info(f"Received request /api/s3/download from user: {user.id}") 
     s3_key = request.args.get('s3Key'); filename_param = request.args.get('filename')
     if not s3_key: return jsonify({"error": "Missing 's3Key' query parameter"}), 400
+
+    # IDOR Prevention: Verify ownership of the S3 key
+    if not verify_s3_key_ownership(s3_key, user):
+        return jsonify({"error": "Access denied to this resource"}), 403
+
     s3 = get_s3_client(); aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket: return jsonify({"error": "S3 client or bucket not configured"}), 500
     try:
