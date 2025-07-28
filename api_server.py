@@ -2190,10 +2190,14 @@ def embed_recording_route(user: SupabaseUser):
     logger.info(f"Embedding request for s3Key: {s3_key}, agent: {agent_name}")
 
     try:
-        from utils.s3_utils import read_file_content as s3_read_content
-        content = s3_read_content(s3_key, f"S3 file for embedding ({s3_key})")
-        if content is None:
+        # Use the new function to get content AND metadata
+        from utils.s3_utils import read_file_content_with_metadata
+        s3_data = read_file_content_with_metadata(s3_key, f"S3 file for embedding ({s3_key})")
+        if not s3_data or 'content' not in s3_data:
             return jsonify({"error": "File not found or could not be read from S3"}), 404
+
+        content = s3_data['content']
+        last_modified_timestamp = s3_data.get('LastModified')
 
         # MODIFIED: Use a shared index name and the agent_name as the namespace
         embedding_handler = EmbeddingHandler( 
@@ -2208,8 +2212,14 @@ def embed_recording_route(user: SupabaseUser):
             "agent_name": agent_name,
             "source": "recording", # As specified in the plan
             "file_name": virtual_filename,
-            "s3_key": s3_key
+            "s3_key": s3_key,
         }
+
+        # Add the 'created_at' timestamp from S3's LastModified metadata
+        if last_modified_timestamp:
+            # Convert datetime object to ISO 8601 string format, which the re-ranker expects
+            metadata_for_embedding['created_at'] = last_modified_timestamp.isoformat()
+            logger.info(f"Using S3 LastModified as 'created_at' timestamp for embedding: {metadata_for_embedding['created_at']}")
 
         upsert_success = embedding_handler.embed_and_upsert(content, metadata_for_embedding)
 
