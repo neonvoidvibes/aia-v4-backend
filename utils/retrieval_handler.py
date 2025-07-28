@@ -171,7 +171,7 @@ class RetrievalHandler:
 
             # 5. Process & Rank with Time-Decay
             logger.debug(f"Total raw matches: {len(all_matches)}. Applying time-decay re-ranking...")
-            decay_rate = 0.025 # Controls how quickly scores decay. Higher is faster.
+            decay_rate = 0.015 # Controls how quickly scores decay. Higher is faster. (Reduced from 0.025)
             current_time = time.time()
 
             for match in all_matches:
@@ -218,9 +218,18 @@ class RetrievalHandler:
                                 # The effective decay is reduced by how much the memory has been reinforced
                                 # We add a small epsilon to avoid division by zero if reinforcement_factor is 0
                                 effective_decay_rate = decay_rate / (1 + reinforcement_factor)
-                                
+
                                 decay_factor = math.exp(-effective_decay_rate * age_days)
-                                match.score = original_score * decay_factor
+                                decayed_score = original_score * decay_factor
+
+                                # Implement a score floor for very high-quality original matches to prevent them from decaying too much.
+                                score_floor = 0.72
+                                if original_score > 0.85 and decayed_score < score_floor:
+                                    match.score = score_floor
+                                    logger.info(f"Re-ranking ID {match.id}: High-quality match, applying score floor. Original: {original_score:.4f}, Decayed: {decayed_score:.4f}, Floored: {match.score:.4f}")
+                                else:
+                                    match.score = decayed_score
+
                                 logger.info(f"Re-ranking ID {match.id}: Original Score={original_score:.4f}, Age={match.metadata['age_display']}, Accesses={access_count}, New Score={match.score:.4f}")
                             else:
                                 logger.info(f"Re-ranking ID {match.id}: Recent memory (age <= 0), no decay. Score remains {original_score:.4f}")

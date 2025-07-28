@@ -1922,7 +1922,7 @@ def handle_chat(user: SupabaseUser):
                             anthropic_client=anthropic_client,
                             openai_api_key=openai_key_for_rag
                         )
-                        retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=5)
+                        retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=10)
                         retrieved_docs_for_reinforcement = retrieved_docs # Store for reinforcement
                         if retrieved_docs:
                             items = []
