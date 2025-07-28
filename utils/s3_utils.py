@@ -131,32 +131,32 @@ def read_file_content(file_key: str, description: str) -> Optional[str]:
          logger.error(f"Error reading {description} from {file_key}: {e}", exc_info=True)
          return None
  
-+def read_file_content_with_metadata(file_key: str, description: str) -> Optional[Dict[str, Any]]:
-+    """Read content and metadata (like LastModified) from an S3 file."""
-+    s3 = get_s3_client()
-+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-+    if not s3 or not aws_s3_bucket:
-+        logger.error(f"S3 client or bucket name not available for reading {description} with metadata.")
-+        return None
-+    try:
-+        logger.debug(f"Reading {description} with metadata from S3: s3://{aws_s3_bucket}/{file_key}")
-+        response = s3.get_object(Bucket=aws_s3_bucket, Key=file_key)
-+        content = response['Body'].read().decode('utf-8')
-+        metadata = {
-+            'content': content,
-+            'LastModified': response.get('LastModified')
-+        }
-+        logger.debug(f"Successfully read {description} ({len(content)} chars) with metadata.")
-+        return metadata
-+    except s3.exceptions.NoSuchKey:
-+        logger.warning(f"{description} file not found at S3 key: {file_key}")
-+        return None
-+    except Exception as e:
-+        logger.error(f"Error reading {description} with metadata from {file_key}: {e}", exc_info=True)
-+        return None
- 
- def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
-     """Lists objects under a given S3 prefix, returning their Key, Size, and LastModified."""
+def read_file_content_with_metadata(file_key: str, description: str) -> Optional[Dict[str, Any]]:
+    """Read content and metadata (like LastModified) from an S3 file."""
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error(f"S3 client or bucket name not available for reading {description} with metadata.")
+        return None
+    try:
+        logger.debug(f"Reading {description} with metadata from S3: s3://{aws_s3_bucket}/{file_key}")
+        response = s3.get_object(Bucket=aws_s3_bucket, Key=file_key)
+        content = response['Body'].read().decode('utf-8')
+        metadata = {
+            'content': content,
+            'LastModified': response.get('LastModified')
+        }
+        logger.debug(f"Successfully read {description} ({len(content)} chars) with metadata.")
+        return metadata
+    except s3.exceptions.NoSuchKey:
+        logger.warning(f"{description} file not found at S3 key: {file_key}")
+        return None
+    except Exception as e:
+        logger.error(f"Error reading {description} with metadata from {file_key}: {e}", exc_info=True)
+        return None
+
+def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
+    """Lists objects under a given S3 prefix, returning their Key, Size, and LastModified."""
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
