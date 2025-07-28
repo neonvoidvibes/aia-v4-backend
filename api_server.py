@@ -1390,6 +1390,36 @@ def list_vector_ids_in_namespace(index_name: str, namespace_name: str):
         logger.error(f"Error listing vector IDs for index '{index_name}', ns '{namespace_name}': {e}", exc_info=True)
         return jsonify({"error": "Unexpected error listing vector IDs"}), 500
 
+@app.route('/api/index/<string:index_name>/namespace/<string:namespace_name>/exists', methods=['GET'])
+def namespace_exists(index_name: str, namespace_name: str):
+    """Check if a namespace exists and is not empty."""
+    logger.info(f"Request to check existence of namespace '{namespace_name}' in index '{index_name}'")
+    try:
+        pc = init_pinecone()
+        if not pc:
+            return jsonify({"error": "Pinecone client initialization failed"}), 500
+        
+        index = pc.Index(index_name)
+        # Query with a dummy vector to check for the presence of any vectors in the namespace.
+        # This is the most reliable way to check for a non-empty namespace.
+        query_response = index.query(
+            namespace=namespace_name,
+            top_k=1,
+            include_values=False,
+            include_metadata=False,
+            vector=[0] * 1536 # Assuming 1536 dimensions for the dummy vector
+        )
+        
+        exists = len(query_response['matches']) > 0
+        logger.info(f"Namespace '{namespace_name}' in index '{index_name}' {'exists and is not empty' if exists else 'does not exist or is empty'}.")
+        return jsonify({"exists": exists}), 200
+
+    except NotFoundException:
+        return jsonify({"error": f"Index '{index_name}' not found"}), 404
+    except Exception as e:
+        logger.error(f"Error checking namespace '{namespace_name}' in index '{index_name}': {e}", exc_info=True)
+        return jsonify({"error": "An unexpected error occurred"}), 500
+
 @app.route('/api/index/<string:index_name>/namespace/<string:namespace_name>/list_docs', methods=['GET'])
 def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
     limit = request.args.get('limit', default=100, type=int);
