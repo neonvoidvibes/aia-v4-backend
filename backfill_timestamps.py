@@ -7,14 +7,14 @@ from utils.s3_utils import get_s3_client
 # --- Configuration ---
 # Set to False to perform the actual metadata updates in Pinecone.
 # It is HIGHLY RECOMMENDED to run with DRY_RUN = True first to review the logs.
-DRY_RUN = True
+DRY_RUN = False
 
 # The name of your shared Pinecone index.
 INDEX_NAME = "river"
 
 # List of agent names (which are namespaces in Pinecone) to fix.
 # Add all agents that might have recordings without timestamps.
-AGENTS_TO_FIX = ["neonvoid", "yggdrasil", "newco", "ikea"] # <-- CONFIGURE THIS LIST
+AGENTS_TO_FIX = ["river", "ikea", "cfl", "holistic", "_test", "nordicequation", "mobius", "sturebadet", "tpframtidenhr", "riveralmedalen", "neonvoid", "matfrid", "chat", "magictasks", "gotland2025", "infinitemg", "yggdrasil", "wlg", "newco", "tpframtiden", "tpframtidenhr", "samverket"] # <-- CONFIGURE THIS LIST
 # ---------------------
 
 def setup_logging():
