@@ -434,10 +434,11 @@ def write_agent_doc(agent_name: str, doc_name: str, content: str) -> bool:
     Creates or updates a specific documentation file for an agent and invalidates the cache.
     The doc_name should be a simple filename, e.g., 'project_overview.md'.
     """
+    logger.info(f"Attempting to write agent doc '{doc_name}' for agent '{agent_name}'.")
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
-        logger.error(f"S3 client or bucket not available for writing agent doc.")
+        logger.error(f"S3 client or bucket not available for writing agent doc. S3 Client: {'Exists' if s3 else 'None'}, Bucket: {aws_s3_bucket}")
         return False
 
     # Enforce the directory structure for security.
@@ -450,6 +451,7 @@ def write_agent_doc(agent_name: str, doc_name: str, content: str) -> bool:
     file_key = f"organizations/river/agents/{agent_name}/docs/{safe_doc_name}"
     
     try:
+        logger.info(f"Executing S3 PutObject. Bucket: '{aws_s3_bucket}', Key: '{file_key}'")
         s3.put_object(Bucket=aws_s3_bucket, Key=file_key, Body=content.encode('utf-8'), ContentType='text/plain; charset=utf-8')
         logger.info(f"Successfully wrote agent doc to S3 key: {file_key}")
 
