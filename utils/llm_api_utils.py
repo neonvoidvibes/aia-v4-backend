@@ -130,7 +130,18 @@ def _call_gemini_stream_with_retry(model_name: str, max_tokens: int, system_inst
             if api_key != original_global_key:
                 genai.configure(api_key=api_key)
             
-            model = genai.GenerativeModel(model_name=model_name, system_instruction=system_instruction)
+            # Define safety settings to be less restrictive, similar to the non-streaming version.
+            safety_settings = {
+                'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
+                'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
+                'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
+                'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
+            }
+            model = genai.GenerativeModel(
+                model_name=model_name, 
+                system_instruction=system_instruction,
+                safety_settings=safety_settings  # Add safety settings here
+            )
             generation_config = {"max_output_tokens": max_tokens, "temperature": temperature}
             gemini_messages = [{'role': 'model' if msg['role'] == 'assistant' else 'user', 'parts': [msg['content']]} for msg in messages]
             
