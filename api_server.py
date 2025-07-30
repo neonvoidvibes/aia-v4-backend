@@ -1915,6 +1915,41 @@ def handle_chat(user: SupabaseUser):
             if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
             rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
             final_system_prompt += rag_usage_instructions
+            
+            # Memory update instructions with JSON Schema Draft 7
+            memory_update_instructions = """
+
+## Memory Update Protocol
+
+When you identify information that should be permanently stored in your agent documentation, use this exact format:
+
+[DOC_UPDATE_PROPOSAL]
+{
+  "doc_name": "filename.md",
+  "content": "Complete document content here",
+  "justification": "Brief explanation why this update is needed"
+}
+
+**JSON Schema (Draft 7):**
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["doc_name", "content"],
+  "properties": {
+    "doc_name": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+\\.md$"},
+    "content": {"type": "string"},
+    "justification": {"type": "string"}
+  }
+}
+```
+
+**Requirements:**
+- Use valid JSON after [DOC_UPDATE_PROPOSAL] prefix
+- Include complete document content, not just additions
+- Do not add content unless specifically asked to by user
+- Choose descriptive filenames ending in .md"""
+            final_system_prompt += memory_update_instructions
 
             # --- RAG ---
             rag_context_block = ""
