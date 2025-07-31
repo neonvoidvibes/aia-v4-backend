@@ -5,6 +5,7 @@ load_dotenv() # Load environment variables at the very top
 import sys
 import logging
 from flask import Flask, jsonify, request, Response, stream_with_context, g
+from uuid import uuid4
 import threading 
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -50,14 +51,32 @@ from flask_cors import CORS
 
 from transcription_service import process_audio_segment_and_update_s3
 
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+            "filename": record.filename,
+            "lineno": record.lineno,
+        }
+        # Add request_id if it's in the context
+        if hasattr(record, 'request_id'):
+            log_record['request_id'] = record.request_id
+        return json.dumps(log_record)
+
 def setup_logging(debug=False):
     log_filename = 'api_server.log'; root_logger = logging.getLogger(); log_level = logging.DEBUG if debug else logging.INFO
     root_logger.setLevel(log_level)
     for handler in root_logger.handlers[:]: root_logger.removeHandler(handler)
     try:
         fh = logging.FileHandler(log_filename, encoding='utf-8'); fh.setLevel(log_level)
-        ff = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'); fh.setFormatter(ff); root_logger.addHandler(fh)
-    except Exception as e: print(f"Error setting up file logger: {e}", file=sys.stderr)
+        json_formatter = JsonFormatter()
+        fh.setFormatter(json_formatter); root_logger.addHandler(fh)
+    except Exception as e: 
+        import sys
+        print(f"Error setting up file logger: {e}", file=sys.stderr)
     ch = logging.StreamHandler(sys.stdout); ch.setLevel(log_level)
     cf = logging.Formatter('[%(levelname)-8s] %(name)s: %(message)s'); ch.setFormatter(cf); root_logger.addHandler(ch)
     for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock', 'google.generativeai', 'google.api_core']:
@@ -95,6 +114,40 @@ sock = Sock(app)
 # The number of workers can be tuned based on server resources.
 app.executor = ThreadPoolExecutor(max_workers=(os.cpu_count() or 1) * 2)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
+
+# Request ID middleware
+@app.before_request
+def add_request_id():
+    # Check if request ID is provided by frontend, otherwise generate one
+    request_id = request.headers.get('X-Request-ID', str(uuid4()))
+    g.request_id = request_id
+    
+    # Add request ID to all log records for this request
+    class RequestIdFilter(logging.Filter):
+        def filter(self, record):
+            record.request_id = request_id
+            return True
+    
+    # Add the filter to the root logger for this request
+    root_logger = logging.getLogger()
+    request_filter = RequestIdFilter()
+    root_logger.addFilter(request_filter)
+    
+    # Store the filter so we can remove it after the request
+    g.request_filter = request_filter
+
+@app.after_request
+def remove_request_id_filter(response):
+    # Remove the request ID filter after the request
+    if hasattr(g, 'request_filter'):
+        root_logger = logging.getLogger()
+        root_logger.removeFilter(g.request_filter)
+    
+    # Add request ID to response headers for debugging
+    if hasattr(g, 'request_id'):
+        response.headers['X-Request-ID'] = g.request_id
+    
+    return response
 
 # Clear any stale sessions at startup, which can happen in some deployment environments
 active_sessions: Dict[str, Dict[str, Any]] = {}
