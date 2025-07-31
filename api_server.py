@@ -75,7 +75,6 @@ def setup_logging(debug=False):
         json_formatter = JsonFormatter()
         fh.setFormatter(json_formatter); root_logger.addHandler(fh)
     except Exception as e: 
-        import sys
         print(f"Error setting up file logger: {e}", file=sys.stderr)
     ch = logging.StreamHandler(sys.stdout); ch.setLevel(log_level)
     cf = logging.Formatter('[%(levelname)-8s] %(name)s: %(message)s'); ch.setFormatter(cf); root_logger.addHandler(ch)
