@@ -2599,7 +2599,12 @@ def save_chat_history(user: SupabaseUser):
             
             recent_chats = client.table('chat_history').select('id, title, messages, created_at').eq('user_id', user.id).eq('agent_id', agent_id).eq('title', title).gte('created_at', cutoff_time).order('created_at', desc=True).execute()
             
-            logger.info(f"[Chat Save] Request {request_id}: Found {len(recent_chats.data) if recent_chats.data else 0} recent chats with same title")
+            logger.info(f"[Chat Save] Request {request_id}: Found {len(recent_chats.data) if recent_chats.data else 0} recent chats with same title '{title}'")
+            
+            # Log details of all recent chats for debugging
+            if recent_chats.data:
+                for i, chat in enumerate(recent_chats.data):
+                    logger.info(f"[Chat Save] Request {request_id}: Recent chat {i+1}: ID={chat['id']}, Messages={len(chat.get('messages', []))}, Created={chat.get('created_at', 'Unknown')}")
             
             # If we find a recent chat with the same title, check if it's likely a duplicate
             if recent_chats.data:
@@ -2614,9 +2619,12 @@ def save_chat_history(user: SupabaseUser):
                         recent_msg_ids = {msg.get('id') for msg in recent_messages if msg.get('id')}
                         current_msg_ids = {msg.get('id') for msg in messages if msg.get('id')}
                         
+                        logger.info(f"[Chat Save] Request {request_id}: Message ID comparison - Recent IDs: {list(recent_msg_ids)[:3]}{'...' if len(recent_msg_ids) > 3 else ''}, Current IDs: {list(current_msg_ids)[:3]}{'...' if len(current_msg_ids) > 3 else ''}")
+                        
                         # If recent messages are a subset of current messages (by ID), it's likely a race condition
                         if recent_msg_ids and recent_msg_ids.issubset(current_msg_ids):
-                            logger.info(f"[Chat Save] Request {request_id}: Detected duplicate by message IDs. Updating existing chat {recent_chat['id']} instead of creating new.")
+                            logger.warning(f"[Chat Save] Request {request_id}: RACE CONDITION DETECTED! Message IDs from recent chat {recent_chat['id']} are subset of current request. Updating existing chat instead of creating duplicate.")
+                            logger.info(f"[Chat Save] Request {request_id}: Duplicate detection details - Recent chat has {len(recent_messages)} msgs, current has {len(messages)} msgs")
                             chat_id = recent_chat['id']
                             update_payload = {
                                 'title': title,
@@ -2632,9 +2640,12 @@ def save_chat_history(user: SupabaseUser):
                         recent_msg_content = [msg.get('content', '') for msg in recent_messages if 'content' in msg]
                         current_msg_content = [msg.get('content', '') for msg in messages if 'content' in msg]
                         
+                        logger.info(f"[Chat Save] Request {request_id}: Content comparison fallback - Recent content samples: {[c[:30]+'...' if len(c) > 30 else c for c in recent_msg_content[:2]]}")
+                        
                         # Check if all recent messages are contained in current messages (subset check)
                         if recent_msg_content and all(msg in current_msg_content for msg in recent_msg_content):
-                            logger.info(f"[Chat Save] Request {request_id}: Detected duplicate by content. Updating existing chat {recent_chat['id']} instead of creating new.")
+                            logger.warning(f"[Chat Save] Request {request_id}: RACE CONDITION DETECTED via content! Recent chat {recent_chat['id']} content is subset of current request. Updating existing chat instead of creating duplicate.")
+                            logger.info(f"[Chat Save] Request {request_id}: Content-based duplicate detection - Recent has {len(recent_msg_content)} content items, current has {len(current_msg_content)} items")
                             chat_id = recent_chat['id']
                             update_payload = {
                                 'title': title,
@@ -2645,6 +2656,8 @@ def save_chat_history(user: SupabaseUser):
                             
                             result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
                             break
+                        else:
+                            logger.info(f"[Chat Save] Request {request_id}: No duplicate detected for chat {recent_chat['id']} - content/IDs don't match subset criteria")
                 else:
                     # No duplicate found, proceed with insert
                     logger.info(f"[Chat Save] Request {request_id}: No duplicates detected. Creating new chat.")
