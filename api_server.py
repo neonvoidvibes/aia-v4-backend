@@ -2588,18 +2588,64 @@ def save_chat_history(user: SupabaseUser):
 
             result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
         else:
-            insert_payload = {
-                'user_id': user.id,
-                'agent_id': agent_id,
-                'title': title,
-                'messages': messages,
-            }
-            if last_message_id:
-                insert_payload['last_message_id_at_save'] = last_message_id
+            # Before creating a new chat, check for recent duplicates to prevent race condition artifacts
+            # Look for chats created in the last 30 seconds with the same title and agent
+            from datetime import datetime, timedelta
+            cutoff_time = (datetime.utcnow() - timedelta(seconds=30)).isoformat()
             
-            result = client.table('chat_history').insert(insert_payload).execute()
-            chat_id = result.data[0]['id'] if result.data else None
-            title = result.data[0]['title'] if result.data else title
+            recent_chats = client.table('chat_history').select('id, title, messages').eq('user_id', user.id).eq('agent_id', agent_id).eq('title', title).gte('created_at', cutoff_time).execute()
+            
+            # If we find a recent chat with the same title, check if it's likely a duplicate
+            if recent_chats.data:
+                for recent_chat in recent_chats.data:
+                    recent_messages = recent_chat.get('messages', [])
+                    # If the recent chat has fewer messages and our current messages include all of theirs,
+                    # it's likely a duplicate from a race condition - update it instead of creating new
+                    if len(recent_messages) < len(messages):
+                        recent_msg_content = [msg.get('content', '') for msg in recent_messages if 'content' in msg]
+                        current_msg_content = [msg.get('content', '') for msg in messages if 'content' in msg]
+                        
+                        # Check if all recent messages are contained in current messages (subset check)
+                        if all(msg in current_msg_content for msg in recent_msg_content):
+                            logger.info(f"Detected potential duplicate chat creation. Updating existing chat {recent_chat['id']} instead.")
+                            chat_id = recent_chat['id']
+                            update_payload = {
+                                'title': title,
+                                'messages': messages,
+                            }
+                            if last_message_id:
+                                update_payload['last_message_id_at_save'] = last_message_id
+                            
+                            result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+                            break
+                else:
+                    # No duplicate found, proceed with insert
+                    insert_payload = {
+                        'user_id': user.id,
+                        'agent_id': agent_id,
+                        'title': title,
+                        'messages': messages,
+                    }
+                    if last_message_id:
+                        insert_payload['last_message_id_at_save'] = last_message_id
+                    
+                    result = client.table('chat_history').insert(insert_payload).execute()
+                    chat_id = result.data[0]['id'] if result.data else None
+                    title = result.data[0]['title'] if result.data else title
+            else:
+                # No recent chats, proceed with insert
+                insert_payload = {
+                    'user_id': user.id,
+                    'agent_id': agent_id,
+                    'title': title,
+                    'messages': messages,
+                }
+                if last_message_id:
+                    insert_payload['last_message_id_at_save'] = last_message_id
+                
+                result = client.table('chat_history').insert(insert_payload).execute()
+                chat_id = result.data[0]['id'] if result.data else None
+                title = result.data[0]['title'] if result.data else title
         
         return jsonify({'success': True, 'chatId': chat_id, 'title': title})
     except Exception as e:
