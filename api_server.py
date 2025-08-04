@@ -447,10 +447,13 @@ import httpx
 
 # Generic retry strategy for Supabase calls that might face transient network issues
 retry_strategy_supabase = retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=15),
     retry_error_callback=log_retry_error,
-    retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError))
+    retry=retry_if_exception_type((
+        httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, 
+        httpx.RemoteProtocolError, ConnectionError, OSError
+    ))
 )
 
 @retry_strategy_supabase
