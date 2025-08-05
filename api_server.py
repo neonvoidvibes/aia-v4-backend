@@ -1983,6 +1983,9 @@ def handle_chat(user: SupabaseUser):
     temperature = data.get('temperature', 0.7) # Default temperature
     incoming_messages = data.get('messages', [])
     chat_session_id_log = data.get('session_id', datetime.now().strftime('%Y%m%d-T%H%M%S'))
+    # Extract new individual memory toggle data
+    individual_memory_toggle_states = data.get('individualMemoryToggleStates', {})
+    saved_transcript_summaries = data.get('savedTranscriptSummaries', [])
 
     def generate_stream():
         """
@@ -1991,7 +1994,7 @@ def handle_chat(user: SupabaseUser):
         """
         try:
             logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
-            logger.info(f"Stream settings - Listen: {transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}")
+            logger.info(f"Stream settings - Listen: {transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}, Individual toggles: {len(individual_memory_toggle_states)} items")
 
             # --- System Prompt and Context Assembly ---
             s3_load_start_time = time.time()
@@ -2121,7 +2124,38 @@ When you identify information that should be permanently stored in your agent do
 
             # --- Summary & Transcript Loading ---
             final_llm_messages = []
-            if saved_transcript_memory_mode == 'enabled':
+            # Handle individual memory toggles (works regardless of main toggle state)
+            if individual_memory_toggle_states and saved_transcript_summaries:
+                summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
+                enabled_summaries_count = 0
+                
+                for summary_data in saved_transcript_summaries:
+                    # Use s3Key as the identifier to match frontend toggle states
+                    summary_key = summary_data.get('s3Key', summary_data.get('name', ''))
+                    
+                    # Check if this specific summary is enabled via individual toggle
+                    if individual_memory_toggle_states.get(summary_key, False):
+                        summary_filename = summary_data.get('name', 'unknown_summary.json')
+                        # Load the actual content from S3 using the s3Key
+                        if summary_key:
+                            from utils.s3_utils import read_file_content
+                            summary_content = read_file_content(summary_key, f"Individual summary {summary_filename}")
+                            if summary_content:
+                                try:
+                                    summary_doc = json.loads(summary_content)
+                                    summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
+                                    enabled_summaries_count += 1
+                                except json.JSONDecodeError:
+                                    logger.warning(f"Failed to parse JSON content for summary {summary_filename}")
+                
+                # Only add to prompt if we have enabled summaries
+                if enabled_summaries_count > 0:
+                    final_system_prompt = summaries_context_str + final_system_prompt
+                    logger.info(f"Added {enabled_summaries_count} individual transcript summaries to context")
+                else:
+                    logger.info("No individual transcript summaries enabled")
+            elif saved_transcript_memory_mode == 'enabled':
+                # Fallback to original "all summaries" behavior when main toggle is enabled but no individual data
                 summaries = get_transcript_summaries(agent_name, event_id)
                 if summaries:
                     summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
@@ -2129,6 +2163,9 @@ When you identify information that should be permanently stored in your agent do
                         summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
                         summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
                     final_system_prompt = summaries_context_str + final_system_prompt
+                    logger.info(f"Added all transcript summaries to context (legacy mode)")
+            else:
+                logger.info("No transcript summaries to include (main toggle disabled, no individual toggles enabled)")
 
             if transcript_listen_mode == 'all':
                 all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
