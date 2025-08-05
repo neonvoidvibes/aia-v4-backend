@@ -176,8 +176,16 @@ class EmbeddingHandler:
                     continue
 
                 file_name_for_id = chunk_metadata.get('file_name', original_file_name)
+                page_number = chunk_metadata.get('page_number') # Get the page number
                 sanitized_id_part = sanitize_for_pinecone_id(file_name_for_id)
-                vector_id = f"{sanitized_id_part}_{i}"
+                
+                # Create a more robust, unique ID
+                if page_number is not None:
+                    # For PDFs, use the page number to ensure uniqueness
+                    vector_id = f"{sanitized_id_part}_page-{page_number}_chunk-{i}"
+                else:
+                    # Fallback for non-PDF files
+                    vector_id = f"{sanitized_id_part}_{i}"
 
                 # Prepare metadata for Pinecone
                 pinecone_metadata = {
