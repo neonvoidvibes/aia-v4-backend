@@ -162,10 +162,52 @@ def on_shutdown():
 import atexit
 atexit.register(on_shutdown)
 
+def has_user_agent_access(user_id: str, agent_name: str) -> bool:
+    """
+    Check if a user has access to a specific agent.
+    Returns True if the user has access, False otherwise.
+    """
+    client = get_supabase_client()
+    if not client:
+        logger.error("Cannot check agent access: Supabase client not available.")
+        return False
+    
+    try:
+        # Get agent ID from name
+        agent_res = client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
+        if hasattr(agent_res, 'error') and agent_res.error:
+            logger.error(f"Database error finding agent_id for name '{agent_name}': {agent_res.error}")
+            return False
+        if not agent_res.data:
+            logger.debug(f"Agent with name '{agent_name}' not found in DB.")
+            return False
+        
+        agent_id = agent_res.data[0]['id']
+        
+        # Check user access to agent
+        access_res = client.table("user_agent_access") \
+            .select("agent_id") \
+            .eq("user_id", user_id) \
+            .eq("agent_id", agent_id) \
+            .limit(1) \
+            .execute()
+        
+        if hasattr(access_res, 'error') and access_res.error:
+            logger.error(f"Database error checking access for user {user_id} / agent {agent_name}: {access_res.error}")
+            return False
+        
+        has_access = bool(access_res.data)
+        logger.debug(f"User {user_id} {'has' if has_access else 'does not have'} access to agent {agent_name}")
+        return has_access
+        
+    except Exception as e:
+        logger.error(f"Exception checking user agent access: {e}")
+        return False
+
 def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
     """
-    Verifies S3 object access. For user-specific files (like transcripts), it checks for an
-    embedded user ID. For shared files (like agent docs), it checks for a valid path.
+    Verifies S3 object access. For user-specific files, it checks for user ID or agent permissions.
+    For shared files (like agent docs and transcripts), it checks for valid path and agent access.
     This is a security measure to prevent Insecure Direct Object Reference (IDOR).
     """
     if not s3_key or not user:
@@ -177,8 +219,22 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
         logger.debug(f"S3 Ownership check PASSED for user {user.id} on agent doc key {s3_key}")
         return True
 
-    # Attempt to extract user ID from the filename pattern uID-xxxxx for user-specific files
-    match = re.search(r'_uID-([a-f0-9\-]+)', s3_key) # Find the pattern anywhere in the key
+    # Allow access to agent transcripts/recordings if user has access to the agent
+    # Path patterns: organizations/river/agents/{agent_name}/events/{event_id}/transcripts/...
+    #                organizations/river/agents/{agent_name}/events/{event_id}/recordings/...
+    agent_transcript_match = re.search(r'/agents/([^/]+)/events/[^/]+/(transcripts|recordings)/', s3_key)
+    if agent_transcript_match:
+        agent_name = agent_transcript_match.group(1)
+        # Check if user has access to this agent
+        if has_user_agent_access(user.id, agent_name):
+            logger.debug(f"S3 Ownership check PASSED for user {user.id} on agent {agent_name} transcript/recording key {s3_key}")
+            return True
+        else:
+            logger.warning(f"SECURITY: User {user.id} tried to access {agent_name} transcript/recording without agent access. Key: {s3_key}")
+            return False
+
+    # For other user-specific files, check the uID pattern
+    match = re.search(r'_uID-([a-f0-9\-]+)', s3_key)
     if match:
         owner_id = match.group(1)
         if owner_id == user.id:
@@ -186,6 +242,7 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
             return True
         else:
             logger.warning(f"SECURITY: IDOR attempt - User {user.id} tried to access S3 key owned by {owner_id}. Key: {s3_key}")
+            logger.info(f"Current user ID: {user.id}, File owner ID: {owner_id}")
             return False
             
     # Deny by default if the key does not conform to any of the allowed patterns.
