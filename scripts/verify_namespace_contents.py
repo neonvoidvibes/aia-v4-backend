@@ -14,10 +14,11 @@ INDEX_NAME = "river"
 NAMESPACE_TO_CHECK = "river"
 # ---------------------
 
-def list_all_ids_paginated():
+def list_all_ids_paginated_and_sorted():
     """
-    Connects to Pinecone and lists ALL vector IDs in a given namespace,
-    correctly handling pagination for large namespaces.
+    Connects to Pinecone, lists ALL vector IDs in a given namespace,
+    correctly handling pagination for large namespaces, sorts the results,
+    and prints them in a clean, readable format.
     """
     logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
     load_dotenv()
@@ -31,7 +32,6 @@ def list_all_ids_paginated():
         index = pc.Index(INDEX_NAME)
         logging.info(f"Successfully connected to index '{INDEX_NAME}'.")
         
-        # First, get the total vector count from stats for confirmation
         stats = index.describe_index_stats()
         namespace_stats = stats.namespaces.get(NAMESPACE_TO_CHECK)
         if not namespace_stats:
@@ -45,18 +45,18 @@ def list_all_ids_paginated():
 
         print(f"\nFound {vector_count} total vectors in namespace '{NAMESPACE_TO_CHECK}'. Fetching all IDs...")
 
-        # --- CORRECT PAGINATION LOGIC ---
-        # The `index.list()` method in the Pinecone client returns an iterator
-        # that automatically handles the pagination tokens behind the scenes.
-        # We can simply loop through it to get all IDs, regardless of the total count.
+        # --- CORRECTED PAGINATION LOGIC WITH VALID LIMIT ---
         all_ids = []
-        # The `limit` parameter here controls the batch size for each underlying API call.
-        for vec_id in index.list(namespace=NAMESPACE_TO_CHECK, limit=100):
-            all_ids.append(vec_id)
+        # Use the maximum allowed limit of 99 for efficiency.
+        # The iterator will handle making multiple calls until all IDs are fetched.
+        for ids_batch in index.list(namespace=NAMESPACE_TO_CHECK, limit=99):
+            all_ids.extend(ids_batch)
 
-        print(f"\n--- Fetched {len(all_ids)} Vector IDs ---")
+        all_ids.sort()
+
+        print(f"\n--- Fetched and Sorted {len(all_ids)} Vector IDs ---")
         for i, vec_id in enumerate(all_ids):
-            print(f"{i+1}: {vec_id}")
+            print(f"{i+1:03d}: {vec_id}")
         print("------------------")
 
         if len(all_ids) != vector_count:
@@ -66,4 +66,4 @@ def list_all_ids_paginated():
         logging.error(f"An error occurred: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    list_all_ids_paginated()
+    list_all_ids_paginated_and_sorted()
