@@ -158,11 +158,13 @@ def _call_openai_stream_with_retry(model_name: str, max_tokens: int, system_inst
     if not api_key:
         raise ValueError("API key for OpenAI is missing.")
     
-    transient_openai_client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key)
     openai_messages = [{"role": "system", "content": system_instruction}] + messages
     
-    stream = transient_openai_client.chat.completions.create(
-        model=model_name, messages=openai_messages, max_tokens=max_tokens, temperature=temperature, stream=True
+    stream = client.responses.stream(
+        model=model_name,
+        input=openai_messages,
+        max_output_tokens=max_tokens
     )
     return stream
 

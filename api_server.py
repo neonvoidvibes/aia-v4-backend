@@ -2255,11 +2255,12 @@ When you identify information that should be permanently stored in your agent do
                         api_key=llm_api_key,
                         temperature=temperature
                     )
-                    for chunk in openai_stream:
-                        text_delta = chunk.choices[0].delta.content
-                        if text_delta:
-                            sse_data = json.dumps({'delta': text_delta})
-                            yield f"data: {sse_data}\n\n"
+                    with openai_stream as stream:
+                        for event in stream:
+                            if getattr(event, "type", "") == "response.output_text.delta":
+                                text_delta = event.delta
+                                sse_data = json.dumps({'delta': text_delta})
+                                yield f"data: {sse_data}\n\n"
                 
                 else: # Default to Anthropic
                     stream_manager = _call_anthropic_stream_with_retry(

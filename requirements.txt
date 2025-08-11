@@ -7,7 +7,7 @@ python-dotenv>=1.0.0
 
 # LLM & Embeddings
 anthropic>=0.29.0,<0.30.0 # Pinned as before
-openai>=1.14.3,<2.0.0    # Use version from magic_chat
+openai>=1.95.0,<2.0.0    # GPT-5 + Responses API
 google-generativeai>=0.7.1 # Added for Gemini support
 tiktoken>=0.7.0,<0.8.0   # Use version from magic_chat
 httpx>=0.27.0,<0.28.0
