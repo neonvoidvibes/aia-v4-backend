@@ -2073,10 +2073,11 @@ When you identify information that should be permanently stored in your agent do
             last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
             last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
             
-            # Fetch agent-specific keys for RAG (OpenAI) and Chat (Anthropic/Google)
+            # Fetch agent-specific keys for RAG (OpenAI and Anthropic) and Chat (Anthropic/Google/OpenAI)
             openai_key_for_rag = get_api_key(agent_name, 'openai')
-            
-            # Determine which LLM provider key to get
+            anthropic_key_for_rag = get_api_key(agent_name, 'anthropic')
+
+            # Determine which LLM provider key to get for the main chat
             if model_selection.startswith('gemini'):
                 llm_provider = 'google'
             elif model_selection.startswith('gpt-'):
@@ -2093,13 +2094,13 @@ When you identify information that should be permanently stored in your agent do
                 if not is_simple_query:
                     logger.info(f"Complex query ('{normalized_query[:50]}...'), attempting RAG.")
                     try:
-                        # Pass the agent-specific key to the retriever
-                        retriever = RetrievalHandler( # MODIFIED: Use a shared index name
+                        # Pass the agent-specific keys to the retriever
+                        retriever = RetrievalHandler(
                             index_name="river",
                             agent_name=agent_name,
                             session_id=chat_session_id_log,
                             event_id=event_id,
-                            anthropic_client=anthropic_client,
+                            anthropic_api_key=anthropic_key_for_rag,
                             openai_api_key=openai_key_for_rag
                         )
                         retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=10)

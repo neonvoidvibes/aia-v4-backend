@@ -53,12 +53,12 @@ class RetrievalHandler:
         event_id: Optional[str] = None,
         final_top_k: int = 10,
         initial_fetch_k: int = 100, # Fetch a larger pool for better re-ranking
-        anthropic_client: Optional[Anthropic] = None, # Expect client instance
+        anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None # Agent-specific key
     ):
         """Initialize retrieval handler."""
         if not agent_name: raise ValueError("agent_name required")
-        if not anthropic_client: raise ValueError("anthropic_client required for query transformation")
+        if not anthropic_api_key: raise ValueError("anthropic_api_key required for query transformation")
 
         self.index_name = index_name
         self.namespace = agent_name
@@ -67,7 +67,7 @@ class RetrievalHandler:
         self.final_top_k = final_top_k
         self.initial_fetch_k = initial_fetch_k
         self.embedding_model_name = "text-embedding-ada-002"
-        self.anthropic_client = anthropic_client # Store client instance
+        self.anthropic_api_key = anthropic_api_key
 
         try:
             # Initialize embeddings with the provided key. If None, it will fall back to the env var.
@@ -98,15 +98,13 @@ class RetrievalHandler:
         """Uses LLM to rewrite the query for better vector search."""
         logger.debug(f"Transforming query: '{query}'")
         try:
-            # Use a smaller/faster model for transformation if available and cost-effective
-            # model_for_transform = "claude-3-haiku-20240307"
-            # For now, use the main client's default or passed model if needed
-            # Note: This adds an extra LLM call.
+            # NEW: Create a transient client with the correct agent-specific key
+            transient_client = Anthropic(api_key=self.anthropic_api_key)
 
             prompt = DEFAULT_QUERY_TRANSFORM_PROMPT.format(user_query=query)
 
-            # Using non-streaming call for simplicity here
-            message = self.anthropic_client.messages.create(
+            # Use the new transient client
+            message = transient_client.messages.create(
                  # Consider using a faster/cheaper model if possible for this task
                  model="claude-3-haiku-20240307",
                  max_tokens=100, # Should be short
