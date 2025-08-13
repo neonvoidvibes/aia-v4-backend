@@ -32,6 +32,7 @@ webrtcvad>=2.0.10,<3.0.0  # Use version from magic_app reqs snapshot
 requests>=2.32.3,<3.0.0   # Use version from magic_app reqs snapshot
 pytz>=2024.1             # Added for timezone handling in magic_audio
 supabase>=2.5.0          # Added for Supabase integration
+gotrue-py>=2.0.0,<3.0.0
 ffmpeg
 
 # Utilities
