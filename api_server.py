@@ -18,7 +18,6 @@ import uuid
 from collections import defaultdict
 import subprocess 
 import re
-import asyncio
 from werkzeug.utils import secure_filename # Added for file uploads
 
 from utils.api_key_manager import get_api_key # Import the new key manager
@@ -1154,23 +1153,33 @@ def audio_stream_socket(ws, session_id: str):
         active_sessions[session_id]["is_active"] = True 
         logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
-    # Server-side keepalive task
-    async def _server_keepalive(ws, session_id, interval=15, log=logger):
+    # Server-side keepalive using threading
+    def _server_keepalive_thread(ws, session_id, interval=15, log=logger):
         # app-level keepalive to satisfy proxies; pairs with client's 'pong' handler
         try:
             while True:
-                await asyncio.sleep(interval)
+                time.sleep(interval)
+                # Check if session is still active
+                if session_id not in active_sessions or not active_sessions[session_id].get("is_active"):
+                    log.info(f"WS {session_id}: Session no longer active, stopping keepalive")
+                    break
                 try:
                     ws.send(json.dumps({"type": "ping"}))
+                    log.debug(f"WS {session_id}: Server keepalive ping sent")
                 except Exception as e:
                     log.warning(f"WS {session_id}: keepalive send failed: {e}")
                     break
-        except asyncio.CancelledError:
-            pass
+        except Exception as e:
+            log.error(f"WS {session_id}: keepalive thread error: {e}")
 
-    # start task and store handle so we can cancel later
-    keepalive_task = asyncio.create_task(_server_keepalive(ws, session_id))
-    active_sessions[session_id]["keepalive_task"] = keepalive_task
+    # Start keepalive thread
+    keepalive_thread = threading.Thread(
+        target=_server_keepalive_thread, 
+        args=(ws, session_id), 
+        daemon=True
+    )
+    keepalive_thread.start()
+    active_sessions[session_id]["keepalive_thread"] = keepalive_thread
 
     AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15 
 
@@ -1457,10 +1466,13 @@ def audio_stream_socket(ws, session_id: str):
         with session_locks[session_id]:
             sess = active_sessions.get(session_id)
             if sess:
-                # cancel server keepalive
-                task = sess.pop("keepalive_task", None)
-                if task:
-                    task.cancel()
+                # Stop server keepalive thread by marking session as inactive
+                # The thread will check this and exit naturally
+                sess["is_active"] = False
+                keepalive_thread = sess.pop("keepalive_thread", None)
+                if keepalive_thread and keepalive_thread.is_alive():
+                    logger.debug(f"Session {session_id}: Keepalive thread will stop naturally")
+                
                 # clear WS pointer so a new client can connect
                 if sess.get("websocket_connection") == ws:
                     sess["websocket_connection"] = None
