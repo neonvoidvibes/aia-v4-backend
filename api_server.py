@@ -18,6 +18,7 @@ import uuid
 from collections import defaultdict
 import subprocess 
 import re
+import asyncio
 from werkzeug.utils import secure_filename # Added for file uploads
 
 from utils.api_key_manager import get_api_key # Import the new key manager
@@ -1153,6 +1154,24 @@ def audio_stream_socket(ws, session_id: str):
         active_sessions[session_id]["is_active"] = True 
         logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
+    # Server-side keepalive task
+    async def _server_keepalive(ws, session_id, interval=15, log=logger):
+        # app-level keepalive to satisfy proxies; pairs with client's 'pong' handler
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    ws.send(json.dumps({"type": "ping"}))
+                except Exception as e:
+                    log.warning(f"WS {session_id}: keepalive send failed: {e}")
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    # start task and store handle so we can cancel later
+    keepalive_task = asyncio.create_task(_server_keepalive(ws, session_id))
+    active_sessions[session_id]["keepalive_task"] = keepalive_task
+
     AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15 
 
     try:
@@ -1436,10 +1455,21 @@ def audio_stream_socket(ws, session_id: str):
     finally:
         logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected. Deregistering from session.")
         with session_locks[session_id]:
-            if session_id in active_sessions and active_sessions[session_id].get("websocket_connection") == ws:
-                active_sessions[session_id]["websocket_connection"] = None
-                active_sessions[session_id]["last_activity_timestamp"] = time.time() # Start the idle timer
-                logger.debug(f"Session {session_id} WebSocket instance deregistered. Idle cleanup thread will handle finalization if needed.")
+            sess = active_sessions.get(session_id)
+            if sess:
+                # cancel server keepalive
+                task = sess.pop("keepalive_task", None)
+                if task:
+                    task.cancel()
+                # clear WS pointer so a new client can connect
+                if sess.get("websocket_connection") == ws:
+                    sess["websocket_connection"] = None
+                    sess["last_activity_timestamp"] = time.time() # Start the idle timer
+                    logger.debug(f"Session {session_id} WebSocket instance deregistered. Idle cleanup thread will handle finalization if needed.")
+        try:
+            ws.close()
+        except Exception:
+            pass
         
 
 @app.route('/api/recording/status', methods=['GET'])
