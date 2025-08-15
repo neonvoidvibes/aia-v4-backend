@@ -2824,10 +2824,10 @@ def list_chat_history(user: SupabaseUser):
         agent_id = agent_result.data['id']
 
         history_result = client.table('chat_history') \
-            .select('id, title, updated_at, agent_id, messages') \
+            .select('id, title, last_message_at, agent_id, messages') \
             .eq('user_id', user.id) \
             .eq('agent_id', agent_id) \
-            .order('updated_at', desc=True).limit(100).execute()
+            .order('last_message_at', desc=True).limit(100).execute()
 
         if not history_result.data:
             return jsonify([])
@@ -2874,7 +2874,7 @@ def list_chat_history(user: SupabaseUser):
             formatted_history.append({
                 'id': chat_id,
                 'title': chat['title'],
-                'updatedAt': chat['updated_at'],
+                'updatedAt': chat['last_message_at'],
                 'agentId': chat['agent_id'],
                 'agentName': agent_name,
                 'isConversationSaved': is_convo_saved,
