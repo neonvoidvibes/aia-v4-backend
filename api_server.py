@@ -2703,6 +2703,7 @@ def save_chat_history(user: SupabaseUser):
     chat_id = data.get('chatId')
     title = data.get('title')
     last_message_id = data.get('lastMessageId') # New field
+    client_session_id = data.get('clientSessionId') or data.get('client_session_id')
     if not agent_name or not messages:
         return jsonify({'error': 'Agent name and messages are required'}), 400
     
@@ -2722,12 +2723,38 @@ def save_chat_history(user: SupabaseUser):
             update_payload = {
                 'title': title,
                 'messages': messages,
+                'updated_at': 'now()',
+                'last_message_at': 'now()',
             }
             if last_message_id:
                 update_payload['last_message_id_at_save'] = last_message_id
 
             result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
         else:
+            # Idempotent creation by client_session_id, if provided
+            if client_session_id:
+                try:
+                    existing = client.table('chat_history') \
+                        .select('id, title') \
+                        .eq('user_id', user.id) \
+                        .eq('agent_id', agent_id) \
+                        .eq('client_session_id', client_session_id) \
+                        .single().execute()
+                except Exception:
+                    existing = None
+                if existing and existing.data:
+                    chat_id = existing.data['id']
+                    update_payload = {
+                        'title': title,
+                        'messages': messages,
+                        'updated_at': 'now()',
+                        'last_message_at': 'now()',
+                    }
+                    if last_message_id:
+                        update_payload['last_message_id_at_save'] = last_message_id
+                    client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+                    return jsonify({'success': True, 'chatId': chat_id, 'title': existing.data.get('title', title)})
+
             # Before creating a new chat, check for recent duplicates to prevent race condition artifacts
             # Look for chats created in the last 60 seconds with the same title and agent (increased from 30s)
             from datetime import datetime, timedelta
@@ -2781,6 +2808,9 @@ def save_chat_history(user: SupabaseUser):
                         'agent_id': agent_id,
                         'title': title,
                         'messages': messages,
+                        'client_session_id': client_session_id,
+                        'updated_at': 'now()',
+                        'last_message_at': 'now()',
                     }
                     if last_message_id:
                         insert_payload['last_message_id_at_save'] = last_message_id
@@ -2795,6 +2825,9 @@ def save_chat_history(user: SupabaseUser):
                     'agent_id': agent_id,
                     'title': title,
                     'messages': messages,
+                    'client_session_id': client_session_id,
+                    'updated_at': 'now()',
+                    'last_message_at': 'now()',
                 }
                 if last_message_id:
                     insert_payload['last_message_id_at_save'] = last_message_id
