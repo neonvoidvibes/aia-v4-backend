@@ -3244,6 +3244,39 @@ def delete_conversation(user: SupabaseUser):
         return jsonify({'error': 'An internal server error occurred'}), 500
 
 
+@app.route('/api/agents/capabilities', methods=['POST'])
+@supabase_auth_required(agent_required=False) # Requires auth, but not a specific agent
+def get_agents_capabilities(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_names = data.get('agent_names')
+
+    if not isinstance(agent_names, list):
+        return jsonify({"error": "agent_names must be a list"}), 400
+
+    logger.info(f"Checking capabilities for {len(agent_names)} agents for user {user.id}")
+    capabilities = {}
+    try:
+        pc = init_pinecone()
+        if not pc:
+            raise Exception("Pinecone client not initialized")
+        
+        index = pc.Index("river")
+        index_stats = index.describe_index_stats()
+        
+        for name in agent_names:
+            # Check from the already fetched stats to avoid multiple API calls to Pinecone
+            exists = name in index_stats.namespaces
+            capabilities[name] = {"pinecone_index_exists": exists}
+            
+        return jsonify(capabilities), 200
+    except Exception as e:
+        logger.error(f"Error checking agent capabilities: {e}", exc_info=True)
+        # Return a failure state for all agents if the check fails
+        for name in agent_names:
+            capabilities[name] = {"pinecone_index_exists": False}
+        return jsonify(capabilities), 500
+
+
 def cleanup_idle_sessions():
     while True:
         time.sleep(30)
