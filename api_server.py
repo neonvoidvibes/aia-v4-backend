@@ -2198,6 +2198,7 @@ def handle_chat(user: SupabaseUser):
     individual_memory_toggle_states = data.get('individualMemoryToggleStates', {})
     saved_transcript_summaries = data.get('savedTranscriptSummaries', [])
     initial_context_for_aicreator = data.get('initialContext')
+    current_draft_content_for_aicreator = data.get('currentDraftContent') # New
 
     def generate_stream():
         """
@@ -2230,9 +2231,14 @@ def handle_chat(user: SupabaseUser):
             final_system_prompt = base_system_prompt
             
             # Special handling for the _aicreator agent to inject context
-            if agent_name == '_aicreator' and initial_context_for_aicreator:
-                logger.info(f"Injecting initial context for _aicreator agent (length: {len(initial_context_for_aicreator)}).")
-                final_system_prompt += f"\n\n## Provided Document Context\nThe user has uploaded the following documents. Use them as context to help draft the system prompt.\n\n{initial_context_for_aicreator}"
+            if agent_name == '_aicreator':
+                if initial_context_for_aicreator:
+                    logger.info(f"Injecting initial document context for _aicreator agent (length: {len(initial_context_for_aicreator)}).")
+                    final_system_prompt += f"\n\n## Provided Document Context\nThe user has uploaded the following documents. Use them as context to help draft the system prompt.\n\n{initial_context_for_aicreator}"
+                if current_draft_content_for_aicreator:
+                    logger.info(f"Injecting current draft context for _aicreator agent (length: {len(current_draft_content_for_aicreator)}).")
+                    final_system_prompt += f"\n\n## Current Draft in Editor\nThe user has already started drafting the prompt in their editor. Your task is to build upon or refine this existing draft based on your conversation. Here is the current content:\n\n{current_draft_content_for_aicreator}"
+
 
             # Add the Objective Function / Core Directive with explicit instructions on its priority
             if objective_function:
@@ -2289,6 +2295,11 @@ When you identify information that should be permanently stored in your agent do
             # We need the original, unformatted message for RAG
             last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
             last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
+
+            # Disable RAG for the special agent creator
+            if agent_name == '_aicreator':
+                logger.info("Bypassing RAG for _aicreator agent.")
+                last_actual_user_message_for_rag = None
             
             # Fetch agent-specific keys for RAG (OpenAI and Anthropic) and Chat (Anthropic/Google/OpenAI)
             openai_key_for_rag = get_api_key(agent_name, 'openai')
