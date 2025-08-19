@@ -139,9 +139,12 @@ def main():
             if config.index: # Only initialize if an index name is provided
                 try:
                      retriever = RetrievalHandler(
-                         index_name=config.index, agent_name=config.agent_name,
-                         session_id=config.session_id, event_id=config.event_id,
-                         anthropic_client=client
+                         index_name=config.index,
+                         agent_name=config.agent_name,
+                         session_id=config.session_id,
+                         event_id=config.event_id,
+                         anthropic_api_key=config.anthropic_api_key,
+                         openai_api_key=config.openai_api_key
                      )
                      logger.info(f"CLI: Retriever initialized for index '{config.index}'.")
                 except Exception as e:

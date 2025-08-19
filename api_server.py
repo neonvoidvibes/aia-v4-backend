@@ -2416,7 +2416,7 @@ def reinforce_memory_route(user: SupabaseUser):
         retriever = RetrievalHandler(
             index_name="river",
             agent_name=agent_name,
-            anthropic_client=anthropic_client, # Pass the global client
+            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
             openai_api_key=get_api_key(agent_name, 'openai')
         )
         
