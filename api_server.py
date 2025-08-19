@@ -43,6 +43,7 @@ from utils.s3_utils import (
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.pinecone_utils import init_pinecone, create_namespace
+from utils.embedding_handler import EmbeddingHandler
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
 import anthropic # Need the module itself for type hints
@@ -1946,64 +1947,101 @@ def list_managed_agents(user: SupabaseUser):
 @supabase_auth_required(agent_required=False) # Role check is handled by the inner decorator.
 @admin_or_super_user_required
 def create_agent(user: SupabaseUser):
-    """Creates a new agent, including S3 structure, DB entries, and Pinecone namespace."""
-    data = g.get('json_data', {})
-    agent_name = data.get('agent_name')
-    description = data.get('description')
-
-    if not agent_name:
+    """Creates a new agent from multipart/form-data, including S3 structure, DB entries, documents, and Pinecone namespace."""
+    if 'agent_name' not in request.form:
         return jsonify({"error": "Missing required field: agent_name"}), 400
 
+    agent_name = request.form['agent_name']
+    description = request.form.get('description', '')
+    system_prompt_content = request.form.get('system_prompt_content')
+    api_keys_json = request.form.get('api_keys') # Expecting a JSON string
+
     client = get_supabase_client()
-    if not client:
-        return jsonify({"error": "Database service unavailable"}), 503
+    if not client: return jsonify({"error": "Database service unavailable"}), 503
 
     try:
-        # Step 1: Check if agent already exists in DB
+        # === Step 1: Pre-flight checks ===
         existing_agent = client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
         if existing_agent.data:
             return jsonify({"error": f"Agent with name '{agent_name}' already exists."}), 409
 
-        # Step 2: Create S3 folder structure
-        s3_success = create_agent_structure(agent_name)
-        if not s3_success:
-            return jsonify({"error": "Failed to create agent folder structure in S3. The template might be missing."}), 500
+        # === Step 2: Foundational Setup (S3, DB, Pinecone) ===
+        if not create_agent_structure(agent_name):
+            return jsonify({"error": "Failed to create agent folder structure in S3."}), 500
+        if not create_namespace("river", agent_name):
+            logger.warning(f"Could not initialize Pinecone namespace for '{agent_name}'. This can be fixed later.")
 
-        # Step 3: Insert new agent into Supabase 'agents' table
-        agent_res = client.table("agents").insert({
-            "name": agent_name,
-            "description": description,
-            "created_by": user.id
-        }).execute()
-
+        agent_res = client.table("agents").insert({"name": agent_name, "description": description, "created_by": user.id}).execute()
         if hasattr(agent_res, 'error') and agent_res.error:
-            logger.error(f"Failed to insert new agent '{agent_name}' into DB: {agent_res.error}")
-            return jsonify({"error": "Database error while creating agent record."}), 500
-        
+            raise Exception(f"DB error creating agent record: {agent_res.error}")
         agent_id = agent_res.data[0]['id']
-        logger.info(f"Successfully created agent '{agent_name}' with ID '{agent_id}' in DB.")
+        logger.info(f"Created agent '{agent_name}' (ID: {agent_id}) in database.")
+        
+        client.table("user_agent_access").insert({"user_id": user.id, "agent_id": agent_id}).execute()
 
-        # Step 4: Grant access to the creating user
-        access_res = client.table("user_agent_access").insert({
-            "user_id": user.id,
-            "agent_id": agent_id
-        }).execute()
+        # === Step 3: Process Uploaded Files ===
+        # S3 Docs (Core Knowledge)
+        s3_docs = request.files.getlist('s3_docs')
+        for doc in s3_docs:
+            filename = secure_filename(doc.filename)
+            content = doc.read().decode('utf-8')
+            write_agent_doc(agent_name, filename, content)
+            logger.info(f"Uploaded S3 doc '{filename}' for agent '{agent_name}'.")
 
-        if hasattr(access_res, 'error') and access_res.error:
-            # This is a non-fatal error, log it and continue.
-            logger.error(f"Failed to grant initial access for creator {user.id} to new agent {agent_name}: {access_res.error}")
+        # Pinecone Docs (Vector Memory)
+        pinecone_docs = request.files.getlist('pinecone_docs')
+        if pinecone_docs:
+            embed_handler = EmbeddingHandler(index_name="river", namespace=agent_name)
+            temp_dir = os.path.join('tmp', 'embedding_uploads', str(uuid.uuid4()))
+            os.makedirs(temp_dir, exist_ok=True)
+            try:
+                for doc in pinecone_docs:
+                    filename = secure_filename(doc.filename)
+                    temp_path = os.path.join(temp_dir, filename)
+                    doc.save(temp_path)
+                    
+                    with open(temp_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    metadata = {"source": "agent_creation_upload", "file_name": filename, "agent_name": agent_name}
+                    embed_handler.embed_and_upsert(content, metadata)
+                    logger.info(f"Embedded Pinecone doc '{filename}' for agent '{agent_name}'.")
+            finally:
+                import shutil
+                shutil.rmtree(temp_dir)
 
-        # Step 5: Create Pinecone namespace
-        pinecone_success = create_namespace("river", agent_name)
-        if not pinecone_success:
-            # Also a non-fatal error for the creation process.
-            logger.error(f"Failed to create Pinecone namespace for agent '{agent_name}'. This can be done manually.")
+        # === Step 4: Save System Prompt ===
+        if system_prompt_content:
+            prompt_filename = f"systemprompt_aID-{agent_name}.md"
+            write_agent_doc(agent_name, prompt_filename, system_prompt_content)
+            logger.info(f"Saved system prompt for agent '{agent_name}'.")
 
+        # === Step 5: Save API Keys ===
+        if api_keys_json:
+            try:
+                api_keys = json.loads(api_keys_json)
+                keys_to_insert = []
+                for service, key in api_keys.items():
+                    if key: # Only insert if a key was provided
+                        keys_to_insert.append({
+                            "agent_id": agent_id,
+                            "service_name": service,
+                            "api_key": key
+                        })
+                if keys_to_insert:
+                    client.table("agent_api_keys").insert(keys_to_insert).execute()
+                    logger.info(f"Saved {len(keys_to_insert)} API keys for agent '{agent_name}'.")
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"Could not parse or process API keys for agent '{agent_name}': {e}")
+        
         return jsonify({"status": "success", "message": f"Agent '{agent_name}' created successfully.", "agent": agent_res.data[0]}), 201
 
     except Exception as e:
         logger.error(f"Unexpected error creating agent '{agent_name}': {e}", exc_info=True)
-        return jsonify({"error": "An internal server error occurred during agent creation."}), 500
+        # Attempt to clean up failed agent creation from DB
+        if 'agent_id' in locals():
+            client.table("agents").delete().eq("id", agent_id).execute()
+        return jsonify({"error": "An internal server error occurred during agent creation. The operation was rolled back."}), 500
 
 @app.route('/api/agent/warm-up', methods=['POST'])
 @supabase_auth_required(agent_required=True)
@@ -2141,6 +2179,7 @@ def handle_chat(user: SupabaseUser):
     # Extract new individual memory toggle data
     individual_memory_toggle_states = data.get('individualMemoryToggleStates', {})
     saved_transcript_summaries = data.get('savedTranscriptSummaries', [])
+    initial_context_for_aicreator = data.get('initialContext')
 
     def generate_stream():
         """
@@ -2172,6 +2211,11 @@ def handle_chat(user: SupabaseUser):
             # Start with the base system prompt (personality)
             final_system_prompt = base_system_prompt
             
+            # Special handling for the _aicreator agent to inject context
+            if agent_name == '_aicreator' and initial_context_for_aicreator:
+                logger.info(f"Injecting initial context for _aicreator agent (length: {len(initial_context_for_aicreator)}).")
+                final_system_prompt += f"\n\n## Provided Document Context\nThe user has uploaded the following documents. Use them as context to help draft the system prompt.\n\n{initial_context_for_aicreator}"
+
             # Add the Objective Function / Core Directive with explicit instructions on its priority
             if objective_function:
                 final_system_prompt += "\n\n## Core Directive (Objective Function)\n"
