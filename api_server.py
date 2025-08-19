@@ -2198,7 +2198,8 @@ def handle_chat(user: SupabaseUser):
     individual_memory_toggle_states = data.get('individualMemoryToggleStates', {})
     saved_transcript_summaries = data.get('savedTranscriptSummaries', [])
     initial_context_for_aicreator = data.get('initialContext')
-    current_draft_content_for_aicreator = data.get('currentDraftContent') # New
+    current_draft_content_for_aicreator = data.get('currentDraftContent')
+    disable_retrieval = data.get('disableRetrieval', False) # New
 
     def generate_stream():
         """
@@ -2296,9 +2297,9 @@ When you identify information that should be permanently stored in your agent do
             last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
             last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
 
-            # Disable RAG for the special agent creator
-            if agent_name == '_aicreator':
-                logger.info("Bypassing RAG for _aicreator agent.")
+            # Disable RAG if the client requests it (e.g., for the agent creation process)
+            if disable_retrieval:
+                logger.info("RAG pipeline disabled for this request as per client instruction.")
                 last_actual_user_message_for_rag = None
             
             # Fetch agent-specific keys for RAG (OpenAI and Anthropic) and Chat (Anthropic/Google/OpenAI)
