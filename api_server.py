@@ -578,16 +578,34 @@ def supabase_auth_required(agent_required: bool = True):
                     agent_name_from_payload = g.json_data.get('agentName')
                 elif 'agent' in request.args: # Fallback for GET requests
                     agent_name_from_payload = request.args.get('agent')
+
+            # Special case for the immutable agent creator: user must be an admin/super user.
+            if agent_name_from_payload == '_aicreator':
+                user = verify_user(token)
+                if not user:
+                    return jsonify({"error": "Unauthorized: Invalid or missing token for _aicreator"}), 401
+                
+                role = get_user_role(user.id)
+                if role not in ['admin', 'super user']:
+                    logger.warning(f"Forbidden: User {user.id} with role '{role}' tried to access special agent '_aicreator'.")
+                    return jsonify({"error": "Forbidden: Access to this agent requires administrative privileges."}), 403
+
+                logger.info(f"Access granted for special agent '_aicreator' to user {user.id} with role '{role}'.")
+                return f(user=user, *args, **kwargs)
             
             try:
                 user, error_response = verify_user_agent_access_with_retry(token, agent_name_from_payload if agent_required else None)
+                if error_response:
+                    return error_response
+                if not user: # Should be caught by error_response, but as a safeguard
+                    return jsonify({"error": "Unauthorized"}), 401
+                return f(user=user, *args, **kwargs)
             except RetryError as e:
                 logger.error(f"Authorization failed after multiple retries: {e}", exc_info=True)
                 return jsonify({"error": "Authorization service is temporarily unavailable. Please try again."}), 503
-
-            if error_response:
-                return error_response
-            return f(user=user, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"Unhandled exception during authorization: {e}", exc_info=True)
+                return jsonify({"error": "Internal server error during authorization."}), 500
         return decorated_function
     return decorator
 
