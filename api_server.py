@@ -39,10 +39,10 @@ from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
     list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries, get_objective_function,
-    write_agent_doc, S3_CACHE_LOCK, S3_FILE_CACHE
+    write_agent_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
-from utils.pinecone_utils import init_pinecone
+from utils.pinecone_utils import init_pinecone, create_namespace
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
 import anthropic # Need the module itself for type hints
@@ -501,6 +501,37 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         return None, jsonify({"error": "Internal server error during authorization"}, 500)
 
 import httpx
+
+def get_user_role(user_id: str) -> Optional[str]:
+    """Retrieves a user's role from the database."""
+    client = get_supabase_client()
+    if not client:
+        logger.error(f"Cannot get role for user {user_id}: Supabase client not available.")
+        return None
+    try:
+        res = client.table("user_roles").select("role").eq("user_id", user_id).single().execute()
+        if hasattr(res, 'error') and res.error:
+            # It's normal for a user to not have a role, so we log this at a debug level.
+            logger.debug(f"Could not retrieve role for user {user_id}: {res.error}")
+            return None
+        return res.data.get("role") if res.data else None
+    except Exception as e:
+        logger.error(f"Unexpected error fetching role for user {user_id}: {e}", exc_info=True)
+        return None
+
+def admin_or_super_user_required(f):
+    """Decorator to protect routes, allowing access only to 'admin' or 'super user' roles."""
+    @wraps(f)
+    def decorated_function(user: SupabaseUser, *args, **kwargs):
+        role = get_user_role(user.id)
+        if role not in ['admin', 'super user']:
+            logger.warning(f"Forbidden: User {user.id} with role '{role}' tried to access an admin route.")
+            return jsonify({"error": "Forbidden: Administrator or super user access required."}), 403
+        
+        logger.info(f"Access granted for admin route to user {user.id} with role '{role}'.")
+        # The original function expects 'user' as a keyword argument from the supabase_auth_required decorator.
+        return f(user=user, *args, **kwargs)
+    return decorated_function
 
 # Generic retry strategy for Supabase calls that might face transient network issues
 retry_strategy_supabase = retry(
@@ -1891,6 +1922,88 @@ def update_agent_doc(user: SupabaseUser):
     else:
         return jsonify({"error": "Failed to update documentation file in S3"}), 500
 
+
+@app.route('/api/agent/list-managed', methods=['GET'])
+@supabase_auth_required(agent_required=False) # The inner decorator handles role check.
+@admin_or_super_user_required
+def list_managed_agents(user: SupabaseUser):
+    """Lists all agents for management purposes."""
+    client = get_supabase_client()
+    if not client:
+        return jsonify({"error": "Database service unavailable"}), 503
+    try:
+        response = client.table("agents").select("id, name, description, created_at").order("name", desc=False).execute()
+        if hasattr(response, 'error') and response.error:
+            logger.error(f"Admin Dashboard: Error querying agents: {response.error}")
+            return jsonify({"error": "Database error querying agents"}), 500
+        
+        return jsonify(response.data), 200
+    except Exception as e:
+        logger.error(f"Admin Dashboard: Unexpected error listing agents: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/api/agent/create', methods=['POST'])
+@supabase_auth_required(agent_required=False) # Role check is handled by the inner decorator.
+@admin_or_super_user_required
+def create_agent(user: SupabaseUser):
+    """Creates a new agent, including S3 structure, DB entries, and Pinecone namespace."""
+    data = g.get('json_data', {})
+    agent_name = data.get('agent_name')
+    description = data.get('description')
+
+    if not agent_name:
+        return jsonify({"error": "Missing required field: agent_name"}), 400
+
+    client = get_supabase_client()
+    if not client:
+        return jsonify({"error": "Database service unavailable"}), 503
+
+    try:
+        # Step 1: Check if agent already exists in DB
+        existing_agent = client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
+        if existing_agent.data:
+            return jsonify({"error": f"Agent with name '{agent_name}' already exists."}), 409
+
+        # Step 2: Create S3 folder structure
+        s3_success = create_agent_structure(agent_name)
+        if not s3_success:
+            return jsonify({"error": "Failed to create agent folder structure in S3. The template might be missing."}), 500
+
+        # Step 3: Insert new agent into Supabase 'agents' table
+        agent_res = client.table("agents").insert({
+            "name": agent_name,
+            "description": description,
+            "created_by": user.id
+        }).execute()
+
+        if hasattr(agent_res, 'error') and agent_res.error:
+            logger.error(f"Failed to insert new agent '{agent_name}' into DB: {agent_res.error}")
+            return jsonify({"error": "Database error while creating agent record."}), 500
+        
+        agent_id = agent_res.data[0]['id']
+        logger.info(f"Successfully created agent '{agent_name}' with ID '{agent_id}' in DB.")
+
+        # Step 4: Grant access to the creating user
+        access_res = client.table("user_agent_access").insert({
+            "user_id": user.id,
+            "agent_id": agent_id
+        }).execute()
+
+        if hasattr(access_res, 'error') and access_res.error:
+            # This is a non-fatal error, log it and continue.
+            logger.error(f"Failed to grant initial access for creator {user.id} to new agent {agent_name}: {access_res.error}")
+
+        # Step 5: Create Pinecone namespace
+        pinecone_success = create_namespace("river", agent_name)
+        if not pinecone_success:
+            # Also a non-fatal error for the creation process.
+            logger.error(f"Failed to create Pinecone namespace for agent '{agent_name}'. This can be done manually.")
+
+        return jsonify({"status": "success", "message": f"Agent '{agent_name}' created successfully.", "agent": agent_res.data[0]}), 201
+
+    except Exception as e:
+        logger.error(f"Unexpected error creating agent '{agent_name}': {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred during agent creation."}), 500
 
 @app.route('/api/agent/warm-up', methods=['POST'])
 @supabase_auth_required(agent_required=True)

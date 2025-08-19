@@ -205,6 +205,61 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
         logger.error(f"S3 LIST [ERROR]: Error listing objects in S3 for prefix '{base_key_prefix}': {e}", exc_info=True)
         return []
 
+def create_agent_structure(agent_name: str) -> bool:
+    """
+    Creates the necessary S3 folder structure for a new agent by creating .placeholder files.
+    This method is robust and does not depend on a template folder's contents.
+    """
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error(f"Cannot create agent structure for '{agent_name}': S3 client or bucket not available.")
+        return False
+
+    base_prefix = f'organizations/river/agents/{agent_name}/'
+    
+    # Define the full folder structure that every agent needs.
+    required_folders = [
+        "_config/",
+        "docs/",
+        "events/0000/_config/",
+        "events/0000/attachments/",
+        "events/0000/chats/archive/",
+        "events/0000/chats/saved/",
+        "events/0000/insights/",
+        "events/0000/metadata/",
+        "events/0000/transcripts/archive/",
+        "events/0000/transcripts/saved/",
+        "events/0000/transcripts/summarized/",
+        "recordings/"
+    ]
+
+    try:
+        logger.info(f"Creating S3 structure for agent '{agent_name}' programmatically.")
+        
+        # Check if the target directory already exists to avoid accidental overwrites.
+        # We check for a placeholder in a core folder.
+        check_key = f"{base_prefix}_config/.placeholder"
+        try:
+            s3.head_object(Bucket=aws_s3_bucket, Key=check_key)
+            logger.warning(f"S3 structure for agent '{agent_name}' appears to already exist. Skipping creation.")
+            return True
+        except s3.exceptions.ClientError as e:
+            if e.response['Error']['Code'] != '404':
+                raise # Re-raise unexpected errors
+
+        # Create each folder by putting an empty .placeholder file in it.
+        for folder in required_folders:
+            placeholder_key = f"{base_prefix}{folder}.placeholder"
+            s3.put_object(Bucket=aws_s3_bucket, Key=placeholder_key, Body=b'')
+            logger.debug(f"Created S3 placeholder: {placeholder_key}")
+
+        logger.info(f"Successfully created {len(required_folders)} folders for agent '{agent_name}' in S3.")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error creating agent S3 structure for '{agent_name}': {e}", exc_info=True)
+        return False
 
 def find_file_any_extension(base_pattern: str, description: str) -> Optional[Tuple[str, str]]:
     """Find the most recent file matching base pattern with any extension in S3."""

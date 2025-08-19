@@ -5,6 +5,9 @@ import logging
 from typing import Optional, List
 from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
+from langchain_core.documents import Document
+from langchain_openai import OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
 # Import specific exception for finer control
 from pinecone.exceptions import NotFoundException
 
@@ -133,6 +136,37 @@ def delete_index(index_name: str) -> bool:
         return False # Or True, depending on desired idempotency behaviour. False seems safer.
     except Exception as e:
         logger.error(f"Error deleting index '{index_name}': {e}")
+        return False
+
+def create_namespace(index_name: str, namespace: str) -> bool:
+    """
+    Initializes a namespace in a Pinecone index by upserting a dummy document.
+    This is necessary because namespaces are created on first upsert.
+    """
+    try:
+        logger.info(f"Attempting to create/verify namespace '{namespace}' in index '{index_name}'...")
+        # A namespace is created upon the first upsert of a vector.
+        # We'll create a dummy document and upsert it.
+        dummy_doc = Document(
+            page_content="This is a dummy document to initialize the agent's memory space.",
+            metadata={"source": "initialization", "agent": namespace}
+        )
+        
+        # Initialize embeddings. This will use the OPENAI_API_KEY from the environment.
+        embeddings = OpenAIEmbeddings()
+
+        # Upsert the dummy document using Langchain's Pinecone integration.
+        PineconeVectorStore.from_documents(
+            documents=[dummy_doc],
+            embedding=embeddings,
+            index_name=index_name,
+            namespace=namespace
+        )
+        
+        logger.info(f"Successfully initialized namespace '{namespace}' in index '{index_name}'.")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create Pinecone namespace '{namespace}': {e}", exc_info=True)
         return False
 
 def get_index_stats(index_name: str) -> Optional[dict]:
