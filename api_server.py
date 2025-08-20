@@ -1961,6 +1961,31 @@ def list_managed_agents(user: SupabaseUser):
         logger.error(f"Admin Dashboard: Unexpected error listing agents: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
+@app.route('/api/agent/name-exists', methods=['GET'])
+@supabase_auth_required(agent_required=False) # Requires auth, but not a specific agent
+@admin_or_super_user_required
+def agent_name_exists(user: SupabaseUser):
+    agent_name = request.args.get('name')
+    if not agent_name:
+        return jsonify({"error": "Missing 'name' query parameter"}), 400
+
+    client = get_supabase_client()
+    if not client:
+        return jsonify({"error": "Database service unavailable"}), 503
+
+    try:
+        # Use count='exact' to get the total count of matching rows efficiently.
+        res = client.table("agents").select("id", count='exact').eq("name", agent_name).limit(1).execute()
+        
+        # The Supabase-py v2 client returns the count in the `count` attribute of the response
+        exists = res.count > 0 if hasattr(res, 'count') and res.count is not None else False
+        
+        logger.info(f"Checking for agent name '{agent_name}'. Exists: {exists}")
+        return jsonify({"exists": exists}), 200
+    except Exception as e:
+        logger.error(f"Error checking if agent name '{agent_name}' exists: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error during name check"}), 500
+
 @app.route('/api/agent/create', methods=['POST'])
 @supabase_auth_required(agent_required=False) # Role check is handled by the inner decorator.
 @admin_or_super_user_required
