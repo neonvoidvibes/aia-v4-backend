@@ -2425,34 +2425,34 @@ When you identify information that should be permanently stored in your agent do
 
             # --- Timestamped History Injection ---
             # This block formats the history with timestamps and injects it as a single context message.
-            # This is more robust against mimicry than prepending to every message.
-            timestamped_history_lines = [
-                "This is the conversation history with timestamps for your reference. Do not replicate this format in your responses."
-            ]
-
-            # We iterate through all messages and skip the last user message, which is sent separately.
-            for msg in incoming_messages:
-                if msg is last_user_message_obj: # last_user_message_obj is defined above in the RAG section
-                    continue
-
-                if msg.get("role") in ["user", "assistant"]:
-                    # Fallback to now() if createdAt is missing, though it should be present.
-                    timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
-                    role = msg.get("role")
-                    content = msg.get("content")
-                    timestamped_history_lines.append(f"[{timestamp}] {role}: {content}")
-            
-            # Join the lines into a single block
-            history_context_block = "\n".join(timestamped_history_lines)
-            
-            # The final message list sent to the LLM
-            # We replace the original message history with our formatted block.
-            # The last user message is appended separately to make it the immediate prompt.
-            llm_messages_from_client = [
-                {"role": "user", "content": f"=== CURRENT CHAT HISTORY ===\n{history_context_block}\n=== END CURRENT CHAT HISTORY ==="},
-                {"role": "user", "content": last_actual_user_message_for_rag if last_actual_user_message_for_rag else ""}
-            ]
-            final_llm_messages.extend(llm_messages_from_client)
+            if agent_name == '_aicreator':
+                # For the wizard, the history is simple. Just pass the messages through.
+                # The wizard's initial message is hardcoded on the frontend, we don't need to send it to the LLM.
+                llm_messages_from_client = [
+                    msg for msg in incoming_messages if msg.get("id") != 'initial-wizard-prompt'
+                ]
+                final_llm_messages.extend(llm_messages_from_client)
+            else:
+                # This block formats the history with timestamps for the main chat.
+                timestamped_history_lines = [
+                    "This is the conversation history with timestamps for your reference. Do not replicate this format in your responses."
+                ]
+                for msg in incoming_messages:
+                    if msg is last_user_message_obj:
+                        continue
+                    if msg.get("role") in ["user", "assistant"]:
+                        timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
+                        role = msg.get("role")
+                        content = msg.get("content")
+                        timestamped_history_lines.append(f"[{timestamp}] {role}: {content}")
+                
+                history_context_block = "\n".join(timestamped_history_lines)
+                
+                llm_messages_from_client = [
+                    {"role": "user", "content": f"=== CURRENT CHAT HISTORY ===\n{history_context_block}\n=== END CURRENT CHAT HISTORY ==="},
+                    {"role": "user", "content": last_actual_user_message_for_rag if last_actual_user_message_for_rag else ""}
+                ]
+                final_llm_messages.extend(llm_messages_from_client)
 
             # --- Call LLM and Stream ---
             max_tokens_for_call = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
