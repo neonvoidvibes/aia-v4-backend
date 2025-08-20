@@ -2244,33 +2244,39 @@ def handle_chat(user: SupabaseUser):
         This runs within the `stream_with_context` to handle the response generation.
         """
         try:
-            logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}")
-            logger.info(f"Stream settings - Listen: {transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}, Individual toggles: {len(individual_memory_toggle_states)} items")
+            # WIZARD DETECTION: A wizard session is defined by disabling retrieval and providing initial context.
+            is_wizard = disable_retrieval and initial_context_for_aicreator is not None
+            
+            # For wizard mode, enforce no transcript listening to save resources and avoid irrelevant I/O.
+            effective_transcript_listen_mode = "none" if is_wizard else transcript_listen_mode
+
+            logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}, Wizard Mode: {is_wizard}")
+            logger.info(f"Stream settings - Listen: {effective_transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}, Individual toggles: {len(individual_memory_toggle_states)} items")
 
             # --- System Prompt and Context Assembly ---
             s3_load_start_time = time.time()
-            objective_function = get_objective_function(agent_name)
+            
+            # Base prompt and frameworks are always loaded for both agent and wizard.
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
             frameworks = get_latest_frameworks(agent_name)
-            event_context = get_latest_context(agent_name, event_id)
-            agent_docs = get_agent_docs(agent_name)
+            
+            # Conditional loading for non-wizard sessions
+            objective_function = None
+            event_context = None
+            agent_docs = None
+            if not is_wizard:
+                objective_function = get_objective_function(agent_name)
+                event_context = get_latest_context(agent_name, event_id)
+                agent_docs = get_agent_docs(agent_name)
+
             s3_load_time = time.time() - s3_load_start_time
             logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
             
-            source_instr = "" # This instruction is now redundant and has been removed as per user request.
-            transcript_handling_instructions = (
-                "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
-                "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting. Very important: DO NOT summarize or analyze its content unless specifically asked by the user.\n"
-                "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These are chronological and should be considered the most current information.\n"
-                "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. DO NOT summarize or analyze its content unless specifically asked by the user."
-            )
             # CONSTRUCT PROMPT WITH HIERARCHY
-            # Start with the base system prompt (personality)
             final_system_prompt = base_system_prompt
             
-            # Special handling for the _aicreator agent to inject context
+            # Special handling for the _aicreator agent to inject context (this is the wizard)
             if agent_name == '_aicreator':
-                # NEW: Add strict instructions for behavior and output format.
                 ai_creator_instructions = """
 \n\n## Core Mission: AI Agent Prompt Creator
 You are an expert AI assistant who helps users draft high-quality system prompts for other AI agents. Engage in a collaborative conversation to refine the user's ideas into a precise and effective prompt.
@@ -2308,22 +2314,30 @@ I've updated the prompt to include the dragon's personality as you requested. It
                         "\n\n## User's Current Draft (Authoritative)\n"
                         "<current_draft>\n" + current_draft_content_for_aicreator + "\n</current_draft>"
                     )
-
-            # Add the Objective Function / Core Directive with explicit instructions on its priority
-            if objective_function:
-                final_system_prompt += "\n\n## Core Directive (Objective Function)\n"
-                final_system_prompt += "The following is your highest-priority, foundational objective. It is stable and rarely changes. It MUST be followed and overrides any conflicting instructions found in the 'Frameworks' or other contextual documents.\n\n"
-                final_system_prompt += objective_function
-
-            # Then add frameworks, context, docs, etc.
-            final_system_prompt += transcript_handling_instructions
-            if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
-            if event_context: final_system_prompt += "\n\n## Context\n" + event_context
-            if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
-            rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
-            final_system_prompt += rag_usage_instructions
             
-            # Memory update instructions with JSON Schema Draft 7
+            # Add other prompt components only if NOT in wizard mode
+            if not is_wizard:
+                if objective_function:
+                    final_system_prompt += "\n\n## Core Directive (Objective Function)\n"
+                    final_system_prompt += "The following is your highest-priority, foundational objective. It is stable and rarely changes. It MUST be followed and overrides any conflicting instructions found in the 'Frameworks' or other contextual documents.\n\n"
+                    final_system_prompt += objective_function
+                
+                transcript_handling_instructions = (
+                    "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
+                    "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting. Very important: DO NOT summarize or analyze its content unless specifically asked by the user.\n"
+                    "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These are chronological and should be considered the most current information.\n"
+                    "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. DO NOT summarize or analyze its content unless specifically asked by the user."
+                )
+                final_system_prompt += transcript_handling_instructions
+            
+            if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
+            
+            if not is_wizard:
+                if event_context: final_system_prompt += "\n\n## Context\n" + event_context
+                if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
+                rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
+                final_system_prompt += rag_usage_instructions
+            
             memory_update_instructions = """
 
 ## Memory Update Protocol
@@ -2360,165 +2374,107 @@ When you identify information that should be permanently stored in your agent do
 
             # --- RAG ---
             rag_context_block = ""
-            retrieved_docs_for_reinforcement = [] # Initialize here
-            # We need the original, unformatted message for RAG
-            last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
-            last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
+            retrieved_docs_for_reinforcement = []
+            
+            # RAG is completely skipped for wizard mode.
+            if not is_wizard:
+                last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
+                last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
+                
+                openai_key_for_rag = get_api_key(agent_name, 'openai')
+                anthropic_key_for_rag = get_api_key(agent_name, 'anthropic')
 
-            # Disable RAG if the client requests it (e.g., for the agent creation process)
-            if disable_retrieval:
-                logger.info("RAG pipeline disabled for this request as per client instruction.")
-                last_actual_user_message_for_rag = None
+                if last_actual_user_message_for_rag:
+                    rag_start_time = time.time()
+                    normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
+                    is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
+                    if not is_simple_query:
+                        logger.info(f"Complex query ('{normalized_query[:50]}...'), attempting RAG.")
+                        try:
+                            retriever = RetrievalHandler(
+                                index_name="river", agent_name=agent_name, session_id=chat_session_id_log,
+                                event_id=event_id, anthropic_api_key=anthropic_key_for_rag,
+                                openai_api_key=openai_key_for_rag
+                            )
+                            retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=10)
+                            retrieved_docs_for_reinforcement = retrieved_docs
+                            if retrieved_docs:
+                                items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Age: {d.metadata.get('age_display', 'Unknown')}, Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for d in retrieved_docs]
+                                rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
+                            else:
+                                rag_context_block = "\n\n[Note: No relevant documents found for this query via RAG.]"
+                        except Exception as e:
+                            logger.error(f"Unexpected RAG error: {e}", exc_info=True)
+                            rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
+                    else:
+                        rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
+                    rag_time = time.time() - rag_start_time
+                    logger.info(f"[PERF] RAG processing took {rag_time:.4f}s")
             
-            # Fetch agent-specific keys for RAG (OpenAI and Anthropic) and Chat (Anthropic/Google/OpenAI)
-            openai_key_for_rag = get_api_key(agent_name, 'openai')
-            anthropic_key_for_rag = get_api_key(agent_name, 'anthropic')
-
-            # Determine which LLM provider key to get for the main chat
-            if model_selection.startswith('gemini'):
-                llm_provider = 'google'
-            elif model_selection.startswith('gpt-'):
-                llm_provider = 'openai'
-            else: # Default to anthropic for 'claude' models or unknown
-                llm_provider = 'anthropic'
-            
-            llm_api_key = get_api_key(agent_name, llm_provider)
-            
-            if last_actual_user_message_for_rag:
-                rag_start_time = time.time()
-                normalized_query = last_actual_user_message_for_rag.strip().lower().rstrip('.!?')
-                is_simple_query = normalized_query in SIMPLE_QUERIES_TO_BYPASS_RAG
-                if not is_simple_query:
-                    logger.info(f"Complex query ('{normalized_query[:50]}...'), attempting RAG.")
-                    try:
-                        # Pass the agent-specific keys to the retriever
-                        retriever = RetrievalHandler(
-                            index_name="river",
-                            agent_name=agent_name,
-                            session_id=chat_session_id_log,
-                            event_id=event_id,
-                            anthropic_api_key=anthropic_key_for_rag,
-                            openai_api_key=openai_key_for_rag
-                        )
-                        retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=10)
-                        retrieved_docs_for_reinforcement = retrieved_docs # Store for reinforcement
-                        if retrieved_docs:
-                            items = []
-                            for d in retrieved_docs:
-                                age_display = d.metadata.get('age_display', 'Unknown')
-                                items.append(f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Age: {age_display}, Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---")
-                            
-                            rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
-                        else:
-                            rag_context_block = "\n\n[Note: No relevant documents found for this query via RAG.]"
-                    except Exception as e:
-                        logger.error(f"Unexpected RAG error: {e}", exc_info=True)
-                        rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
-                else:
-                    rag_context_block = "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Doc retrieval skipped for simple query.]\n=== END RETRIEVED CONTEXT ==="
-                rag_time = time.time() - rag_start_time
-                logger.info(f"[PERF] RAG processing took {rag_time:.4f}s")
             final_system_prompt += rag_context_block
 
-            # --- Summary & Transcript Loading ---
+            # --- Summary & Transcript Loading (non-wizard only) ---
             final_llm_messages = []
-            # Handle individual memory toggles (works regardless of main toggle state)
-            if individual_memory_toggle_states and saved_transcript_summaries:
-                summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
-                enabled_summaries_count = 0
-                
-                for summary_data in saved_transcript_summaries:
-                    # Use s3Key as the identifier to match frontend toggle states
-                    summary_key = summary_data.get('s3Key', summary_data.get('name', ''))
-                    
-                    # Check if this specific summary is enabled via individual toggle
-                    if individual_memory_toggle_states.get(summary_key, False):
-                        summary_filename = summary_data.get('name', 'unknown_summary.json')
-                        # Load the actual content from S3 using the s3Key
-                        if summary_key:
-                            from utils.s3_utils import read_file_content
-                            summary_content = read_file_content(summary_key, f"Individual summary {summary_filename}")
-                            if summary_content:
-                                try:
-                                    summary_doc = json.loads(summary_content)
-                                    summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
-                                    enabled_summaries_count += 1
-                                except json.JSONDecodeError:
-                                    logger.warning(f"Failed to parse JSON content for summary {summary_filename}")
-                
-                # Only add to prompt if we have enabled summaries
-                if enabled_summaries_count > 0:
-                    final_system_prompt = summaries_context_str + final_system_prompt
-                    logger.info(f"Added {enabled_summaries_count} individual transcript summaries to context")
-                else:
-                    logger.info("No individual transcript summaries enabled")
-            elif saved_transcript_memory_mode == 'enabled':
-                # Fallback to original "all summaries" behavior when main toggle is enabled but no individual data
-                summaries = get_transcript_summaries(agent_name, event_id)
-                if summaries:
+            if not is_wizard:
+                if individualMemoryToggleStates and saved_transcript_summaries:
                     summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
-                    for summary_doc in summaries:
-                        summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
-                        summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
-                    final_system_prompt = summaries_context_str + final_system_prompt
-                    logger.info(f"Added all transcript summaries to context (legacy mode)")
-            else:
-                logger.info("No transcript summaries to include (main toggle disabled, no individual toggles enabled)")
+                    enabled_summaries_count = 0
+                    for summary_data in saved_transcript_summaries:
+                        summary_key = summary_data.get('s3Key', summary_data.get('name', ''))
+                        if individual_memory_toggle_states.get(summary_key, False):
+                            summary_filename = summary_data.get('name', 'unknown_summary.json')
+                            if summary_key:
+                                from utils.s3_utils import read_file_content
+                                summary_content = read_file_content(summary_key, f"Individual summary {summary_filename}")
+                                if summary_content:
+                                    try:
+                                        summary_doc = json.loads(summary_content)
+                                        summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
+                                        enabled_summaries_count += 1
+                                    except json.JSONDecodeError: logger.warning(f"Failed to parse JSON content for summary {summary_filename}")
+                    if enabled_summaries_count > 0:
+                        final_system_prompt = summaries_context_str + final_system_prompt
+                        logger.info(f"Added {enabled_summaries_count} individual transcript summaries to context")
+                    else: logger.info("No individual transcript summaries enabled")
+                elif saved_transcript_memory_mode == 'enabled':
+                    summaries = get_transcript_summaries(agent_name, event_id)
+                    if summaries:
+                        summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
+                        for summary_doc in summaries:
+                            summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
+                            summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
+                        final_system_prompt = summaries_context_str + final_system_prompt
+                        logger.info(f"Added all transcript summaries to context (legacy mode)")
+                else:
+                    logger.info("No transcript summaries to include (main toggle disabled, no individual toggles enabled)")
 
-            if transcript_listen_mode == 'all':
-                all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
-                if all_transcripts_content:
-                    full_transcript_message_content = (
-                        f"IMPORTANT CONTEXT: The following is the FULL transcript history for this meeting, provided because 'Listen: All' mode is active.\n\n"
-                        f"=== BEGIN ALL TRANSCRIPTS FOR THIS TURN ===\n"
-                        f"{all_transcripts_content}\n"
-                        f"=== END ALL TRANSCRIPTS FOR THIS TURN ==="
-                    )
-                    final_llm_messages.append({'role': 'user', 'content': full_transcript_message_content})
-            elif transcript_listen_mode == 'latest':
-                transcript_content, success = read_new_transcript_content(agent_name, event_id)
-                if transcript_content:
-                    transcript_message_content = (
-                        f"IMPORTANT CONTEXT: The following is the content of the latest transcript file. "
-                        f"Refer to this as the most current information available.\n\n"
-                        f"=== BEGIN LATEST TRANSCRIPT ===\n"
-                        f"{transcript_content}\n"
-                        f"=== END LATEST TRANSCRIPT ==="
-                    )
-                    final_llm_messages.append({'role': 'user', 'content': transcript_message_content})
+                if effective_transcript_listen_mode == 'all':
+                    all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
+                    if all_transcripts_content: final_llm_messages.append({'role': 'user', 'content': f"IMPORTANT CONTEXT: The following is the FULL transcript history for this meeting, provided because 'Listen: All' mode is active.\n\n=== BEGIN ALL TRANSCRIPTS FOR THIS TURN ===\n{all_transcripts_content}\n=== END ALL TRANSCRIPTS FOR THIS TURN ==="})
+                elif effective_transcript_listen_mode == 'latest':
+                    transcript_content, success = read_new_transcript_content(agent_name, event_id)
+                    if transcript_content: final_llm_messages.append({'role': 'user', 'content': f"IMPORTANT CONTEXT: The following is the content of the latest transcript file. Refer to this as the most current information available.\n\n=== BEGIN LATEST TRANSCRIPT ===\n{transcript_content}\n=== END LATEST TRANSCRIPT ==="})
 
-            # --- Add Current Time to System Prompt ---
-            current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
-            final_system_prompt += f"\n\n## Current Time\nYour internal clock shows the current date and time is: **{current_utc_time}**."
+            # --- Add Current Time to System Prompt (non-wizard only) ---
+            if not is_wizard:
+                current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
+                final_system_prompt += f"\n\n## Current Time\nYour internal clock shows the current date and time is: **{current_utc_time}**."
 
             # --- Timestamped History Injection ---
-            # This block formats the history with timestamps and injects it as a single context message.
             if agent_name == '_aicreator':
-                # For the wizard, the history is simple. Just pass the messages through,
-                # but sanitize them to only include 'role' and 'content' as required by the API.
-                # The wizard's initial message is hardcoded on the frontend, so we filter it out.
-                llm_messages_from_client = [
-                    {"role": msg["role"], "content": msg["content"]}
-                    for msg in incoming_messages
-                    if msg.get("id") != 'initial-wizard-prompt' and "role" in msg and "content" in msg
-                ]
+                llm_messages_from_client = [{"role": msg["role"], "content": msg["content"]} for msg in incoming_messages if msg.get("id") != 'initial-wizard-prompt' and "role" in msg and "content" in msg]
                 final_llm_messages.extend(llm_messages_from_client)
             else:
-                # This block formats the history with timestamps for the main chat.
-                timestamped_history_lines = [
-                    "This is the conversation history with timestamps for your reference. Do not replicate this format in your responses."
-                ]
+                last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
+                last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
+                timestamped_history_lines = ["This is the conversation history with timestamps for your reference. Do not replicate this format in your responses."]
                 for msg in incoming_messages:
-                    if msg is last_user_message_obj:
-                        continue
+                    if msg is last_user_message_obj: continue
                     if msg.get("role") in ["user", "assistant"]:
                         timestamp = msg.get("createdAt", datetime.now(timezone.utc).isoformat())
-                        role = msg.get("role")
-                        content = msg.get("content")
+                        role = msg.get("role"); content = msg.get("content")
                         timestamped_history_lines.append(f"[{timestamp}] {role}: {content}")
-                
                 history_context_block = "\n".join(timestamped_history_lines)
-                
                 llm_messages_from_client = [
                     {"role": "user", "content": f"=== CURRENT CHAT HISTORY ===\n{history_context_block}\n=== END CURRENT CHAT HISTORY ==="},
                     {"role": "user", "content": last_actual_user_message_for_rag if last_actual_user_message_for_rag else ""}
@@ -2528,63 +2484,32 @@ When you identify information that should be permanently stored in your agent do
             # --- Call LLM and Stream ---
             max_tokens_for_call = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
 
+            # Determine which LLM provider key to get for the main chat
+            if model_selection.startswith('gemini'): llm_provider = 'google'
+            elif model_selection.startswith('gpt-'): llm_provider = 'openai'
+            else: llm_provider = 'anthropic'
+            llm_api_key = get_api_key(agent_name, llm_provider)
+
             try:
                 if model_selection.startswith('gemini'):
                     logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
-                    gemini_stream = _call_gemini_stream_with_retry(
-                        model_name=model_selection,
-                        max_tokens=max_tokens_for_call,
-                        system_instruction=final_system_prompt,
-                        messages=final_llm_messages,
-                        api_key=llm_api_key,
-                        temperature=temperature
-                    )
+                    gemini_stream = _call_gemini_stream_with_retry(model_name=model_selection, max_tokens=max_tokens_for_call, system_instruction=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key, temperature=temperature)
                     for chunk in gemini_stream:
-                        # The Gemini API may yield empty chunks, ensure parts exist.
-                        if chunk.parts:
-                            text_delta = chunk.text
-                            sse_data = json.dumps({'delta': text_delta})
-                            yield f"data: {sse_data}\n\n"
-
+                        if chunk.parts: yield f"data: {json.dumps({'delta': chunk.text})}\n\n"
                 elif model_selection.startswith('gpt-'):
                     logger.info(f"Dispatching chat request to OpenAI model: {model_selection}")
-                    openai_stream = _call_openai_stream_with_retry(
-                        model_name=model_selection,
-                        max_tokens=max_tokens_for_call,
-                        system_instruction=final_system_prompt,
-                        messages=final_llm_messages,
-                        api_key=llm_api_key,
-                        temperature=temperature
-                    )
+                    openai_stream = _call_openai_stream_with_retry(model_name=model_selection, max_tokens=max_tokens_for_call, system_instruction=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key, temperature=temperature)
                     with openai_stream as stream:
                         for event in stream:
-                            if getattr(event, "type", "") == "response.output_text.delta":
-                                text_delta = event.delta
-                                sse_data = json.dumps({'delta': text_delta})
-                                yield f"data: {sse_data}\n\n"
-                
+                            if getattr(event, "type", "") == "response.output_text.delta": yield f"data: {json.dumps({'delta': event.delta})}\n\n"
                 else: # Default to Anthropic
-                    stream_manager = _call_anthropic_stream_with_retry(
-                        model=model_selection,
-                        max_tokens=max_tokens_for_call,
-                        system=final_system_prompt,
-                        messages=final_llm_messages,
-                        api_key=llm_api_key
-                    )
+                    stream_manager = _call_anthropic_stream_with_retry(model=model_selection, max_tokens=max_tokens_for_call, system=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key)
                     with stream_manager as stream:
                         for chunk in stream:
-                            if chunk.type == "content_block_delta":
-                                text_delta = chunk.delta.text
-                                sse_data = json.dumps({'delta': text_delta})
-                                yield f"data: {sse_data}\n\n"
+                            if chunk.type == "content_block_delta": yield f"data: {json.dumps({'delta': chunk.delta.text})}\n\n"
                 
-                # After successful stream, include doc IDs in the final message for the frontend to use
                 doc_ids_for_reinforcement = [doc.metadata.get('vector_id') for doc in retrieved_docs_for_reinforcement if doc.metadata.get('vector_id')]
-                
-                sse_done_data = {
-                    'done': True,
-                    'retrieved_doc_ids': doc_ids_for_reinforcement
-                }
+                sse_done_data = {'done': True, 'retrieved_doc_ids': doc_ids_for_reinforcement}
                 yield f"data: {json.dumps(sse_done_data)}\n\n"
                 logger.info(f"Stream for chat with agent {agent_name} (model: {model_selection}) completed successfully. Sent {len(doc_ids_for_reinforcement)} doc IDs for reinforcement.")
 
@@ -2592,16 +2517,13 @@ When you identify information that should be permanently stored in your agent do
                 logger.error(f"Circuit breaker is open. Aborting stream. Error: {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             except (google_exceptions.GoogleAPICallError, google_exceptions.DeadlineExceeded, google_exceptions.InternalServerError, RetryError) as e:
-                logger.error(f"Gemini API error after retries: {e}", exc_info=True)
-                gemini_circuit_breaker.record_failure()
+                logger.error(f"Gemini API error after retries: {e}", exc_info=True); gemini_circuit_breaker.record_failure()
                 yield f"data: {json.dumps({'error': f'Assistant (Gemini) API Error: {str(e)}'})}\n\n"
             except (OpenAI_APIError, RetryError) as e:
-                logger.error(f"OpenAI API error after retries: {e}", exc_info=True)
-                openai_circuit_breaker.record_failure()
+                logger.error(f"OpenAI API error after retries: {e}", exc_info=True); openai_circuit_breaker.record_failure()
                 yield f"data: {json.dumps({'error': f'Assistant (OpenAI) API Error: {str(e)}'})}\n\n"
             except (AnthropicError, RetryError) as e:
-                logger.error(f"Anthropic API error after retries: {e}", exc_info=True)
-                anthropic_circuit_breaker.record_failure()
+                logger.error(f"Anthropic API error after retries: {e}", exc_info=True); anthropic_circuit_breaker.record_failure()
                 yield f"data: {json.dumps({'error': f'Assistant (Anthropic) API Error: {str(e)}'})}\n\n"
             
         except Exception as e:
