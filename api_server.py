@@ -2055,9 +2055,21 @@ def create_agent(user: SupabaseUser):
 
         # === Step 4: Save System Prompt ===
         if system_prompt_content:
+            # Construct the full S3 key for the system prompt to ensure it's in the _config folder
             prompt_filename = f"systemprompt_aID-{agent_name}.md"
-            write_agent_doc(agent_name, prompt_filename, system_prompt_content)
-            logger.info(f"Saved system prompt for agent '{agent_name}'.")
+            prompt_s3_key = f"organizations/river/agents/{agent_name}/_config/{prompt_filename}"
+            
+            s3 = get_s3_client()
+            aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+            if s3 and aws_s3_bucket:
+                try:
+                    s3.put_object(Bucket=aws_s3_bucket, Key=prompt_s3_key, Body=system_prompt_content.encode('utf-8'), ContentType='text/markdown; charset=utf-8')
+                    logger.info(f"Saved system prompt for agent '{agent_name}' to '{prompt_s3_key}'.")
+                except Exception as e:
+                    logger.error(f"Failed to save system prompt to S3 for agent '{agent_name}': {e}")
+                    # Decide if this should be a fatal error for the creation process
+            else:
+                logger.error(f"S3 client not available, cannot save system prompt for agent '{agent_name}'.")
 
         # === Step 5: Save API Keys ===
         if api_keys_json:
