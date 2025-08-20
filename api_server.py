@@ -609,6 +609,64 @@ def supabase_auth_required(agent_required: bool = True):
         return decorated_function
     return decorator
 
+@app.route('/api/users/list', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+@admin_or_super_user_required
+def list_users(user: SupabaseUser):
+    """Lists all users for admin dashboard."""
+    client = get_supabase_client()
+    if not client:
+        return jsonify({"error": "Database service unavailable"}), 503
+    try:
+        users_response = client.auth.admin.list_users()
+        # The response is an iterator, so we consume it into a list
+        users = [{'id': u.id, 'email': u.email} for u in users_response]
+        return jsonify(users), 200
+    except Exception as e:
+        logger.error(f"Error listing users: {e}", exc_info=True)
+        return jsonify({"error": "Failed to list users"}), 500
+
+@app.route('/api/users/create', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+@admin_or_super_user_required
+def create_user_admin(user: SupabaseUser):
+    """Creates a new user with auto-confirmed email."""
+    data = g.get('json_data', {})
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+    
+    client = get_supabase_client()
+    if not client:
+        return jsonify({"error": "Database service unavailable"}), 503
+    
+    try:
+        new_user_res = client.auth.admin.create_user({
+            "email": email,
+            "password": password,
+            "email_confirm": True, # Auto-confirm user as per spec
+        })
+        
+        new_user = new_user_res.user
+        if not new_user:
+             logger.error(f"Admin user creation did not return a user object for email {email}.")
+             return jsonify({"error": "Failed to create user, no user object returned."}), 500
+
+        logger.info(f"Admin {user.id} created new user {new_user.id} ({email}).")
+        
+        return jsonify({
+            "id": new_user.id,
+            "email": new_user.email,
+            "created_at": new_user.created_at,
+        }), 201
+    except Exception as e:
+        logger.error(f"Error creating user {email}: {e}", exc_info=True)
+        if "User already exists" in str(e):
+            return jsonify({"error": "A user with this email already exists."}), 409
+        return jsonify({"error": f"Failed to create user: {str(e)}"}), 500
+
 from utils.llm_api_utils import (
     _call_anthropic_stream_with_retry, _call_gemini_stream_with_retry,
     _call_openai_stream_with_retry, _call_gemini_non_stream_with_retry,
@@ -1997,16 +2055,45 @@ def create_agent(user: SupabaseUser):
     agent_name = request.form['agent_name']
     description = request.form.get('description', '')
     system_prompt_content = request.form.get('system_prompt_content')
-    api_keys_json = request.form.get('api_keys') # Expecting a JSON string
+    api_keys_json = request.form.get('api_keys')
+    user_ids_to_grant_access_json = request.form.get('user_ids_to_grant_access', '[]')
+    new_users_to_create_json = request.form.get('new_users_to_create', '[]')
 
     client = get_supabase_client()
     if not client: return jsonify({"error": "Database service unavailable"}), 503
 
     try:
-        # === Step 1: Pre-flight checks ===
+        user_ids_to_grant_access = json.loads(user_ids_to_grant_access_json)
+        new_users_to_create = json.loads(new_users_to_create_json)
+        if not isinstance(user_ids_to_grant_access, list) or not isinstance(new_users_to_create, list):
+            raise TypeError("User access data must be lists.")
+    except (json.JSONDecodeError, TypeError) as e:
+        return jsonify({"error": f"Invalid format for user access data: {e}"}), 400
+
+    agent_id_for_cleanup = None
+    try:
+        # === Step 1: Pre-flight checks & New User Creation ===
         existing_agent = client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
         if existing_agent.data:
             return jsonify({"error": f"Agent with name '{agent_name}' already exists."}), 409
+
+        created_user_ids = []
+        if new_users_to_create:
+            logger.info(f"Creating {len(new_users_to_create)} new users as part of agent creation.")
+            for new_user_data in new_users_to_create:
+                email = new_user_data.get('email')
+                password = new_user_data.get('password')
+                if not email or not password:
+                    raise Exception(f"Missing email or password for new user: {new_user_data}")
+                
+                new_user_res = client.auth.admin.create_user({
+                    "email": email, "password": password, "email_confirm": True,
+                })
+                new_user_obj = new_user_res.user
+                if not new_user_obj:
+                    raise Exception(f"Failed to create new user with email {email}.")
+                created_user_ids.append(new_user_obj.id)
+                logger.info(f"Successfully created new user with ID: {new_user_obj.id}")
 
         # === Step 2: Foundational Setup (S3, DB, Pinecone) ===
         if not create_agent_structure(agent_name):
@@ -2018,12 +2105,23 @@ def create_agent(user: SupabaseUser):
         if hasattr(agent_res, 'error') and agent_res.error:
             raise Exception(f"DB error creating agent record: {agent_res.error}")
         agent_id = agent_res.data[0]['id']
+        agent_id_for_cleanup = agent_id # For cleanup on failure
         logger.info(f"Created agent '{agent_name}' (ID: {agent_id}) in database.")
-        
-        client.table("user_agent_access").insert({"user_id": user.id, "agent_id": agent_id}).execute()
 
-        # === Step 3: Process Uploaded Files ===
-        # S3 Docs (Core Knowledge)
+        # === Step 3: Grant Access ===
+        all_user_ids_to_grant = set(user_ids_to_grant_access)
+        all_user_ids_to_grant.update(created_user_ids)
+        all_user_ids_to_grant.add(str(user.id))
+
+        if all_user_ids_to_grant:
+            access_records = [{"user_id": uid, "agent_id": agent_id} for uid in all_user_ids_to_grant]
+            access_res = client.table("user_agent_access").insert(access_records).execute()
+            if hasattr(access_res, 'error') and access_res.error:
+                 logger.error(f"Error granting user access for agent {agent_id}: {access_res.error}")
+            else:
+                 logger.info(f"Successfully granted access to {len(access_res.data)} users for agent {agent_id}.")
+
+        # === Step 4: Process Uploaded Files ===
         s3_docs = request.files.getlist('s3_docs')
         for doc in s3_docs:
             filename = secure_filename(doc.filename)
@@ -2031,7 +2129,6 @@ def create_agent(user: SupabaseUser):
             write_agent_doc(agent_name, filename, content)
             logger.info(f"Uploaded S3 doc '{filename}' for agent '{agent_name}'.")
 
-        # Pinecone Docs (Vector Memory)
         pinecone_docs = request.files.getlist('pinecone_docs')
         if pinecone_docs:
             embed_handler = EmbeddingHandler(index_name="river", namespace=agent_name)
@@ -2039,13 +2136,9 @@ def create_agent(user: SupabaseUser):
             os.makedirs(temp_dir, exist_ok=True)
             try:
                 for doc in pinecone_docs:
-                    filename = secure_filename(doc.filename)
-                    temp_path = os.path.join(temp_dir, filename)
+                    filename = secure_filename(doc.filename); temp_path = os.path.join(temp_dir, filename)
                     doc.save(temp_path)
-                    
-                    with open(temp_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    
+                    with open(temp_path, 'r', encoding='utf-8') as f: content = f.read()
                     metadata = {"source": "agent_creation_upload", "file_name": filename, "agent_name": agent_name}
                     embed_handler.embed_and_upsert(content, metadata)
                     logger.info(f"Embedded Pinecone doc '{filename}' for agent '{agent_name}'.")
@@ -2053,45 +2146,30 @@ def create_agent(user: SupabaseUser):
                 import shutil
                 shutil.rmtree(temp_dir)
 
-        # === Step 4: Save System Prompt ===
+        # === Step 5: Save System Prompt ===
         if system_prompt_content:
-            # Construct the full S3 key for the system prompt to ensure it's in the _config folder
             prompt_filename = f"systemprompt_aID-{agent_name}.md"
             prompt_s3_key = f"organizations/river/agents/{agent_name}/_config/{prompt_filename}"
-            
-            s3 = get_s3_client()
-            aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+            s3 = get_s3_client(); aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
             if s3 and aws_s3_bucket:
-                try:
-                    s3.put_object(Bucket=aws_s3_bucket, Key=prompt_s3_key, Body=system_prompt_content.encode('utf-8'), ContentType='text/markdown; charset=utf-8')
-                    logger.info(f"Saved system prompt for agent '{agent_name}' to '{prompt_s3_key}'.")
-                except Exception as e:
-                    logger.error(f"Failed to save system prompt to S3 for agent '{agent_name}': {e}")
-                    # Decide if this should be a fatal error for the creation process
-            else:
-                logger.error(f"S3 client not available, cannot save system prompt for agent '{agent_name}'.")
+                s3.put_object(Bucket=aws_s3_bucket, Key=prompt_s3_key, Body=system_prompt_content.encode('utf-8'), ContentType='text/markdown; charset=utf-8')
+                logger.info(f"Saved system prompt for agent '{agent_name}' to '{prompt_s3_key}'.")
 
-        # === Step 5: Save API Keys ===
+        # === Step 6: Save API Keys ===
         if api_keys_json:
-            try:
-                api_keys = json.loads(api_keys_json)
-                keys_to_insert = []
-                for service, key in api_keys.items():
-                    if key: # Only insert if a key was provided
-                        keys_to_insert.append({
-                            "agent_id": agent_id,
-                            "service_name": service,
-                            "api_key": key
-                        })
-                if keys_to_insert:
-                    client.table("agent_api_keys").insert(keys_to_insert).execute()
-                    logger.info(f"Saved {len(keys_to_insert)} API keys for agent '{agent_name}'.")
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.warning(f"Could not parse or process API keys for agent '{agent_name}': {e}")
+            api_keys = json.loads(api_keys_json)
+            keys_to_insert = [{"agent_id": agent_id, "service_name": s, "api_key": k} for s, k in api_keys.items() if k]
+            if keys_to_insert:
+                client.table("agent_api_keys").insert(keys_to_insert).execute()
+                logger.info(f"Saved {len(keys_to_insert)} API keys for agent '{agent_name}'.")
         
         return jsonify({"status": "success", "message": f"Agent '{agent_name}' created successfully.", "agent": agent_res.data[0]}), 201
 
     except Exception as e:
+        logger.error(f"Unexpected error creating agent '{agent_name}': {e}", exc_info=True)
+        if agent_id_for_cleanup:
+            client.table("agents").delete().eq("id", agent_id_for_cleanup).execute()
+            logger.info(f"Rolled back agent creation for ID {agent_id_for_cleanup}.")
         logger.error(f"Unexpected error creating agent '{agent_name}': {e}", exc_info=True)
         # Attempt to clean up failed agent creation from DB
         if 'agent_id' in locals():
