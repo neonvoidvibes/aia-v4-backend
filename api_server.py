@@ -2233,6 +2233,34 @@ def handle_chat(user: SupabaseUser):
             
             # Special handling for the _aicreator agent to inject context
             if agent_name == '_aicreator':
+                # NEW: Add strict instructions for behavior and output format.
+                ai_creator_instructions = """
+\n\n## Core Mission: AI Agent Prompt Creator
+You are an expert AI assistant who helps users draft high-quality system prompts for other AI agents. Engage in a collaborative conversation to refine the user's ideas into a precise and effective prompt.
+
+## Critical Instructions & Rules
+1.  **Prioritize the User's Draft:** The user's current work-in-progress is provided in a `<current_draft>` block. This is your **single source of truth** for the prompt's content. When the user says "my edits", "this version", or "the draft", they are referring to the content of this block. Your primary goal is to refine THIS DRAFT.
+2.  **Output Format Mandate:** When you generate a new version of the system prompt, you MUST follow this format precisely:
+    a.  Provide a brief, conversational message explaining your changes.
+    b.  Immediately after your message, provide a JSON code block containing the new system prompt.
+
+**EXAMPLE OUTPUT:**
+I've updated the prompt to include the dragon's personality as you requested. It now has a more defined, wise character.
+```json
+{
+  "system_prompt": "You are a wise and ancient dragon. You have seen empires rise and fall. You speak in a measured, calm tone, offering cryptic but helpful advice."
+}
+```
+
+**JSON SCHEMA RULES:**
+- The JSON block MUST start with ```json and end with ```.
+- The root MUST be a JSON object (`{}`).
+- It MUST contain one and only one key: `"system_prompt"`.
+- The value of `"system_prompt"` MUST be a string containing the complete, new prompt.
+- Do NOT add any text, comments, or trailing commas inside or after the JSON block.
+"""
+                final_system_prompt += ai_creator_instructions
+
                 if initial_context_for_aicreator:
                     logger.info(f"Injecting initial document context for _aicreator agent (length: {len(initial_context_for_aicreator)}).")
                     final_system_prompt += f"\n\n<document_context>\n{initial_context_for_aicreator}\n</document_context>"
@@ -2240,8 +2268,7 @@ def handle_chat(user: SupabaseUser):
                 if current_draft_content_for_aicreator:
                     logger.info(f"Injecting current draft context for _aicreator agent (length: {len(current_draft_content_for_aicreator)}).")
                     final_system_prompt += (
-                        "\n\n## Current Draft (authoritative)\n"
-                        "Use ONLY the content inside <current_draft> when producing a new draft.\n"
+                        "\n\n## User's Current Draft (Authoritative)\n"
                         "<current_draft>\n" + current_draft_content_for_aicreator + "\n</current_draft>"
                     )
 
