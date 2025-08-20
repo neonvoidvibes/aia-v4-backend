@@ -2426,10 +2426,13 @@ When you identify information that should be permanently stored in your agent do
             # --- Timestamped History Injection ---
             # This block formats the history with timestamps and injects it as a single context message.
             if agent_name == '_aicreator':
-                # For the wizard, the history is simple. Just pass the messages through.
-                # The wizard's initial message is hardcoded on the frontend, we don't need to send it to the LLM.
+                # For the wizard, the history is simple. Just pass the messages through,
+                # but sanitize them to only include 'role' and 'content' as required by the API.
+                # The wizard's initial message is hardcoded on the frontend, so we filter it out.
                 llm_messages_from_client = [
-                    msg for msg in incoming_messages if msg.get("id") != 'initial-wizard-prompt'
+                    {"role": msg["role"], "content": msg["content"]}
+                    for msg in incoming_messages
+                    if msg.get("id") != 'initial-wizard-prompt' and "role" in msg and "content" in msg
                 ]
                 final_llm_messages.extend(llm_messages_from_client)
             else:
