@@ -2416,7 +2416,7 @@ When you identify information that should be permanently stored in your agent do
             # --- Summary & Transcript Loading (non-wizard only) ---
             final_llm_messages = []
             if not is_wizard:
-                if individualMemoryToggleStates and saved_transcript_summaries:
+                if individual_memory_toggle_states and saved_transcript_summaries:
                     summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
                     enabled_summaries_count = 0
                     for summary_data in saved_transcript_summaries:
@@ -2938,7 +2938,7 @@ def save_chat_history(user: SupabaseUser):
             # Before creating a new chat, check for recent duplicates to prevent race condition artifacts
             # Look for chats created in the last 60 seconds with the same title and agent (increased from 30s)
             from datetime import datetime, timedelta
-            cutoff_time = (datetime.utcnow() - timedelta(seconds=60)).isoformat()
+            cutoff_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
             
             recent_chats = client.table('chat_history').select('id, title, messages, created_at').eq('user_id', user.id).eq('agent_id', agent_id).eq('title', title).gte('created_at', cutoff_time).order('created_at', desc=True).execute()
             
