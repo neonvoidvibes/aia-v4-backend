@@ -2235,11 +2235,15 @@ def handle_chat(user: SupabaseUser):
             if agent_name == '_aicreator':
                 if initial_context_for_aicreator:
                     logger.info(f"Injecting initial document context for _aicreator agent (length: {len(initial_context_for_aicreator)}).")
-                    final_system_prompt += f"\n\n## Provided Document Context\nThe user has uploaded the following documents. Use them as context to help draft the system prompt.\n\n{initial_context_for_aicreator}"
+                    final_system_prompt += f"\n\n<document_context>\n{initial_context_for_aicreator}\n</document_context>"
+
                 if current_draft_content_for_aicreator:
                     logger.info(f"Injecting current draft context for _aicreator agent (length: {len(current_draft_content_for_aicreator)}).")
-                    final_system_prompt += f"\n\n## Current Draft in Editor\nThe user has already started drafting the prompt in their editor. Your task is to build upon or refine this existing draft based on your conversation. Here is the current content:\n\n{current_draft_content_for_aicreator}"
-
+                    final_system_prompt += (
+                        "\n\n## Current Draft (authoritative)\n"
+                        "Use ONLY the content inside <current_draft> when producing a new draft.\n"
+                        "<current_draft>\n" + current_draft_content_for_aicreator + "\n</current_draft>"
+                    )
 
             # Add the Objective Function / Core Directive with explicit instructions on its priority
             if objective_function:
