@@ -2312,6 +2312,8 @@ def handle_chat(user: SupabaseUser):
     # Extract new individual memory toggle data
     individual_memory_toggle_states = data.get('individualMemoryToggleStates', {})
     saved_transcript_summaries = data.get('savedTranscriptSummaries', [])
+    individual_raw_transcript_toggle_states = data.get('individualRawTranscriptToggleStates', {})
+    raw_transcript_files = data.get('rawTranscriptFiles', [])
     initial_context_for_aicreator = data.get('initialContext')
     current_draft_content_for_aicreator = data.get('currentDraftContent')
     disable_retrieval = data.get('disableRetrieval', False) # New
@@ -2490,6 +2492,27 @@ When you identify information that should be permanently stored in your agent do
                     logger.info(f"[PERF] RAG processing took {rag_time:.4f}s")
             
             final_system_prompt += rag_context_block
+
+            # --- Individual Raw Transcript Loading ---
+            if not is_wizard and transcript_listen_mode == 'none' and individual_raw_transcript_toggle_states and raw_transcript_files:
+                transcripts_context_str = "\n\n## Selected Meeting Transcripts\n"
+                enabled_transcripts_count = 0
+                # The files from frontend are sorted newest first; reverse for chronological order in prompt.
+                for transcript_file_data in reversed(raw_transcript_files):
+                    transcript_key = transcript_file_data.get('s3Key')
+                    if individual_raw_transcript_toggle_states.get(transcript_key, False):
+                        transcript_filename = transcript_file_data.get('name', 'unknown_transcript.txt')
+                        if transcript_key:
+                            from utils.s3_utils import read_file_content
+                            transcript_content = read_file_content(transcript_key, f"Individual transcript {transcript_filename}")
+                            if transcript_content:
+                                transcripts_context_str += f"--- START Transcript Source: {transcript_filename} ---\n{transcript_content}\n--- END Transcript Source: {transcript_filename} ---\n\n"
+                                enabled_transcripts_count += 1
+                if enabled_transcripts_count > 0:
+                    final_system_prompt = transcripts_context_str + final_system_prompt # Prepend to prompt
+                    logger.info(f"Added content from {enabled_transcripts_count} individual raw transcripts to context")
+                else:
+                    logger.info("No individual raw transcripts were enabled.")
 
             # --- Summary & Transcript Loading (non-wizard only) ---
             final_llm_messages = []
