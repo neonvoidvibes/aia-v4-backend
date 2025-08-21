@@ -2494,7 +2494,7 @@ When you identify information that should be permanently stored in your agent do
             final_system_prompt += rag_context_block
 
             # --- Individual Raw Transcript Loading ---
-            if not is_wizard and transcript_listen_mode == 'none' and individual_raw_transcript_toggle_states and raw_transcript_files:
+            if not is_wizard and transcript_listen_mode == 'some' and individual_raw_transcript_toggle_states and raw_transcript_files:
                 transcripts_context_str = "\n\n## Selected Meeting Transcripts\n"
                 enabled_transcripts_count = 0
                 # The files from frontend are sorted newest first; reverse for chronological order in prompt.
@@ -2517,7 +2517,7 @@ When you identify information that should be permanently stored in your agent do
             # --- Summary & Transcript Loading (non-wizard only) ---
             final_llm_messages = []
             if not is_wizard:
-                if individual_memory_toggle_states and saved_transcript_summaries:
+                if saved_transcript_memory_mode == 'some' and individual_memory_toggle_states and saved_transcript_summaries:
                     summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
                     enabled_summaries_count = 0
                     for summary_data in saved_transcript_summaries:
@@ -2537,7 +2537,7 @@ When you identify information that should be permanently stored in your agent do
                         final_system_prompt = summaries_context_str + final_system_prompt
                         logger.info(f"Added {enabled_summaries_count} individual transcript summaries to context")
                     else: logger.info("No individual transcript summaries enabled")
-                elif saved_transcript_memory_mode == 'enabled':
+                elif saved_transcript_memory_mode == 'all':
                     summaries = get_transcript_summaries(agent_name, event_id)
                     if summaries:
                         summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
