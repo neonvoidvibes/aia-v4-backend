@@ -2009,7 +2009,7 @@ def list_managed_agents(user: SupabaseUser):
     if not client:
         return jsonify({"error": "Database service unavailable"}), 503
     try:
-        response = client.table("agents").select("id, name, description, created_at").order("name", desc=False).execute()
+        response = client.table("agents").select("id, name, description, created_at").or_("is_hidden.is.null,is_hidden.eq.false").order("name", desc=False).execute()
         if hasattr(response, 'error') and response.error:
             logger.error(f"Admin Dashboard: Error querying agents: {response.error}")
             return jsonify({"error": "Database error querying agents"}), 500
