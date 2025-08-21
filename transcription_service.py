@@ -464,9 +464,31 @@ def transcribe_large_audio_file(
             # Use context from previous chunk for continuity
             chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
             
-            chunk_result = _transcribe_audio_segment_openai(
-                chunk_path, openai_api_key, language_setting_from_client, chunk_context
-            )
+            # Retry chunk transcription with exponential backoff
+            chunk_max_retries = 3
+            chunk_result = None
+            
+            for chunk_attempt in range(chunk_max_retries):
+                try:
+                    chunk_result = _transcribe_audio_segment_openai(
+                        chunk_path, openai_api_key, language_setting_from_client, chunk_context
+                    )
+                    if chunk_result and chunk_result.get('segments'):
+                        break  # Success, exit retry loop
+                    else:
+                        raise Exception("No segments returned from transcription")
+                        
+                except Exception as e:
+                    logger.warning(f"Chunk {i+1} attempt {chunk_attempt + 1} failed: {e}")
+                    if chunk_attempt == chunk_max_retries - 1:
+                        logger.error(f"Failed to transcribe chunk {i+1} after {chunk_max_retries} attempts")
+                        chunk_result = None
+                        break
+                    
+                    # Exponential backoff for chunk retries
+                    chunk_delay = min(2 ** chunk_attempt, 8)
+                    logger.info(f"Retrying chunk {i+1} in {chunk_delay} seconds...")
+                    time.sleep(chunk_delay)
             
             if chunk_result and chunk_result.get('segments'):
                 # Adjust timestamps to account for chunk offset
@@ -489,7 +511,7 @@ def transcribe_large_audio_file(
                 else:
                     current_time_offset += chunk_duration
             else:
-                logger.warning(f"Failed to transcribe chunk {i+1}, continuing with others")
+                logger.warning(f"Failed to transcribe chunk {i+1} after all retries, continuing with others")
                 current_time_offset += chunk_duration
     
     finally:
@@ -600,40 +622,95 @@ def _transcribe_audio_segment_openai(
             files_param = {'file': (file_name_for_api, audio_file_obj, mime_type)}
             # === END DYNAMIC MIME TYPE DETECTION ===
 
-            max_retries = 3
-            transcription_timeout = 900 # Increased from 60 to 900 (15 minutes)
+            max_retries = 5  # Increased from 3 to 5
+            transcription_timeout = 900 # 15 minutes
+            
             for attempt in range(max_retries):
                 try:
-                    logger.info(f"Attempting transcription for {audio_file_path} (attempt {attempt + 1})...")
+                    logger.info(f"Attempting transcription for {audio_file_path} (attempt {attempt + 1}/{max_retries})...")
                     # Reset file pointer for retries if the file object is being reused
                     audio_file_obj.seek(0)
-                    response = requests.post(url, headers=headers, data=data_payload, files=files_param, timeout=transcription_timeout)
+                    
+                    # Create a new requests session with retry configuration
+                    session = requests.Session()
+                    from requests.adapters import HTTPAdapter
+                    from urllib3.util.retry import Retry
+                    
+                    # Configure retry strategy for connection issues
+                    retry_strategy = Retry(
+                        total=0,  # We handle retries manually
+                        connect=3,  # Retry connection failures
+                        read=3,     # Retry read failures
+                        backoff_factor=1,
+                        status_forcelist=[502, 503, 504]  # Retry on server errors
+                    )
+                    adapter = HTTPAdapter(max_retries=retry_strategy)
+                    session.mount("http://", adapter)
+                    session.mount("https://", adapter)
+                    
+                    response = session.post(
+                        url, 
+                        headers=headers, 
+                        data=data_payload, 
+                        files=files_param, 
+                        timeout=(30, transcription_timeout)  # (connect_timeout, read_timeout)
+                    )
                     response.raise_for_status()
                     transcription = response.json()
 
                     if 'segments' in transcription and isinstance(transcription['segments'], list):
-                        logger.info(f"Successfully transcribed {audio_file_path}.")
+                        logger.info(f"Successfully transcribed {audio_file_path} on attempt {attempt + 1}.")
                         return transcription
                     else:
                         logger.warning(f"Unexpected transcription format for {audio_file_path}: {transcription}")
-                        return None 
-                except requests.exceptions.Timeout:
-                    logger.warning(f"Timeout transcribing {audio_file_path} on attempt {attempt + 1}.")
-                    if attempt == max_retries - 1: raise
-                except requests.exceptions.RequestException as e:
-                    logger.error(f"RequestException transcribing {audio_file_path} on attempt {attempt + 1}: {e}")
-                    # Check if 'response' exists before trying to access it
-                    if 'response' in locals() and response and response.content:
+                        if attempt == max_retries - 1:
+                            return None
+                        continue
+                        
+                except requests.exceptions.Timeout as e:
+                    logger.warning(f"Timeout transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
+                    if attempt == max_retries - 1: 
+                        raise Exception(f"Transcription failed after {max_retries} attempts due to timeout")
+                        
+                except requests.exceptions.ConnectionError as e:
+                    logger.warning(f"Connection error transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
+                    if attempt == max_retries - 1: 
+                        raise Exception(f"Transcription failed after {max_retries} attempts due to connection issues")
+                        
+                except requests.exceptions.HTTPError as e:
+                    logger.error(f"HTTP error transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
+                    
+                    # Don't retry on certain HTTP errors
+                    if response.status_code in [400, 401, 403, 413]:  # Bad request, auth, or file too large
                         try:
                             error_detail = response.json()
                             logger.error(f"OpenAI API error detail: {error_detail}")
+                            raise Exception(f"OpenAI API error: {error_detail.get('error', {}).get('message', str(e))}")
                         except json.JSONDecodeError:
                             logger.error(f"OpenAI API error response (non-JSON): {response.text[:500]}")
-                    if attempt == max_retries - 1: raise
+                            raise Exception(f"OpenAI API error ({response.status_code}): {response.text[:200]}")
+                    
+                    # Retry on server errors
+                    if attempt == max_retries - 1: 
+                        raise Exception(f"Transcription failed after {max_retries} attempts due to server error")
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Request exception transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
+                    if attempt == max_retries - 1: 
+                        raise Exception(f"Transcription failed after {max_retries} attempts due to request error: {str(e)}")
+                        
                 except Exception as e: 
-                    logger.error(f"Generic error transcribing {audio_file_path} on attempt {attempt + 1}: {e}")
-                    if attempt == max_retries - 1: raise
-                time.sleep(min(2 ** attempt, 8)) 
+                    logger.error(f"Unexpected error transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
+                    if attempt == max_retries - 1: 
+                        raise Exception(f"Transcription failed after {max_retries} attempts: {str(e)}")
+                
+                # Exponential backoff with jitter
+                if attempt < max_retries - 1:
+                    base_delay = min(2 ** attempt, 16)  # Cap at 16 seconds
+                    jitter = base_delay * 0.1 * (0.5 - time.time() % 1)  # +/- 10% jitter
+                    delay = base_delay + jitter
+                    logger.info(f"Retrying in {delay:.2f} seconds...")
+                    time.sleep(delay) 
             return None 
 
     except Exception as e:
