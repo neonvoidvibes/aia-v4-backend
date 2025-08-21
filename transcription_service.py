@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List
 import threading # For s3_lock type hint
 import subprocess # For ffprobe fallback
 import mimetypes # Import the mimetypes library
+import math # For chunking calculations
 
 from utils.hallucination_detector import get_hallucination_manager # For hallucination detection
 
@@ -334,6 +335,187 @@ def is_valid_transcription(text: str) -> bool:
     if re.fullmatch(r'[^\w\s]+', text): return False 
     if len(text) < 2: return False 
     return True
+
+def get_audio_duration(file_path: str) -> float:
+    """Get audio file duration in seconds using ffprobe."""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'a:0',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as e:
+        logger.error(f"Failed to get audio duration for {file_path}: {e}")
+        return 0.0
+
+def split_audio_file(input_path: str, chunk_duration: float = 600) -> List[str]:
+    """
+    Split audio file into smaller chunks for transcription.
+    
+    Args:
+        input_path: Path to the audio file to split
+        chunk_duration: Duration of each chunk in seconds (default 10 minutes)
+    
+    Returns:
+        List of paths to the chunk files
+    """
+    total_duration = get_audio_duration(input_path)
+    if total_duration <= 0:
+        logger.error(f"Could not determine duration for {input_path}, cannot split")
+        return []
+    
+    num_chunks = math.ceil(total_duration / chunk_duration)
+    logger.info(f"Splitting {input_path} ({total_duration:.2f}s) into {num_chunks} chunks of {chunk_duration}s each")
+    
+    chunk_paths = []
+    base_name = os.path.splitext(input_path)[0]
+    
+    for i in range(num_chunks):
+        start_time = i * chunk_duration
+        chunk_path = f"{base_name}_chunk_{i+1:03d}.m4a"
+        
+        # Use ffmpeg to extract the chunk
+        cmd = [
+            'ffmpeg', '-i', input_path,
+            '-ss', str(start_time),
+            '-t', str(chunk_duration),
+            '-c', 'copy',  # Copy streams without re-encoding for speed
+            '-avoid_negative_ts', 'make_zero',
+            '-y',  # Overwrite output files
+            chunk_path
+        ]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            chunk_paths.append(chunk_path)
+            logger.info(f"Created chunk {i+1}/{num_chunks}: {chunk_path}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to create chunk {i+1}: {e}")
+            logger.error(f"ffmpeg stderr: {e.stderr}")
+            # Continue with other chunks even if one fails
+    
+    return chunk_paths
+
+def check_file_size_for_openai(file_path: str, max_size_mb: int = 24) -> bool:
+    """
+    Check if file size is within OpenAI's limits.
+    Using 24MB as limit instead of 25MB to provide buffer for API overhead.
+    """
+    try:
+        file_size_bytes = os.path.getsize(file_path)
+        file_size_mb = file_size_bytes / (1024 * 1024)
+        logger.info(f"File {os.path.basename(file_path)} size: {file_size_mb:.2f} MB")
+        return file_size_mb <= max_size_mb
+    except OSError as e:
+        logger.error(f"Could not check file size for {file_path}: {e}")
+        return False
+
+def transcribe_large_audio_file(
+    audio_file_path: str,
+    openai_api_key: str,
+    language_setting_from_client: Optional[str] = "any",
+    rolling_context_prompt: Optional[str] = None,
+    chunk_duration: float = 600
+) -> Optional[Dict[str, Any]]:
+    """
+    Transcribe large audio files by splitting them into chunks if necessary.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        openai_api_key: OpenAI API key
+        language_setting_from_client: Language setting
+        rolling_context_prompt: Context for transcription
+        chunk_duration: Duration of each chunk in seconds (default 10 minutes)
+    
+    Returns:
+        Combined transcription result or None if failed
+    """
+    start_time = time.time()
+    
+    # Check if file is within OpenAI limits
+    if check_file_size_for_openai(audio_file_path):
+        logger.info(f"File {os.path.basename(audio_file_path)} is within size limits, using direct transcription")
+        return _transcribe_audio_segment_openai(
+            audio_file_path, openai_api_key, language_setting_from_client, rolling_context_prompt
+        )
+    
+    logger.info(f"File {os.path.basename(audio_file_path)} exceeds size limits, splitting into chunks")
+    
+    # Split the file into chunks
+    chunk_paths = split_audio_file(audio_file_path, chunk_duration)
+    if not chunk_paths:
+        logger.error("Failed to create audio chunks")
+        return None
+    
+    # Transcribe each chunk
+    all_segments = []
+    combined_text_parts = []
+    current_time_offset = 0.0
+    
+    try:
+        for i, chunk_path in enumerate(chunk_paths):
+            progress_pct = ((i + 1) / len(chunk_paths)) * 100
+            logger.info(f"Transcribing chunk {i+1}/{len(chunk_paths)} ({progress_pct:.1f}%): {os.path.basename(chunk_path)}")
+            
+            # Use context from previous chunk for continuity
+            chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
+            
+            chunk_result = _transcribe_audio_segment_openai(
+                chunk_path, openai_api_key, language_setting_from_client, chunk_context
+            )
+            
+            if chunk_result and chunk_result.get('segments'):
+                # Adjust timestamps to account for chunk offset
+                chunk_segments = chunk_result['segments']
+                for segment in chunk_segments:
+                    segment['start'] += current_time_offset
+                    segment['end'] += current_time_offset
+                
+                all_segments.extend(chunk_segments)
+                
+                # Add text from this chunk
+                chunk_text = chunk_result.get('text', '').strip()
+                if chunk_text:
+                    combined_text_parts.append(chunk_text)
+                
+                # Update time offset for next chunk
+                if chunk_segments:
+                    last_segment_end = max(seg.get('end', 0) for seg in chunk_segments)
+                    current_time_offset = last_segment_end
+                else:
+                    current_time_offset += chunk_duration
+            else:
+                logger.warning(f"Failed to transcribe chunk {i+1}, continuing with others")
+                current_time_offset += chunk_duration
+    
+    finally:
+        # Clean up chunk files
+        for chunk_path in chunk_paths:
+            try:
+                if os.path.exists(chunk_path):
+                    os.remove(chunk_path)
+                    logger.debug(f"Cleaned up chunk file: {chunk_path}")
+            except OSError as e:
+                logger.error(f"Error cleaning up chunk file {chunk_path}: {e}")
+    
+    # Combine results
+    if all_segments:
+        combined_result = {
+            'text': ' '.join(combined_text_parts),
+            'segments': all_segments
+        }
+        processing_time = time.time() - start_time
+        total_duration = get_audio_duration(audio_file_path)
+        logger.info(f"Successfully transcribed large file in {len(chunk_paths)} chunks. Total segments: {len(all_segments)}. Processing time: {processing_time:.1f}s for {total_duration:.1f}s of audio")
+        return combined_result
+    else:
+        processing_time = time.time() - start_time
+        logger.error(f"No successful transcriptions from any chunks. Processing time: {processing_time:.1f}s")
+        return None
 
 def _transcribe_audio_segment_openai(
     audio_file_path: str, 

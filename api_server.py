@@ -1769,10 +1769,10 @@ def transcribe_uploaded_file(user: SupabaseUser):
                 logger.error(f"OpenAI API key not found for agent '{agent_name_from_form}' or globally.")
                 return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
             
-            from transcription_service import _transcribe_audio_segment_openai as transcribe_whisper_file
+            from transcription_service import transcribe_large_audio_file
             
             logger.info(f"Starting transcription for {temp_filepath} with language: {transcriptionLanguage}...")
-            transcription_data = transcribe_whisper_file(
+            transcription_data = transcribe_large_audio_file(
                 audio_file_path=temp_filepath,
                 openai_api_key=openai_api_key,
                 language_setting_from_client=transcriptionLanguage # Pass the language setting
