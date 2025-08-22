@@ -2477,13 +2477,13 @@ When you identify information that should be permanently stored in your agent do
                 historical_context_parts.append(transcript_handling_instructions)
 
                 # Add summaries to historical context
-                if saved_transcript_memory_mode == 'all' or (saved_transcript_memory_mode == 'some' and individualMemoryToggleStates):
+                if saved_transcript_memory_mode == 'all' or (saved_transcript_memory_mode == 'some' and individual_memory_toggle_states):
                     summaries_to_add = []
                     if saved_transcript_memory_mode == 'all':
                         summaries_to_add = get_transcript_summaries(agent_name, event_id)
                     else: # 'some'
                         all_summaries = get_transcript_summaries(agent_name, event_id)
-                        summaries_to_add = [s for s in all_summaries if individualMemoryToggleStates.get(s.get("metadata",{}).get("source_s3_key"), False)]
+                        summaries_to_add = [s for s in all_summaries if individual_memory_toggle_states.get(s.get("metadata",{}).get("source_s3_key"), False)]
                     
                     if summaries_to_add:
                         summaries_context_str = "=== SAVED TRANSCRIPT SUMMARIES ===\n"
@@ -2577,7 +2577,7 @@ When you identify information that should be permanently stored in your agent do
                         role = msg.get("role"); content = msg.get("content")
                         timestamped_history_lines.append(f"[{timestamp}] {role}: {content}")
                 history_context_block = "\n".join(timestamped_history_lines)
-                final_llm_messages.append({"role": "user", "content": f"=== CHAT HISTORY ===\n{history_context_block}\n=== END CURRENT CHAT HISTORY ==="})
+                final_llm_messages.append({"role": "user", "content": f"=== CHAT HISTORY ===\n{history_context_block}\n=== END CHAT HISTORY ==="})
                 final_llm_messages.append({"role": "user", "content": last_actual_user_message_for_rag})
 
             # --- Call LLM and Stream ---
