@@ -8,7 +8,9 @@ import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 from openai import OpenAI, APIError as OpenAI_APIError, APIStatusError as OpenAI_APIStatusError, APIConnectionError as OpenAI_APIConnectionError
 from anthropic import Anthropic, APIStatusError as AnthropicAPIStatusError, AnthropicError, APIConnectionError as AnthropicAPIConnectionError
+from groq import Groq, APIError as GroqAPIError, APIConnectionError as GroqAPIConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,7 @@ class CircuitBreakerOpen(Exception):
 anthropic_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60, name="Anthropic")
 gemini_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60, name="Gemini")
 openai_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60, name="OpenAI")
+groq_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60, name="Groq")
 
 
 # --- Retry Strategies ---
@@ -97,6 +100,13 @@ retry_strategy_openai = retry(
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry_error_callback=log_retry_error,
     retry=(retry_if_exception_type((OpenAI_APIStatusError, OpenAI_APIConnectionError)))
+)
+
+retry_strategy_groq = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry_error_callback=log_retry_error,
+    retry=(retry_if_exception_type((GroqAPIError, GroqAPIConnectionError)))
 )
 
 # --- Thread-safe lock for Gemini's global config ---
@@ -165,6 +175,26 @@ def _call_openai_stream_with_retry(model_name: str, max_tokens: int, system_inst
         model=model_name,
         input=openai_messages,
         max_output_tokens=max_tokens
+    )
+    return stream
+
+@retry_strategy_groq
+def _call_groq_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
+    if groq_circuit_breaker.is_open():
+        raise CircuitBreakerOpen(f"Assistant ({groq_circuit_breaker.name}) is temporarily unavailable.")
+    if not api_key:
+        raise ValueError("API key for Groq is missing.")
+    
+    client = Groq(api_key=api_key)
+    
+    groq_messages = [{"role": "system", "content": system_instruction}] + messages
+
+    stream = client.chat.completions.create(
+        model=model_name,
+        messages=groq_messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        stream=True
     )
     return stream
 

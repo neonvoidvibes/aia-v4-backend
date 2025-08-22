@@ -37,6 +37,8 @@ def get_api_key(agent_name: str, service_name: str) -> Optional[str]:
         fallback_env_var = 'OPENAI_API_KEY'
     elif service_name == 'google':
         fallback_env_var = 'GOOGLE_API_KEY'
+    elif service_name == 'groq':
+        fallback_env_var = 'GROQ_API_KEY'
     else:
         raise ValueError(f"Unsupported service_name: {service_name}")
         

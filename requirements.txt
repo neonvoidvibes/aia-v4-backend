@@ -37,6 +37,9 @@ ffmpeg
 supabase>=2.5.0          # Added for Supabase integration
 gotrue>=2.0.0,<3.0.0
 
+# LLM & Embeddings (Additional)
+groq>=0.5.0
+
 # Utilities
 typing-extensions>=4.7.0 # Already present
 tenacity>=8.2.0,<9.0.0   # Already present

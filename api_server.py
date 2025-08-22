@@ -670,7 +670,9 @@ def create_user_admin(user: SupabaseUser):
 from utils.llm_api_utils import (
     _call_anthropic_stream_with_retry, _call_gemini_stream_with_retry,
     _call_openai_stream_with_retry, _call_gemini_non_stream_with_retry,
+    _call_groq_stream_with_retry,
     anthropic_circuit_breaker, gemini_circuit_breaker, openai_circuit_breaker,
+    groq_circuit_breaker,
     CircuitBreakerOpen
 )
 
@@ -2586,13 +2588,32 @@ When you identify information that should be permanently stored in your agent do
             max_tokens_for_call = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
 
             # Determine which LLM provider key to get for the main chat
-            if model_selection.startswith('gemini'): llm_provider = 'google'
-            elif model_selection.startswith('gpt-'): llm_provider = 'openai'
-            else: llm_provider = 'anthropic'
+            if model_selection == 'gpt-oss-120b':
+                llm_provider = 'groq'
+            elif model_selection.startswith('gemini'):
+                llm_provider = 'google'
+            elif model_selection.startswith('gpt-'):
+                llm_provider = 'openai'
+            else:
+                llm_provider = 'anthropic'
             llm_api_key = get_api_key(agent_name, llm_provider)
 
             try:
-                if model_selection.startswith('gemini'):
+                if model_selection == 'gpt-oss-120b':
+                    logger.info(f"Dispatching chat request to Groq model: {model_selection}")
+                    api_model_name = "openai/gpt-oss-120b"
+                    groq_stream = _call_groq_stream_with_retry(
+                        model_name=api_model_name,
+                        max_tokens=max_tokens_for_call,
+                        system_instruction=final_system_prompt,
+                        messages=final_llm_messages,
+                        api_key=llm_api_key,
+                        temperature=temperature
+                    )
+                    for chunk in groq_stream:
+                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            yield f"data: {json.dumps({'delta': chunk.choices[0].delta.content})}\n\n"
+                elif model_selection.startswith('gemini'):
                     logger.info(f"Dispatching chat request to Gemini model: {model_selection}")
                     gemini_stream = _call_gemini_stream_with_retry(model_name=model_selection, max_tokens=max_tokens_for_call, system_instruction=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key, temperature=temperature)
                     for chunk in gemini_stream:
@@ -2623,6 +2644,9 @@ When you identify information that should be permanently stored in your agent do
             except (OpenAI_APIError, RetryError) as e:
                 logger.error(f"OpenAI API error after retries: {e}", exc_info=True); openai_circuit_breaker.record_failure()
                 yield f"data: {json.dumps({'error': f'Assistant (OpenAI) API Error: {str(e)}'})}\n\n"
+            except (GroqAPIError, RetryError) as e:
+                logger.error(f"Groq API error after retries: {e}", exc_info=True); groq_circuit_breaker.record_failure()
+                yield f"data: {json.dumps({'error': f'Assistant (Groq) API Error: {str(e)}'})}\n\n"
             except (AnthropicError, RetryError) as e:
                 logger.error(f"Anthropic API error after retries: {e}", exc_info=True); anthropic_circuit_breaker.record_failure()
                 yield f"data: {json.dumps({'error': f'Assistant (Anthropic) API Error: {str(e)}'})}\n\n"
