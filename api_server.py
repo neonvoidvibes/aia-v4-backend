@@ -2588,7 +2588,7 @@ When you identify information that should be permanently stored in your agent do
             max_tokens_for_call = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", 4096))
 
             # Determine which LLM provider key to get for the main chat
-            if model_selection == 'gpt-oss-120b':
+            if model_selection == 'gpt-oss-120b' or model_selection == 'gpt-oss-20b':
                 llm_provider = 'groq'
             elif model_selection.startswith('gemini'):
                 llm_provider = 'google'
@@ -2602,6 +2602,20 @@ When you identify information that should be permanently stored in your agent do
                 if model_selection == 'gpt-oss-120b':
                     logger.info(f"Dispatching chat request to Groq model: {model_selection}")
                     api_model_name = "openai/gpt-oss-120b"
+                    groq_stream = _call_groq_stream_with_retry(
+                        model_name=api_model_name,
+                        max_tokens=max_tokens_for_call,
+                        system_instruction=final_system_prompt,
+                        messages=final_llm_messages,
+                        api_key=llm_api_key,
+                        temperature=temperature
+                    )
+                    for chunk in groq_stream:
+                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            yield f"data: {json.dumps({'delta': chunk.choices[0].delta.content})}\n\n"
+                elif model_selection == 'gpt-oss-20b':
+                    logger.info(f"Dispatching chat request to Groq model: {model_selection}")
+                    api_model_name = "openai/gpt-oss-20b" # Assumed API model name
                     groq_stream = _call_groq_stream_with_retry(
                         model_name=api_model_name,
                         max_tokens=max_tokens_for_call,
