@@ -2339,7 +2339,10 @@ def handle_chat(user: SupabaseUser):
             
             # --- Part 1: Core Identity ---
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
-            final_system_prompt = base_system_prompt
+            final_system_prompt = "" # Start with an empty string
+            
+            # Combine base and agent-specific prompts into a single CORE DIRECTIVE block
+            core_directive_content = base_system_prompt
             
             if agent_name == '_aicreator':
                 # Special instructions for the agent creator wizard
@@ -2368,24 +2371,33 @@ I've updated the prompt to include the dragon's personality as you requested. It
 - The value of `"system_prompt"` MUST be a string containing the complete, new prompt.
 - Do NOT add any text, comments, or trailing commas inside or after the JSON block.
 """
-                final_system_prompt += ai_creator_instructions
+                core_directive_content += ai_creator_instructions
                 if initial_context_for_aicreator:
-                    final_system_prompt += f"\n\n<document_context>\n{initial_context_for_aicreator}\n</document_context>"
+                    core_directive_content += f"\n\n<document_context>\n{initial_context_for_aicreator}\n</document_context>"
                 if current_draft_content_for_aicreator:
-                    final_system_prompt += f"\n\n## User's Current Draft (Authoritative)\n<current_draft>\n{current_draft_content_for_aicreator}\n</current_draft>"
+                    core_directive_content += f"\n\n## User's Current Draft (Authoritative)\n<current_draft>\n{current_draft_content_for_aicreator}\n</current_draft>"
             
+            final_system_prompt += f"=== CORE DIRECTIVE ===\n{core_directive_content}\n=== END CORE DIRECTIVE ==="
+
             if not is_wizard:
                 objective_function = get_objective_function(agent_name)
                 if objective_function:
-                    final_system_prompt += f"\n\n## Core Directive (Objective Function)\n{objective_function}"
+                    final_system_prompt += f"\n\n=== OBJECTIVE FUNCTION ===\n{objective_function}\n=== END OBJECTIVE FUNCTION ==="
                 
                 frameworks = get_latest_frameworks(agent_name)
                 if frameworks:
-                    final_system_prompt += f"\n\n## Frameworks\n{frameworks}"
+                    final_system_prompt += f"\n\n=== FRAMEWORKS & GUIDELINES ===\n{frameworks}\n=== END FRAMEWORKS & GUIDELINES ==="
 
             # --- Part 2: Dynamic Task-Specific Context (RAG) ---
             if not is_wizard:
-                rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
+                rag_usage_instructions = ("\n\n=== INSTRUCTIONS FOR USING RETRIEVED CONTEXT ===\n"
+                                          "1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n"
+                                          "2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n"
+                                          "3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n"
+                                          "4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n"
+                                          "5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n"
+                                          "6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant.\n"
+                                          "=== END INSTRUCTIONS FOR USING RETRIEVED CONTEXT ===")
                 final_system_prompt += rag_usage_instructions
 
                 last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
@@ -2405,10 +2417,10 @@ I've updated the prompt to include the dragon's personality as you requested. It
                         retrieved_docs_for_reinforcement = retrieved_docs
                         if retrieved_docs:
                             items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Age: {d.metadata.get('age_display', 'Unknown')}, Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for d in retrieved_docs]
-                            final_system_prompt += "\n\n=== START RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
+                            final_system_prompt += "\n\n=== RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
                 except Exception as e:
                     logger.error(f"Unexpected RAG error: {e}", exc_info=True)
-                    final_system_prompt += "\n\n=== START RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
+                    final_system_prompt += "\n\n=== RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
                 logger.info(f"[PERF] RAG processing took {time.time() - rag_start_time:.4f}s")
             
             # --- Part 3: Static Knowledge Base & Historical Context ---
@@ -2416,12 +2428,9 @@ I've updated the prompt to include the dragon's personality as you requested. It
             if not is_wizard:
                 event_context = get_latest_context(agent_name, event_id)
                 if event_context:
-                    historical_context_parts.append(f"## Context\n{event_context}")
+                    historical_context_parts.append(f"=== HISTORICAL CONTEXT ===\n{event_context}\n=== END HISTORICAL CONTEXT ===")
             
-            memory_update_instructions = """
-
-## Memory Update Protocol
-
+            memory_update_instructions = """=== INSTRUCTIONS FOR MEMORY UPDATES ===
 When you identify information that should be permanently stored in your agent documentation, use this exact format:
 
 [DOC_UPDATE_PROPOSAL]
@@ -2448,36 +2457,40 @@ When you identify information that should be permanently stored in your agent do
 - Use valid JSON after [DOC_UPDATE_PROPOSAL] prefix
 - Include complete document content, not just additions
 - Do not add content unless specifically asked to by user
-- Choose descriptive filenames ending in .md"""
+- Choose descriptive filenames ending in .md
+=== END INSTRUCTIONS FOR MEMORY UPDATES ==="""
             historical_context_parts.append(memory_update_instructions)
 
             if not is_wizard:
                 agent_docs = get_agent_docs(agent_name)
                 if agent_docs:
-                    historical_context_parts.append(f"## Agent Documentation\n{agent_docs}")
+                    historical_context_parts.append(f"=== AGENT DOCUMENTATION ===\n{agent_docs}\n=== END AGENT DOCUMENTATION ===")
             
                 transcript_handling_instructions = (
-                    "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
-                    "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting. Very important: DO NOT summarize or analyze its content unless specifically asked by the user.\n"
-                    "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These are chronological and should be considered the most current information.\n"
-                    "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. DO NOT summarize or analyze its content unless specifically asked by the user."
+                    "\n\n=== INSTRUCTIONS FOR USING MEETING TRANSCRIPTS ===\n"
+                    "You will be provided with meeting transcripts in one or two distinct blocks:\n\n"
+                    "1.  `=== HISTORICAL MEETING TRANSCRIPT ===`: This block, if present in your system instructions, contains the full transcript of the meeting *before* the most recent updates. It is organized chronologically and provides foundational context.\n\n"
+                    "2.  `=== LATEST MEETING TRANSCRIPT ===`: This block, provided in the user's message, contains the most recent, real-time additions to the transcript.\n\n"
+                    "**CRITICAL RULE:** To understand the full context of the meeting, you MUST synthesize information from BOTH the historical and latest transcript blocks. When asked a question about the meeting, your answer must be based on the complete chronological story from all available transcript content. Treat the historical block and the latest block as a single, continuous document.\n"
+                    "=== END INSTRUCTIONS FOR USING MEETING TRANSCRIPTS ==="
                 )
                 historical_context_parts.append(transcript_handling_instructions)
 
                 # Add summaries to historical context
-                if saved_transcript_memory_mode == 'all' or (saved_transcript_memory_mode == 'some' and individual_memory_toggle_states):
+                if saved_transcript_memory_mode == 'all' or (saved_transcript_memory_mode == 'some' and individualMemoryToggleStates):
                     summaries_to_add = []
                     if saved_transcript_memory_mode == 'all':
                         summaries_to_add = get_transcript_summaries(agent_name, event_id)
                     else: # 'some'
                         all_summaries = get_transcript_summaries(agent_name, event_id)
-                        summaries_to_add = [s for s in all_summaries if individual_memory_toggle_states.get(s.get("metadata",{}).get("source_s3_key"), False)]
+                        summaries_to_add = [s for s in all_summaries if individualMemoryToggleStates.get(s.get("metadata",{}).get("source_s3_key"), False)]
                     
                     if summaries_to_add:
-                        summaries_context_str = "## Saved Transcript Summaries (Historical Context)\n"
+                        summaries_context_str = "=== SAVED TRANSCRIPT SUMMARIES ===\n"
                         for summary_doc in summaries_to_add:
                             summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
                             summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
+                        summaries_context_str += "=== END SAVED TRANSCRIPT SUMMARIES ==="
                         historical_context_parts.append(summaries_context_str)
 
             if historical_context_parts:
@@ -2525,7 +2538,8 @@ When you identify information that should be permanently stored in your agent do
                     if latest_key:
                         latest_content = read_file_content(latest_key, "latest transcript")
                         if latest_content:
-                            final_llm_messages.append({'role': 'user', 'content': f"IMPORTANT CONTEXT: The following is the content of the LATEST transcript file.\n\n=== BEGIN LATEST TRANSCRIPT DATA ===\n{latest_content}\n=== END LATEST TRANSCRIPT DATA ==="})
+                            latest_block = f"=== LATEST MEETING TRANSCRIPT (REAL-TIME) ===\n{latest_content}\n=== END LATEST MEETING TRANSCRIPT ==="
+                            final_llm_messages.append({'role': 'user', 'content': latest_block})
 
                     # The rest are historical, add them to the system prompt
                     if relevant_transcripts_meta:
@@ -2538,12 +2552,13 @@ When you identify information that should be permanently stored in your agent do
                                 if content:
                                     historical_contents.append(f"--- START Transcript Source: {old_name} ---\n{content}\n--- END Transcript Source: {old_name} ---")
                         if historical_contents:
-                            final_system_prompt += "\n\n## Latest Meeting Transcripts\n" + "\n\n".join(historical_contents)
+                            historical_block = "\n\n".join(historical_contents)
+                            final_system_prompt += f"\n\n=== HISTORICAL MEETING TRANSCRIPT (OLDEST FIRST) ===\n{historical_block}\n=== END HISTORICAL MEETING TRANSCRIPT ==="
 
             # --- Final State & Timestamped History ---
             if not is_wizard:
                 current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
-                final_system_prompt += f"\n\n## Current Time\nYour internal clock shows the current date and time is: **{current_utc_time}**."
+                final_system_prompt += f"\n\n=== CURRENT TIME ===\nYour internal clock shows the current date and time is: **{current_utc_time}**.\n=== END CURRENT TIME ==="
 
             s3_load_time = time.time() - s3_load_start_time
             logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s. Final prompt length: {len(final_system_prompt)}")
