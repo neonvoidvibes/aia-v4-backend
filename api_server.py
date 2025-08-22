@@ -2538,7 +2538,7 @@ When you identify information that should be permanently stored in your agent do
                     if latest_key:
                         latest_content = read_file_content(latest_key, "latest transcript")
                         if latest_content:
-                            latest_block = f"=== LATEST MEETING TRANSCRIPT (REAL-TIME) ===\n{latest_content}\n=== END LATEST MEETING TRANSCRIPT ==="
+                            latest_block = f"=== LATEST MEETING TRANSCRIPT ===\n{latest_content}\n=== END LATEST MEETING TRANSCRIPT ==="
                             final_llm_messages.append({'role': 'user', 'content': latest_block})
 
                     # The rest are historical, add them to the system prompt
@@ -2577,7 +2577,7 @@ When you identify information that should be permanently stored in your agent do
                         role = msg.get("role"); content = msg.get("content")
                         timestamped_history_lines.append(f"[{timestamp}] {role}: {content}")
                 history_context_block = "\n".join(timestamped_history_lines)
-                final_llm_messages.append({"role": "user", "content": f"=== CURRENT CHAT HISTORY ===\n{history_context_block}\n=== END CURRENT CHAT HISTORY ==="})
+                final_llm_messages.append({"role": "user", "content": f"=== CHAT HISTORY ===\n{history_context_block}\n=== END CURRENT CHAT HISTORY ==="})
                 final_llm_messages.append({"role": "user", "content": last_actual_user_message_for_rag})
 
             # --- Call LLM and Stream ---
