@@ -2335,29 +2335,20 @@ def handle_chat(user: SupabaseUser):
             logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}, Wizard Mode: {is_wizard}")
             logger.info(f"Stream settings - Listen: {effective_transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}, Individual toggles: {len(individual_memory_toggle_states)} items")
 
-            # --- System Prompt and Context Assembly ---
+            # --- System Prompt and Context Assembly (Optimized Order) ---
             s3_load_start_time = time.time()
             
-            # Base prompt and frameworks are always loaded for both agent and wizard.
+            # --- Part 1: Core Identity and Foundational Rules ---
             base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
             frameworks = get_latest_frameworks(agent_name)
-            
-            # Conditional loading for non-wizard sessions
             objective_function = None
-            event_context = None
-            agent_docs = None
             if not is_wizard:
                 objective_function = get_objective_function(agent_name)
-                event_context = get_latest_context(agent_name, event_id)
-                agent_docs = get_agent_docs(agent_name)
 
-            s3_load_time = time.time() - s3_load_start_time
-            logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
-            
-            # CONSTRUCT PROMPT WITH HIERARCHY
+            # Start with the base prompt
             final_system_prompt = base_system_prompt
             
-            # Special handling for the _aicreator agent to inject context (this is the wizard)
+            # Add agent-specific creator instructions if applicable
             if agent_name == '_aicreator':
                 ai_creator_instructions = """
 \n\n## Core Mission: AI Agent Prompt Creator
@@ -2385,7 +2376,7 @@ I've updated the prompt to include the dragon's personality as you requested. It
 - Do NOT add any text, comments, or trailing commas inside or after the JSON block.
 """
                 final_system_prompt += ai_creator_instructions
-
+                
                 if initial_context_for_aicreator:
                     logger.info(f"Injecting initial document context for _aicreator agent (length: {len(initial_context_for_aicreator)}).")
                     final_system_prompt += f"\n\n<document_context>\n{initial_context_for_aicreator}\n</document_context>"
@@ -2396,30 +2387,28 @@ I've updated the prompt to include the dragon's personality as you requested. It
                         "\n\n## User's Current Draft (Authoritative)\n"
                         "<current_draft>\n" + current_draft_content_for_aicreator + "\n</current_draft>"
                     )
-            
-            # Add other prompt components only if NOT in wizard mode
+
+            # Add core directives and hardcoded instructions for non-wizard agents
             if not is_wizard:
                 if objective_function:
                     final_system_prompt += "\n\n## Core Directive (Objective Function)\n"
                     final_system_prompt += "The following is your highest-priority, foundational objective. It is stable and rarely changes. It MUST be followed and overrides any conflicting instructions found in the 'Frameworks' or other contextual documents.\n\n"
                     final_system_prompt += objective_function
                 
+                if frameworks:
+                    final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
+                
                 transcript_handling_instructions = (
                     "\n\n## IMPORTANT INSTRUCTIONS FOR USING TRANSCRIPTS:\n"
-                    "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about current or past events, overall context, or specific details mentioned earlier in the meeting. Very important: DO NOT summarize or analyze its content unless specifically asked by the user.\n"
+                    "1.  **Initial Full Transcript:** The very first user message may contain a block labeled '=== BEGIN FULL MEETING TRANSCRIPT ===' to '=== END FULL MEETING TRANSCRIPT ==='. This is the complete historical context of the meeting up to the start of our current conversation. You MUST refer to this entire block for any questions about past events, overall context, or specific details mentioned earlier in the meeting. Very important: DO NOT summarize or analyze its content unless specifically asked by the user.\n"
                     "2.  **Live Updates:** Subsequent user messages starting with '[Meeting Transcript Update (from S3)]' provide new, live additions to the transcript. These are chronological and should be considered the most current information.\n"
                     "3.  **Comprehensive Awareness:** When asked about the transcript (e.g., 'what can you see?', 'what's the first/last timestamp?'), your answer must be based on ALL transcript information you have received, including the initial full load AND all subsequent delta updates. DO NOT summarize or analyze its content unless specifically asked by the user."
                 )
                 final_system_prompt += transcript_handling_instructions
-            
-            if frameworks: final_system_prompt += "\n\n## Frameworks\nThe following are operational frameworks and models for how to approach tasks. They are very important but secondary to your Core Directive.\n" + frameworks
-            
-            if not is_wizard:
-                if event_context: final_system_prompt += "\n\n## Context\n" + event_context
-                if agent_docs: final_system_prompt += "\n\n## Agent Documentation\n" + agent_docs
+                
                 rag_usage_instructions = "\n\n## Using Retrieved Context\n1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant."
                 final_system_prompt += rag_usage_instructions
-            
+
             memory_update_instructions = """
 
 ## Memory Update Protocol
@@ -2454,11 +2443,72 @@ When you identify information that should be permanently stored in your agent do
 - Choose descriptive filenames ending in .md"""
             final_system_prompt += memory_update_instructions
 
-            # --- RAG ---
+            # --- Part 2: Static and Historical Context ---
+            historical_context_parts = []
+            
+            # Add summaries to historical context
+            if not is_wizard:
+                if saved_transcript_memory_mode == 'some' and individual_memory_toggle_states and saved_transcript_summaries:
+                    summaries_context_str = "## Saved Transcript Summaries (Historical Context)\n"
+                    enabled_summaries_count = 0
+                    for summary_data in saved_transcript_summaries:
+                        summary_key = summary_data.get('s3Key', summary_data.get('name', ''))
+                        if individual_memory_toggle_states.get(summary_key, False):
+                            summary_filename = summary_data.get('name', 'unknown_summary.json')
+                            if summary_key:
+                                from utils.s3_utils import read_file_content
+                                summary_content = read_file_content(summary_key, f"Individual summary {summary_filename}")
+                                if summary_content:
+                                    try:
+                                        summary_doc = json.loads(summary_content)
+                                        summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
+                                        enabled_summaries_count += 1
+                                    except json.JSONDecodeError: logger.warning(f"Failed to parse JSON content for summary {summary_filename}")
+                    if enabled_summaries_count > 0:
+                        historical_context_parts.append(summaries_context_str)
+                        logger.info(f"Added {enabled_summaries_count} individual transcript summaries to context")
+                elif saved_transcript_memory_mode == 'all':
+                    summaries = get_transcript_summaries(agent_name, event_id)
+                    if summaries:
+                        summaries_context_str = "## Saved Transcript Summaries (Historical Context)\n"
+                        for summary_doc in summaries:
+                            summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
+                            summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
+                        historical_context_parts.append(summaries_context_str)
+                        logger.info(f"Added all transcript summaries to context (legacy mode)")
+
+            # Add selected raw transcripts to historical context
+            if not is_wizard and transcript_listen_mode == 'some' and individual_raw_transcript_toggle_states and raw_transcript_files:
+                transcripts_context_str = "## Selected Meeting Transcripts\n"
+                enabled_transcripts_count = 0
+                for transcript_file_data in reversed(raw_transcript_files):
+                    transcript_key = transcript_file_data.get('s3Key')
+                    if individual_raw_transcript_toggle_states.get(transcript_key, False):
+                        transcript_filename = transcript_file_data.get('name', 'unknown_transcript.txt')
+                        if transcript_key:
+                            from utils.s3_utils import read_file_content
+                            transcript_content = read_file_content(transcript_key, f"Individual transcript {transcript_filename}")
+                            if transcript_content:
+                                transcripts_context_str += f"--- START Transcript Source: {transcript_filename} ---\n{transcript_content}\n--- END Transcript Source: {transcript_filename} ---\n\n"
+                                enabled_transcripts_count += 1
+                if enabled_transcripts_count > 0:
+                    historical_context_parts.append(transcripts_context_str)
+                    logger.info(f"Added {enabled_transcripts_count} individual raw transcripts to context")
+
+            # Add event and agent docs to historical context
+            if not is_wizard:
+                event_context = get_latest_context(agent_name, event_id)
+                agent_docs = get_agent_docs(agent_name)
+                if event_context: historical_context_parts.append(f"## Context\n{event_context}")
+                if agent_docs: historical_context_parts.append(f"## Agent Documentation\n{agent_docs}")
+            
+            # Append all historical context to the system prompt
+            if historical_context_parts:
+                final_system_prompt += "\n\n" + "\n\n".join(historical_context_parts)
+
+            # --- Part 3: Dynamic, Task-Specific Context (RAG) ---
             rag_context_block = ""
             retrieved_docs_for_reinforcement = []
-            
-            # RAG is completely skipped for wizard mode.
             if not is_wizard:
                 last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
                 last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
@@ -2495,73 +2545,23 @@ When you identify information that should be permanently stored in your agent do
             
             final_system_prompt += rag_context_block
 
-            # --- Individual Raw Transcript Loading ---
-            if not is_wizard and transcript_listen_mode == 'some' and individual_raw_transcript_toggle_states and raw_transcript_files:
-                transcripts_context_str = "\n\n## Selected Meeting Transcripts\n"
-                enabled_transcripts_count = 0
-                # The files from frontend are sorted newest first; reverse for chronological order in prompt.
-                for transcript_file_data in reversed(raw_transcript_files):
-                    transcript_key = transcript_file_data.get('s3Key')
-                    if individual_raw_transcript_toggle_states.get(transcript_key, False):
-                        transcript_filename = transcript_file_data.get('name', 'unknown_transcript.txt')
-                        if transcript_key:
-                            from utils.s3_utils import read_file_content
-                            transcript_content = read_file_content(transcript_key, f"Individual transcript {transcript_filename}")
-                            if transcript_content:
-                                transcripts_context_str += f"--- START Transcript Source: {transcript_filename} ---\n{transcript_content}\n--- END Transcript Source: {transcript_filename} ---\n\n"
-                                enabled_transcripts_count += 1
-                if enabled_transcripts_count > 0:
-                    final_system_prompt = transcripts_context_str + final_system_prompt # Prepend to prompt
-                    logger.info(f"Added content from {enabled_transcripts_count} individual raw transcripts to context")
-                else:
-                    logger.info("No individual raw transcripts were enabled.")
+            # --- Part 4: Final State Information ---
+            if not is_wizard:
+                current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
+                final_system_prompt += f"\n\n## Current Time\nYour internal clock shows the current date and time is: **{current_utc_time}**."
 
-            # --- Summary & Transcript Loading (non-wizard only) ---
+            s3_load_time = time.time() - s3_load_start_time
+            logger.info(f"[PERF] S3 Prompts/Context loaded in {s3_load_time:.4f}s")
+            
+            # --- Prepare Messages Array ---
             final_llm_messages = []
             if not is_wizard:
-                if saved_transcript_memory_mode == 'some' and individual_memory_toggle_states and saved_transcript_summaries:
-                    summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
-                    enabled_summaries_count = 0
-                    for summary_data in saved_transcript_summaries:
-                        summary_key = summary_data.get('s3Key', summary_data.get('name', ''))
-                        if individual_memory_toggle_states.get(summary_key, False):
-                            summary_filename = summary_data.get('name', 'unknown_summary.json')
-                            if summary_key:
-                                from utils.s3_utils import read_file_content
-                                summary_content = read_file_content(summary_key, f"Individual summary {summary_filename}")
-                                if summary_content:
-                                    try:
-                                        summary_doc = json.loads(summary_content)
-                                        summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
-                                        enabled_summaries_count += 1
-                                    except json.JSONDecodeError: logger.warning(f"Failed to parse JSON content for summary {summary_filename}")
-                    if enabled_summaries_count > 0:
-                        final_system_prompt = summaries_context_str + final_system_prompt
-                        logger.info(f"Added {enabled_summaries_count} individual transcript summaries to context")
-                    else: logger.info("No individual transcript summaries enabled")
-                elif saved_transcript_memory_mode == 'all':
-                    summaries = get_transcript_summaries(agent_name, event_id)
-                    if summaries:
-                        summaries_context_str = "\n\n## Saved Transcript Summaries (Historical Context)\n"
-                        for summary_doc in summaries:
-                            summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
-                            summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
-                        final_system_prompt = summaries_context_str + final_system_prompt
-                        logger.info(f"Added all transcript summaries to context (legacy mode)")
-                else:
-                    logger.info("No transcript summaries to include (main toggle disabled, no individual toggles enabled)")
-
                 if effective_transcript_listen_mode == 'all':
                     all_transcripts_content = read_all_transcripts_in_folder(agent_name, event_id)
                     if all_transcripts_content: final_llm_messages.append({'role': 'user', 'content': f"IMPORTANT CONTEXT: The following is the FULL transcript history for this meeting, provided because 'Listen: All' mode is active.\n\n=== BEGIN ALL TRANSCRIPTS FOR THIS TURN ===\n{all_transcripts_content}\n=== END ALL TRANSCRIPTS FOR THIS TURN ==="})
                 elif effective_transcript_listen_mode == 'latest':
                     transcript_content, success = read_new_transcript_content(agent_name, event_id)
                     if transcript_content: final_llm_messages.append({'role': 'user', 'content': f"IMPORTANT CONTEXT: The following is the content of the latest transcript file. Refer to this as the most current information available.\n\n=== BEGIN LATEST TRANSCRIPT ===\n{transcript_content}\n=== END LATEST TRANSCRIPT ==="})
-
-            # --- Add Current Time to System Prompt (non-wizard only) ---
-            if not is_wizard:
-                current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
-                final_system_prompt += f"\n\n## Current Time\nYour internal clock shows the current date and time is: **{current_utc_time}**."
 
             # --- Timestamped History Injection ---
             if agent_name == '_aicreator':
