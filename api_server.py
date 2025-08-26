@@ -1756,6 +1756,7 @@ def start_transcription_from_s3(user: SupabaseUser):
         return jsonify({"error": "S3 service not configured"}), 503
 
     temp_filepath = None
+    transcription_successful = False
     try:
         # 1. Download file from S3 to a temporary local path
         unique_id = uuid.uuid4().hex
@@ -1783,6 +1784,7 @@ def start_transcription_from_s3(user: SupabaseUser):
 
         # 3. Process result and return
         if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
+            transcription_successful = True # Set flag for S3 deletion
             full_transcript_text = transcription_data['text']
             segments = transcription_data['segments']
 
@@ -1809,13 +1811,22 @@ def start_transcription_from_s3(user: SupabaseUser):
         logger.error(f"Error processing S3 transcription job for {s3_key}: {e}", exc_info=True)
         return jsonify({"error": "Internal server error during S3 transcription job"}), 500
     finally:
-        # 4. Clean up the temporary file
+        # 4. Clean up the temporary local file
         if temp_filepath and os.path.exists(temp_filepath):
             try:
                 os.remove(temp_filepath)
                 logger.info(f"Cleaned up temporary file from S3 download: {temp_filepath}")
             except Exception as e_clean:
                 logger.error(f"Error cleaning up temporary file {temp_filepath}: {e_clean}")
+        
+        # 5. Clean up the original file from S3 if transcription was successful
+        if transcription_successful:
+            try:
+                logger.info(f"Transcription successful. Deleting original file from S3: {s3_key}")
+                s3.delete_object(Bucket=aws_s3_bucket, Key=s3_key)
+                logger.info(f"Successfully deleted {s3_key} from S3.")
+            except Exception as e_s3_delete:
+                logger.error(f"Error deleting original file {s3_key} from S3: {e_s3_delete}")
 
 
 @app.route('/internal_api/transcribe_file', methods=['POST'])
