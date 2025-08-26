@@ -269,10 +269,11 @@ def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, r
                 completed_chunks.append(result)
                 completed_count += 1
                 
-                # Report completion progress
+                # Report completion progress with percentage only
                 if progress_callback:
                     try:
-                        progress_callback(completed_count, len(chunk_paths), f"Completed {completed_count}/{len(chunk_paths)} segments")
+                        progress_percent = (completed_count / len(chunk_paths)) * 0.8 + 0.1  # 10-90% range for transcription
+                        progress_callback(completed_count, len(chunk_paths), f"Processing... {int(progress_percent * 100)}%")
                     except:
                         pass  # Don't fail on callback errors
                 
@@ -295,7 +296,8 @@ def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, r
                 # Report completion progress even for failures
                 if progress_callback:
                     try:
-                        progress_callback(completed_count, len(chunk_paths), f"Completed {completed_count}/{len(chunk_paths)} segments")
+                        progress_percent = (completed_count / len(chunk_paths)) * 0.8 + 0.1
+                        progress_callback(completed_count, len(chunk_paths), f"Processing... {int(progress_percent * 100)}%")
                     except:
                         pass
     
