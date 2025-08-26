@@ -414,6 +414,153 @@ def check_file_size_for_openai(file_path: str, max_size_mb: int = 24) -> bool:
         logger.error(f"Could not check file size for {file_path}: {e}")
         return False
 
+def transcribe_large_audio_file_with_progress(
+    audio_file_path: str,
+    openai_api_key: str,
+    language_setting_from_client: Optional[str] = "any",
+    progress_callback=None,
+    chunk_size_mb: int = 20,
+    rolling_context_prompt: Optional[str] = None,
+    chunk_duration: float = 300  # Smaller default chunks for better progress tracking
+) -> Optional[Dict[str, Any]]:
+    """
+    Transcribe large audio files by splitting them into smaller chunks with progress tracking.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        openai_api_key: OpenAI API key for Whisper
+        language_setting_from_client: Language setting ('any' or ISO language code)
+        progress_callback: Function to call with progress updates (completed_chunks, total_chunks, current_step)
+        chunk_size_mb: Maximum chunk size in MB (default 20MB for OpenAI Whisper safety)
+        rolling_context_prompt: Context for transcription
+        chunk_duration: Duration of each chunk in seconds (default 5 minutes for better progress)
+    
+    Returns:
+        Dictionary with 'text' and 'segments' keys, or None on failure
+    """
+    start_time = time.time()
+    
+    # Check if file is within OpenAI limits
+    if check_file_size_for_openai(audio_file_path):
+        logger.info(f"File {os.path.basename(audio_file_path)} is within size limits, using direct transcription")
+        if progress_callback:
+            progress_callback(0, 1, "Transcribing single file...")
+        result = _transcribe_audio_segment_openai(
+            audio_file_path, openai_api_key, language_setting_from_client, rolling_context_prompt
+        )
+        if progress_callback and result:
+            progress_callback(1, 1, "Transcription completed")
+        return result
+    
+    logger.info(f"File {os.path.basename(audio_file_path)} exceeds size limits, splitting into chunks")
+    
+    # Use smaller chunks for better progress tracking and OpenAI limits
+    adjusted_chunk_duration = min(chunk_duration, 300)  # Max 5 minutes per chunk
+    
+    # Split the file into chunks
+    chunk_paths = split_audio_file(audio_file_path, adjusted_chunk_duration)
+    if not chunk_paths:
+        logger.error("Failed to create audio chunks")
+        return None
+    
+    if progress_callback:
+        progress_callback(0, len(chunk_paths), f"Starting transcription of {len(chunk_paths)} chunks...")
+    
+    # Transcribe each chunk
+    all_segments = []
+    combined_text_parts = []
+    current_time_offset = 0.0
+    
+    try:
+        for i, chunk_path in enumerate(chunk_paths):
+            if progress_callback:
+                progress_callback(i, len(chunk_paths), f"Processing chunk {i+1}/{len(chunk_paths)}")
+            
+            progress_pct = ((i + 1) / len(chunk_paths)) * 100
+            logger.info(f"Transcribing chunk {i+1}/{len(chunk_paths)} ({progress_pct:.1f}%): {os.path.basename(chunk_path)}")
+            
+            # Use context from previous chunk for continuity
+            chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
+            
+            # Retry chunk transcription with exponential backoff
+            chunk_max_retries = 3
+            chunk_result = None
+            
+            for chunk_attempt in range(chunk_max_retries):
+                try:
+                    chunk_result = _transcribe_audio_segment_openai(
+                        chunk_path, openai_api_key, language_setting_from_client, chunk_context
+                    )
+                    if chunk_result and chunk_result.get('segments'):
+                        break  # Success, exit retry loop
+                    else:
+                        raise Exception("No segments returned from transcription")
+                        
+                except Exception as e:
+                    logger.warning(f"Chunk {i+1} attempt {chunk_attempt + 1} failed: {e}")
+                    if chunk_attempt == chunk_max_retries - 1:
+                        logger.error(f"Failed to transcribe chunk {i+1} after {chunk_max_retries} attempts")
+                        chunk_result = None
+                        break
+                    
+                    # Exponential backoff for chunk retries
+                    chunk_delay = min(2 ** chunk_attempt, 8)
+                    logger.info(f"Retrying chunk {i+1} in {chunk_delay} seconds...")
+                    time.sleep(chunk_delay)
+            
+            if chunk_result and chunk_result.get('segments'):
+                # Adjust timestamps to account for chunk offset
+                chunk_segments = chunk_result['segments']
+                for segment in chunk_segments:
+                    segment['start'] += current_time_offset
+                    segment['end'] += current_time_offset
+                
+                all_segments.extend(chunk_segments)
+                
+                # Add text from this chunk
+                chunk_text = chunk_result.get('text', '').strip()
+                if chunk_text:
+                    combined_text_parts.append(chunk_text)
+                
+                # Update time offset for next chunk
+                if chunk_segments:
+                    last_segment_end = max(seg.get('end', 0) for seg in chunk_segments)
+                    current_time_offset = last_segment_end
+                else:
+                    current_time_offset += adjusted_chunk_duration
+            else:
+                logger.warning(f"Failed to transcribe chunk {i+1} after all retries, continuing with others")
+                current_time_offset += adjusted_chunk_duration
+    
+    finally:
+        # Clean up chunk files
+        for chunk_path in chunk_paths:
+            try:
+                if os.path.exists(chunk_path):
+                    os.remove(chunk_path)
+                    logger.debug(f"Cleaned up chunk file: {chunk_path}")
+            except OSError as e:
+                logger.error(f"Error cleaning up chunk file {chunk_path}: {e}")
+    
+    # Combine results
+    if all_segments:
+        combined_result = {
+            'text': ' '.join(combined_text_parts),
+            'segments': all_segments
+        }
+        processing_time = time.time() - start_time
+        total_duration = get_audio_duration(audio_file_path)
+        logger.info(f"Successfully transcribed large file in {len(chunk_paths)} chunks. Total segments: {len(all_segments)}. Processing time: {processing_time:.1f}s for {total_duration:.1f}s of audio")
+        
+        if progress_callback:
+            progress_callback(len(chunk_paths), len(chunk_paths), "Transcription completed successfully!")
+        
+        return combined_result
+    else:
+        processing_time = time.time() - start_time
+        logger.error(f"No successful transcriptions from any chunks. Processing time: {processing_time:.1f}s")
+        return None
+
 def transcribe_large_audio_file(
     audio_file_path: str,
     openai_api_key: str,

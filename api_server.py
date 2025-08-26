@@ -18,6 +18,7 @@ import uuid
 from collections import defaultdict
 import subprocess 
 import re
+import math # For chunking calculations
 from werkzeug.utils import secure_filename # Added for file uploads
 
 from utils.api_key_manager import get_api_key # Import the new key manager
@@ -153,6 +154,43 @@ def remove_request_id_filter(response):
 active_sessions: Dict[str, Dict[str, Any]] = {}
 session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
 logger.info("Initialized and cleared active_sessions and session_locks at startup.")
+
+# Job tracking system for async transcription
+transcription_jobs: Dict[str, Dict[str, Any]] = {}
+job_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
+logger.info("Initialized transcription job tracking system.")
+
+def update_job_progress(job_id: str, **kwargs):
+    """Update job progress in a thread-safe manner."""
+    with job_locks[job_id]:
+        if job_id in transcription_jobs:
+            transcription_jobs[job_id].update(kwargs)
+            transcription_jobs[job_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
+
+def create_transcription_job(agent_name: str, s3_key: str, original_filename: str, user_id: str) -> str:
+    """Create a new transcription job and return job ID."""
+    job_id = str(uuid4())
+    job_data = {
+        'status': 'queued',
+        'progress': 0.0,
+        'current_step': 'Preparing transcription...',
+        'total_chunks': 0,
+        'completed_chunks': 0,
+        'result': None,
+        'error': None,
+        'created_at': datetime.now(timezone.utc).isoformat(),
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+        'agent_name': agent_name,
+        's3_key': s3_key,
+        'original_filename': original_filename,
+        'user_id': user_id
+    }
+    
+    with job_locks[job_id]:
+        transcription_jobs[job_id] = job_data
+    
+    logger.info(f"Created transcription job {job_id} for {original_filename}")
+    return job_id
 
 def on_shutdown():
     """Ensure the executor is shut down gracefully when the app exits."""
@@ -1736,55 +1774,104 @@ def list_unique_docs_in_namespace(index_name: str, namespace_name: str):
         logger.error(f"Error listing unique docs index '{index_name}', ns '{namespace_name}': {e}", exc_info=True)
         return jsonify({"error": "Unexpected error listing documents"}), 500
 
-@app.route('/api/transcription/start-job-from-s3', methods=['POST'])
-@supabase_auth_required(agent_required=True) # Agent name check is good here
-def start_transcription_from_s3(user: SupabaseUser):
-    data = g.get('json_data', {})
-    agent_name = data.get('agentName') # or agent? The decorator uses 'agent', payload might be 'agentName'
-    if not agent_name: agent_name = data.get('agent')
-    s3_key = data.get('s3Key')
-    original_filename = data.get('originalFilename')
-    # Let's add transcriptionLanguage from the frontend
-    transcription_language = data.get('transcriptionLanguage', 'any')
+@app.route('/api/transcription/status/<job_id>', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def get_transcription_job_status(user: SupabaseUser, job_id: str):
+    """Get the status of a transcription job."""
+    if job_id not in transcription_jobs:
+        return jsonify({"error": "Job not found"}), 404
+    
+    job_data = transcription_jobs[job_id]
+    
+    # Verify user owns this job
+    if job_data.get('user_id') != user.id:
+        return jsonify({"error": "Access denied"}), 403
+    
+    # Clean response - don't send internal data
+    response_data = {
+        'job_id': job_id,
+        'status': job_data['status'],
+        'progress': job_data['progress'],
+        'current_step': job_data['current_step'],
+        'total_chunks': job_data['total_chunks'],
+        'completed_chunks': job_data['completed_chunks'],
+        'created_at': job_data['created_at'],
+        'updated_at': job_data['updated_at'],
+    }
+    
+    # Include result if completed
+    if job_data['status'] == 'completed' and job_data['result']:
+        response_data['result'] = job_data['result']
+    
+    # Include error if failed
+    if job_data['status'] == 'failed' and job_data['error']:
+        response_data['error'] = job_data['error']
+    
+    return jsonify(response_data), 200
 
-    if not all([agent_name, s3_key, original_filename]):
-        return jsonify({"error": "Missing agentName, s3Key, or originalFilename"}), 400
-
-    s3 = get_s3_client()
-    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-    if not s3 or not aws_s3_bucket:
-        return jsonify({"error": "S3 service not configured"}), 503
-
+def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, original_filename: str, transcription_language: str, user: SupabaseUser):
+    """Process transcription job in background thread with progress tracking."""
     temp_filepath = None
     transcription_successful = False
+    
     try:
+        update_job_progress(job_id, status='processing', current_step='Downloading file from S3...')
+        
         # 1. Download file from S3 to a temporary local path
+        s3 = get_s3_client()
+        aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+        if not s3 or not aws_s3_bucket:
+            update_job_progress(job_id, status='failed', error='S3 service not configured')
+            return
+
         unique_id = uuid.uuid4().hex
         temp_filename = f"{unique_id}_{secure_filename(original_filename)}"
         temp_filepath = os.path.join(UPLOAD_FOLDER, temp_filename)
         
-        logger.info(f"Downloading s3://{aws_s3_bucket}/{s3_key} to {temp_filepath}")
+        logger.info(f"Job {job_id}: Downloading s3://{aws_s3_bucket}/{s3_key} to {temp_filepath}")
         s3.download_file(aws_s3_bucket, s3_key, temp_filepath)
-        logger.info("Download complete.")
+        logger.info(f"Job {job_id}: Download complete.")
 
-        # 2. Transcribe the downloaded file
+        update_job_progress(job_id, current_step='Preparing transcription...', progress=0.1)
+
+        # 2. Get file info for chunking
+        file_size = os.path.getsize(temp_filepath)
+        max_chunk_size = 20 * 1024 * 1024  # 20MB chunks for safety
+        
+        # Estimate chunks (rough calculation)
+        estimated_chunks = max(1, math.ceil(file_size / max_chunk_size))
+        update_job_progress(job_id, total_chunks=estimated_chunks, current_step=f'Processing {estimated_chunks} chunks...')
+
+        # 3. Transcribe with progress callback
         openai_api_key = get_api_key(agent_name, 'openai')
         if not openai_api_key:
-            logger.error(f"OpenAI API key not found for agent '{agent_name}'.")
-            return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
+            logger.error(f"Job {job_id}: OpenAI API key not found for agent '{agent_name}'.")
+            update_job_progress(job_id, status='failed', error='Transcription service not configured (missing API key)')
+            return
         
-        from transcription_service import transcribe_large_audio_file
+        from transcription_service import transcribe_large_audio_file_with_progress
 
-        logger.info(f"Starting transcription for {temp_filepath} (from S3) with language: {transcription_language}...")
-        transcription_data = transcribe_large_audio_file(
+        logger.info(f"Job {job_id}: Starting transcription for {temp_filepath} with language: {transcription_language}...")
+        
+        def progress_callback(completed_chunks: int, total_chunks: int, current_step: str):
+            progress = 0.1 + (completed_chunks / total_chunks) * 0.8  # 10% for download, 80% for transcription
+            update_job_progress(job_id, 
+                               progress=progress,
+                               completed_chunks=completed_chunks, 
+                               total_chunks=total_chunks,
+                               current_step=current_step)
+        
+        transcription_data = transcribe_large_audio_file_with_progress(
             audio_file_path=temp_filepath,
             openai_api_key=openai_api_key,
-            language_setting_from_client=transcription_language
+            language_setting_from_client=transcription_language,
+            progress_callback=progress_callback,
+            chunk_size_mb=20  # Use 20MB chunks
         )
 
-        # 3. Process result and return
+        # 4. Process result
         if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
-            transcription_successful = True # Set flag for S3 deletion
+            transcription_successful = True
             full_transcript_text = transcription_data['text']
             segments = transcription_data['segments']
 
@@ -1800,33 +1887,72 @@ def start_transcription_from_s3(user: SupabaseUser):
             
             final_transcript_with_header = header + full_transcript_text
             
-            logger.info(f"S3-based transcription successful for {original_filename}. Total Text Length (with header): {len(final_transcript_with_header)}, Segments: {len(segments)}")
-            return jsonify({"transcript": final_transcript_with_header, "segments": segments}), 200
+            # Store result and mark as completed
+            result = {"transcript": final_transcript_with_header, "segments": segments}
+            update_job_progress(job_id, 
+                               status='completed', 
+                               progress=1.0,
+                               current_step='Transcription completed successfully!',
+                               result=result)
+            
+            logger.info(f"Job {job_id}: S3-based transcription successful for {original_filename}. Total Text Length (with header): {len(final_transcript_with_header)}, Segments: {len(segments)}")
         else:
-            error_msg = "S3-based transcription failed or returned incomplete data."
-            logger.error(f"{error_msg} File: {original_filename} (S3: {s3_key}). API Result (if any): {str(transcription_data)[:500]}...")
-            return jsonify({"error": error_msg, "details": "No specific error details from service."}), 500
+            error_msg = "Transcription failed or returned incomplete data."
+            logger.error(f"Job {job_id}: {error_msg} File: {original_filename} (S3: {s3_key}). API Result (if any): {str(transcription_data)[:500]}...")
+            update_job_progress(job_id, status='failed', error=error_msg)
 
     except Exception as e:
-        logger.error(f"Error processing S3 transcription job for {s3_key}: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error during S3 transcription job"}), 500
+        logger.error(f"Job {job_id}: Error processing transcription job: {e}", exc_info=True)
+        update_job_progress(job_id, status='failed', error=f"Internal server error: {str(e)}")
     finally:
-        # 4. Clean up the temporary local file
+        # 5. Clean up the temporary local file
         if temp_filepath and os.path.exists(temp_filepath):
             try:
                 os.remove(temp_filepath)
-                logger.info(f"Cleaned up temporary file from S3 download: {temp_filepath}")
+                logger.info(f"Job {job_id}: Cleaned up temporary file: {temp_filepath}")
             except Exception as e_clean:
-                logger.error(f"Error cleaning up temporary file {temp_filepath}: {e_clean}")
+                logger.error(f"Job {job_id}: Error cleaning up temporary file {temp_filepath}: {e_clean}")
         
-        # 5. Clean up the original file from S3 if transcription was successful
+        # 6. Clean up the original file from S3 if transcription was successful
         if transcription_successful:
             try:
-                logger.info(f"Transcription successful. Deleting original file from S3: {s3_key}")
+                logger.info(f"Job {job_id}: Transcription successful. Deleting original file from S3: {s3_key}")
                 s3.delete_object(Bucket=aws_s3_bucket, Key=s3_key)
-                logger.info(f"Successfully deleted {s3_key} from S3.")
+                logger.info(f"Job {job_id}: Successfully deleted {s3_key} from S3.")
             except Exception as e_s3_delete:
-                logger.error(f"Error deleting original file {s3_key} from S3: {e_s3_delete}")
+                logger.error(f"Job {job_id}: Error deleting original file {s3_key} from S3: {e_s3_delete}")
+
+@app.route('/api/transcription/start-job-from-s3', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def start_transcription_from_s3(user: SupabaseUser):
+    """Start an async transcription job and return job ID immediately."""
+    data = g.get('json_data', {})
+    agent_name = data.get('agentName')
+    if not agent_name: agent_name = data.get('agent')
+    s3_key = data.get('s3Key')
+    original_filename = data.get('originalFilename')
+    transcription_language = data.get('transcriptionLanguage', 'any')
+
+    if not all([agent_name, s3_key, original_filename]):
+        return jsonify({"error": "Missing agentName, s3Key, or originalFilename"}), 400
+
+    # Basic validation
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        return jsonify({"error": "S3 service not configured"}), 503
+
+    # Create job and start processing in background
+    job_id = create_transcription_job(agent_name, s3_key, original_filename, user.id)
+    
+    # Submit job to thread pool
+    app.executor.submit(
+        process_transcription_job_async,
+        job_id, agent_name, s3_key, original_filename, transcription_language, user
+    )
+    
+    logger.info(f"Started async transcription job {job_id} for {original_filename}")
+    return jsonify({"job_id": job_id, "message": "Transcription job started"}), 202
 
 
 @app.route('/internal_api/transcribe_file', methods=['POST'])
