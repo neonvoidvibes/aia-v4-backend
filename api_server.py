@@ -2178,7 +2178,7 @@ def generate_presigned_url(user: SupabaseUser):
             Fields={"Content-Type": file_type},
             Conditions=[
                 {"Content-Type": file_type},
-                ["content-length-range", 1, 250000000]  # 1 byte to 250 MB
+                ["content-length-range", 1, 500000000]  # 1 byte to 500 MB
             ],
             ExpiresIn=900  # 15 minutes
         )
