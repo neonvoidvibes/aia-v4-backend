@@ -155,10 +155,11 @@ def transcribe_chunk_wrapper(args):
     
     logger.info(f"Starting parallel transcription of chunk {chunk_index + 1}/{total_chunks}: {os.path.basename(chunk_path)}")
     
-    # Update progress if callback provided - report start of processing
+    # Update progress if callback provided - report start of processing with percentage only
     if progress_callback:
         try:
-            progress_callback(chunk_index, total_chunks, f"Transcribing audio segment {chunk_index + 1}/{total_chunks}")
+            progress_percent = (chunk_index / total_chunks) * 0.8 + 0.1  # 10-90% range
+            progress_callback(chunk_index, total_chunks, f"Processing... {int(progress_percent * 100)}%")
         except Exception as e:
             # If progress callback raises exception (e.g., cancellation), stop processing
             logger.info(f"Chunk {chunk_index + 1} processing stopped: {e}")

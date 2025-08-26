@@ -1930,7 +1930,7 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
                 
                 update_job_progress(job_id, 
                                    status='completed',
-                                   progress=success_rate,  # Use actual success rate as progress
+                                   progress=1.0,  # Always 100% when completed
                                    current_step=f'Completed with {success_rate:.0%} success rate',
                                    result=result_data)
             else:
