@@ -454,8 +454,15 @@ def transcribe_large_audio_file_with_progress(
     
     logger.info(f"File {os.path.basename(audio_file_path)} exceeds size limits, splitting into chunks")
     
-    # Use smaller chunks for better progress tracking and OpenAI limits
-    adjusted_chunk_duration = min(chunk_duration, 300)  # Max 5 minutes per chunk
+    # Smart chunking: Use file size to determine optimal chunk duration
+    file_size_mb = os.path.getsize(audio_file_path) / (1024 * 1024)
+    
+    if file_size_mb <= 50:  # Small-medium files: fewer, larger chunks
+        adjusted_chunk_duration = min(chunk_duration, 600)  # 10 minutes per chunk
+    else:  # Large files: more chunks for better progress tracking
+        adjusted_chunk_duration = min(chunk_duration, 300)   # 5 minutes per chunk
+    
+    logger.info(f"File size: {file_size_mb:.1f}MB, using {adjusted_chunk_duration}s chunks")
     
     # Split the file into chunks
     chunk_paths = split_audio_file(audio_file_path, adjusted_chunk_duration)
