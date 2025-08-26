@@ -15,6 +15,7 @@ import threading # For s3_lock type hint
 import subprocess # For ffprobe fallback
 import mimetypes # Import the mimetypes library
 import math # For chunking calculations
+import concurrent.futures # For parallel processing
 
 from utils.hallucination_detector import get_hallucination_manager # For hallucination detection
 
@@ -147,6 +148,258 @@ def detect_single_word_loops(segments: List[Dict], session_data: Dict[str, Any],
         filtered_segments.append(segment)
     
     return filtered_segments
+
+def transcribe_chunk_wrapper(args):
+    """Wrapper function for parallel chunk transcription."""
+    chunk_path, chunk_index, total_chunks, openai_api_key, language_setting, chunk_context, progress_callback = args
+    
+    logger.info(f"Starting parallel transcription of chunk {chunk_index + 1}/{total_chunks}: {os.path.basename(chunk_path)}")
+    
+    # Update progress if callback provided
+    if progress_callback:
+        try:
+            progress_callback(chunk_index, total_chunks, f"Processing chunk {chunk_index + 1}/{total_chunks}")
+        except Exception as e:
+            # If progress callback raises exception (e.g., cancellation), stop processing
+            logger.info(f"Chunk {chunk_index + 1} processing stopped: {e}")
+            return None
+    
+    # Smart chunk retry with improved error handling  
+    chunk_max_retries = 3  # Reduced for parallel processing
+    chunk_result = None
+    
+    for chunk_attempt in range(chunk_max_retries):
+        try:
+            chunk_result = _transcribe_audio_segment_openai(
+                chunk_path, openai_api_key, language_setting, chunk_context
+            )
+            if chunk_result and chunk_result.get('segments'):
+                logger.info(f"Chunk {chunk_index + 1}/{total_chunks} transcribed successfully on attempt {chunk_attempt + 1}")
+                return {
+                    'chunk_index': chunk_index,
+                    'chunk_path': chunk_path,
+                    'result': chunk_result,
+                    'success': True
+                }
+            else:
+                raise Exception("No segments returned from transcription")
+                
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(f"Chunk {chunk_index + 1} attempt {chunk_attempt + 1} failed: {error_msg}")
+            
+            # Don't retry on certain errors
+            if any(term in error_msg.lower() for term in ['client error', 'file too large', 'api key', 'unauthorized', 'cancelled']):
+                logger.error(f"Non-recoverable error for chunk {chunk_index + 1}: {error_msg}")
+                return {
+                    'chunk_index': chunk_index,
+                    'chunk_path': chunk_path,
+                    'result': None,
+                    'success': False,
+                    'error': error_msg
+                }
+            
+            if chunk_attempt == chunk_max_retries - 1:
+                logger.error(f"Failed to transcribe chunk {chunk_index + 1} after {chunk_max_retries} attempts: {error_msg}")
+                return {
+                    'chunk_index': chunk_index,
+                    'chunk_path': chunk_path,
+                    'result': None,
+                    'success': False,
+                    'error': error_msg
+                }
+            
+            # Smart backoff for chunk retries - shorter delays for parallel processing
+            if 'rate limit' in error_msg.lower():
+                chunk_delay = min(15, 3 * (2 ** chunk_attempt))
+            elif 'server error' in error_msg.lower() or '5' in error_msg[:3]:
+                chunk_delay = min(10, 2 * (2 ** chunk_attempt))
+            else:
+                chunk_delay = min(5, 2 ** chunk_attempt)
+            
+            logger.info(f"Retrying chunk {chunk_index + 1} in {chunk_delay} seconds...")
+            time.sleep(chunk_delay)
+    
+    return {
+        'chunk_index': chunk_index,
+        'chunk_path': chunk_path,
+        'result': None,
+        'success': False,
+        'error': 'Max retries exceeded'
+    }
+
+def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, rolling_context_prompt, chunk_duration, progress_callback):
+    """Transcribe audio chunks in parallel for better performance."""
+    all_segments = []
+    combined_text_parts = []
+    current_time_offset = 0.0
+    
+    # Prepare arguments for parallel processing
+    chunk_args = []
+    for i, chunk_path in enumerate(chunk_paths):
+        # Use minimal context to avoid hallucinations in parallel processing
+        chunk_context = rolling_context_prompt if i == 0 else ""
+        chunk_args.append((
+            chunk_path, i, len(chunk_paths), openai_api_key, 
+            language_setting, chunk_context, progress_callback
+        ))
+    
+    # Process chunks in parallel with controlled concurrency
+    max_workers = min(3, len(chunk_paths))  # Limit to 3 concurrent to avoid rate limits
+    completed_chunks = []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all chunk jobs
+        future_to_chunk = {
+            executor.submit(transcribe_chunk_wrapper, args): args[1] 
+            for args in chunk_args
+        }
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_chunk):
+            chunk_index = future_to_chunk[future]
+            try:
+                result = future.result()
+                if result is None:  # Cancelled
+                    logger.info("Parallel transcription cancelled")
+                    executor.shutdown(wait=False)
+                    return [], []
+                    
+                completed_chunks.append(result)
+                
+                if result['success']:
+                    logger.info(f"Chunk {chunk_index + 1} completed successfully")
+                else:
+                    logger.warning(f"Chunk {chunk_index + 1} failed: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                logger.error(f"Exception in parallel chunk processing: {e}")
+                completed_chunks.append({
+                    'chunk_index': chunk_index,
+                    'chunk_path': chunk_paths[chunk_index],
+                    'result': None,
+                    'success': False,
+                    'error': str(e)
+                })
+    
+    # Sort results by chunk index to maintain order
+    completed_chunks.sort(key=lambda x: x['chunk_index'])
+    
+    # Combine results and adjust timestamps
+    for chunk_result in completed_chunks:
+        if chunk_result['success'] and chunk_result['result']:
+            chunk_data = chunk_result['result']
+            chunk_segments = chunk_data.get('segments', [])
+            
+            # Adjust timestamps to account for chunk offset
+            for segment in chunk_segments:
+                segment['start'] += current_time_offset
+                segment['end'] += current_time_offset
+            
+            all_segments.extend(chunk_segments)
+            
+            # Add text from this chunk
+            chunk_text = chunk_data.get('text', '').strip()
+            if chunk_text:
+                combined_text_parts.append(chunk_text)
+            
+            # Update time offset for next chunk
+            if chunk_segments:
+                last_segment_end = max(seg.get('end', 0) for seg in chunk_segments)
+                current_time_offset = last_segment_end
+            else:
+                current_time_offset += chunk_duration
+        else:
+            # Failed chunk - still advance time offset
+            current_time_offset += chunk_duration
+    
+    return all_segments, combined_text_parts
+
+def _transcribe_chunks_sequential(chunk_paths, openai_api_key, language_setting, rolling_context_prompt, chunk_duration, progress_callback):
+    """Transcribe audio chunks sequentially (fallback for single chunks or when parallel fails)."""
+    all_segments = []
+    combined_text_parts = []
+    current_time_offset = 0.0
+    
+    try:
+        for i, chunk_path in enumerate(chunk_paths):
+            if progress_callback:
+                progress_callback(i, len(chunk_paths), f"Processing chunk {i+1}/{len(chunk_paths)}")
+            
+            logger.info(f"Transcribing chunk {i+1}/{len(chunk_paths)}: {os.path.basename(chunk_path)}")
+            
+            # Use context from previous chunk for continuity
+            chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
+            
+            # Use the parallel wrapper for consistency
+            chunk_args = (chunk_path, i, len(chunk_paths), openai_api_key, language_setting, chunk_context, progress_callback)
+            chunk_result = transcribe_chunk_wrapper(chunk_args)
+            
+            if chunk_result is None:  # Cancelled
+                logger.info("Sequential transcription cancelled")
+                return [], []
+            
+            if chunk_result['success'] and chunk_result['result']:
+                chunk_data = chunk_result['result']
+                chunk_segments = chunk_data.get('segments', [])
+                
+                # Adjust timestamps to account for chunk offset
+                for segment in chunk_segments:
+                    segment['start'] += current_time_offset
+                    segment['end'] += current_time_offset
+                
+                all_segments.extend(chunk_segments)
+                
+                # Add text from this chunk
+                chunk_text = chunk_data.get('text', '').strip()
+                if chunk_text:
+                    combined_text_parts.append(chunk_text)
+                
+                # Update time offset for next chunk
+                if chunk_segments:
+                    last_segment_end = max(seg.get('end', 0) for seg in chunk_segments)
+                    current_time_offset = last_segment_end
+                else:
+                    current_time_offset += chunk_duration
+            else:
+                logger.warning(f"Failed to transcribe chunk {i+1}: {chunk_result.get('error', 'Unknown error')}")
+                current_time_offset += chunk_duration
+                
+    except Exception as e:
+        logger.error(f"Exception in sequential chunk processing: {e}")
+        
+    return all_segments, combined_text_parts
+
+def _generate_failure_advice(chunk_paths, processing_time):
+    """Generate intelligent advice for transcription failures."""
+    file_count = len(chunk_paths) if chunk_paths else 0
+    
+    if processing_time < 30:
+        return "API connection issue. Try again in a few minutes."
+    elif processing_time > 300:  # 5+ minutes
+        return "Request timeout. Try splitting into smaller files or check your internet connection."
+    elif file_count > 5:
+        return "Large file processing failed. Consider using smaller audio files (under 50MB)."
+    else:
+        return "OpenAI Whisper service may be experiencing issues. Please try again later."
+
+def _should_use_fallback_strategy(consecutive_failures, file_size_mb, processing_time):
+    """Determine if we should use fallback strategy based on failure patterns."""
+    # Use fallback if:
+    # 1. Multiple consecutive failures
+    # 2. Large file with repeated timeouts  
+    # 3. Extended processing time with poor results
+    
+    if consecutive_failures >= 2:
+        return True, "Multiple API failures detected"
+    
+    if file_size_mb > 100 and processing_time > 600:  # 10+ minutes for large files
+        return True, "Large file processing taking too long"
+        
+    if processing_time > 300 and consecutive_failures > 0:  # 5+ minutes with failures
+        return True, "Extended processing time with failures"
+    
+    return False, None
 
 def filter_by_duration_and_confidence(segment: Dict) -> bool:
     """Filter segments that are too short or have low confidence"""
@@ -421,7 +674,7 @@ def transcribe_large_audio_file_with_progress(
     progress_callback=None,
     chunk_size_mb: int = 20,
     rolling_context_prompt: Optional[str] = None,
-    chunk_duration: float = 300  # Smaller default chunks for better progress tracking
+    chunk_duration: float = 600  # Smart chunking will optimize this based on file size
 ) -> Optional[Dict[str, Any]]:
     """
     Transcribe large audio files by splitting them into smaller chunks with progress tracking.
@@ -457,10 +710,12 @@ def transcribe_large_audio_file_with_progress(
     # Smart chunking: Use file size to determine optimal chunk duration
     file_size_mb = os.path.getsize(audio_file_path) / (1024 * 1024)
     
-    if file_size_mb <= 100:  # Small-medium files: fewer, larger chunks for efficiency
-        adjusted_chunk_duration = min(chunk_duration, 600)  # 10 minutes per chunk
-    else:  # Very large files: more chunks for better progress tracking
-        adjusted_chunk_duration = min(chunk_duration, 400)   # ~7 minutes per chunk
+    if file_size_mb <= 50:   # Small files: use larger chunks for efficiency
+        adjusted_chunk_duration = 600   # 10 minutes per chunk
+    elif file_size_mb <= 200: # Medium files: balance efficiency and progress
+        adjusted_chunk_duration = 450   # 7.5 minutes per chunk  
+    else:  # Large files: smaller chunks for better progress tracking and memory management
+        adjusted_chunk_duration = 300   # 5 minutes per chunk
     
     logger.info(f"File size: {file_size_mb:.1f}MB, using {adjusted_chunk_duration}s chunks")
     
@@ -473,71 +728,20 @@ def transcribe_large_audio_file_with_progress(
     if progress_callback:
         progress_callback(0, len(chunk_paths), f"Starting transcription of {len(chunk_paths)} chunks...")
     
-    # Transcribe each chunk
-    all_segments = []
-    combined_text_parts = []
-    current_time_offset = 0.0
-    
+    # Performance optimization: Use parallel processing for multiple chunks  
     try:
-        for i, chunk_path in enumerate(chunk_paths):
-            if progress_callback:
-                progress_callback(i, len(chunk_paths), f"Processing chunk {i+1}/{len(chunk_paths)}")
-            
-            progress_pct = ((i + 1) / len(chunk_paths)) * 100
-            logger.info(f"Transcribing chunk {i+1}/{len(chunk_paths)} ({progress_pct:.1f}%): {os.path.basename(chunk_path)}")
-            
-            # Use context from previous chunk for continuity
-            chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
-            
-            # Retry chunk transcription with exponential backoff
-            chunk_max_retries = 3
-            chunk_result = None
-            
-            for chunk_attempt in range(chunk_max_retries):
-                try:
-                    chunk_result = _transcribe_audio_segment_openai(
-                        chunk_path, openai_api_key, language_setting_from_client, chunk_context
-                    )
-                    if chunk_result and chunk_result.get('segments'):
-                        break  # Success, exit retry loop
-                    else:
-                        raise Exception("No segments returned from transcription")
-                        
-                except Exception as e:
-                    logger.warning(f"Chunk {i+1} attempt {chunk_attempt + 1} failed: {e}")
-                    if chunk_attempt == chunk_max_retries - 1:
-                        logger.error(f"Failed to transcribe chunk {i+1} after {chunk_max_retries} attempts")
-                        chunk_result = None
-                        break
-                    
-                    # Exponential backoff for chunk retries
-                    chunk_delay = min(2 ** chunk_attempt, 8)
-                    logger.info(f"Retrying chunk {i+1} in {chunk_delay} seconds...")
-                    time.sleep(chunk_delay)
-            
-            if chunk_result and chunk_result.get('segments'):
-                # Adjust timestamps to account for chunk offset
-                chunk_segments = chunk_result['segments']
-                for segment in chunk_segments:
-                    segment['start'] += current_time_offset
-                    segment['end'] += current_time_offset
-                
-                all_segments.extend(chunk_segments)
-                
-                # Add text from this chunk
-                chunk_text = chunk_result.get('text', '').strip()
-                if chunk_text:
-                    combined_text_parts.append(chunk_text)
-                
-                # Update time offset for next chunk
-                if chunk_segments:
-                    last_segment_end = max(seg.get('end', 0) for seg in chunk_segments)
-                    current_time_offset = last_segment_end
-                else:
-                    current_time_offset += adjusted_chunk_duration
-            else:
-                logger.warning(f"Failed to transcribe chunk {i+1} after all retries, continuing with others")
-                current_time_offset += adjusted_chunk_duration
+        if len(chunk_paths) > 1:
+            logger.info(f"Using parallel processing for {len(chunk_paths)} chunks (max 3 concurrent)")
+            all_segments, combined_text_parts = _transcribe_chunks_parallel(
+                chunk_paths, openai_api_key, language_setting_from_client, 
+                rolling_context_prompt, adjusted_chunk_duration, progress_callback
+            )
+        else:
+            # Single chunk - use sequential processing
+            all_segments, combined_text_parts = _transcribe_chunks_sequential(
+                chunk_paths, openai_api_key, language_setting_from_client, 
+                rolling_context_prompt, adjusted_chunk_duration, progress_callback
+            )
     
     finally:
         # Clean up chunk files
@@ -557,15 +761,51 @@ def transcribe_large_audio_file_with_progress(
         }
         processing_time = time.time() - start_time
         total_duration = get_audio_duration(audio_file_path)
-        logger.info(f"Successfully transcribed large file in {len(chunk_paths)} chunks. Total segments: {len(all_segments)}. Processing time: {processing_time:.1f}s for {total_duration:.1f}s of audio")
+        
+        # Enhanced success metrics
+        success_rate = len(all_segments) / len(chunk_paths) if chunk_paths else 0
+        logger.info(f"Successfully transcribed large file: {len(all_segments)} segments from {len(chunk_paths)} chunks (success rate: {success_rate:.1%}). Processing time: {processing_time:.1f}s for {total_duration:.1f}s of audio")
         
         if progress_callback:
             progress_callback(len(chunk_paths), len(chunk_paths), "Transcription completed successfully!")
         
         return combined_result
-    else:
+    elif len(all_segments) > 0:
+        # INTELLIGENT FALLBACK: Partial success - return what we have with warning
         processing_time = time.time() - start_time
-        logger.error(f"No successful transcriptions from any chunks. Processing time: {processing_time:.1f}s")
+        partial_success_rate = len(all_segments) / len(chunk_paths) if chunk_paths else 0
+        
+        logger.warning(f"Partial transcription success: {len(all_segments)} segments from {len(chunk_paths)} chunks ({partial_success_rate:.1%} success rate)")
+        
+        # Create partial result with metadata about missing chunks
+        combined_result = {
+            'text': ' '.join(combined_text_parts),
+            'segments': all_segments,
+            'partial': True,
+            'success_rate': partial_success_rate,
+            'total_chunks': len(chunk_paths),
+            'successful_chunks': len([s for s in all_segments]),
+            'warning': f'Partial transcription: {len(chunk_paths) - len(all_segments)} chunks failed due to API issues'
+        }
+        
+        if progress_callback:
+            progress_callback(len(chunk_paths), len(chunk_paths), f"Partial transcription completed ({partial_success_rate:.0%} success)")
+        
+        return combined_result
+    else:
+        # INTELLIGENT FALLBACK: Complete failure - provide actionable guidance
+        processing_time = time.time() - start_time
+        logger.error(f"Complete transcription failure. Processing time: {processing_time:.1f}s")
+        
+        # Analyze failure patterns for better user guidance
+        failure_advice = _generate_failure_advice(chunk_paths, processing_time)
+        
+        if progress_callback:
+            try:
+                progress_callback(0, len(chunk_paths), f"Transcription failed: {failure_advice}")
+            except:
+                pass  # Don't fail on callback errors
+        
         return None
 
 def transcribe_large_audio_file(
@@ -618,8 +858,8 @@ def transcribe_large_audio_file(
             # Use context from previous chunk for continuity
             chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
             
-            # Retry chunk transcription with exponential backoff
-            chunk_max_retries = 3
+            # Smart chunk retry with improved error handling
+            chunk_max_retries = 4  # Increased for better reliability
             chunk_result = None
             
             for chunk_attempt in range(chunk_max_retries):
@@ -628,19 +868,34 @@ def transcribe_large_audio_file(
                         chunk_path, openai_api_key, language_setting_from_client, chunk_context
                     )
                     if chunk_result and chunk_result.get('segments'):
+                        logger.info(f"Chunk {i+1}/{len(chunk_paths)} transcribed successfully on attempt {chunk_attempt + 1}")
                         break  # Success, exit retry loop
                     else:
                         raise Exception("No segments returned from transcription")
                         
                 except Exception as e:
-                    logger.warning(f"Chunk {i+1} attempt {chunk_attempt + 1} failed: {e}")
-                    if chunk_attempt == chunk_max_retries - 1:
-                        logger.error(f"Failed to transcribe chunk {i+1} after {chunk_max_retries} attempts")
+                    error_msg = str(e)
+                    logger.warning(f"Chunk {i+1} attempt {chunk_attempt + 1} failed: {error_msg}")
+                    
+                    # Don't retry on certain errors
+                    if any(term in error_msg.lower() for term in ['client error', 'file too large', 'api key', 'unauthorized']):
+                        logger.error(f"Non-recoverable error for chunk {i+1}: {error_msg}")
                         chunk_result = None
                         break
                     
-                    # Exponential backoff for chunk retries
-                    chunk_delay = min(2 ** chunk_attempt, 8)
+                    if chunk_attempt == chunk_max_retries - 1:
+                        logger.error(f"Failed to transcribe chunk {i+1} after {chunk_max_retries} attempts: {error_msg}")
+                        chunk_result = None
+                        break
+                    
+                    # Smart backoff for chunk retries
+                    if 'rate limit' in error_msg.lower():
+                        chunk_delay = min(30, 5 * (2 ** chunk_attempt))  # Longer delay for rate limits
+                    elif 'server error' in error_msg.lower() or '5' in error_msg[:3]:  # Server errors
+                        chunk_delay = min(20, 3 * (2 ** chunk_attempt))
+                    else:
+                        chunk_delay = min(10, 2 ** chunk_attempt)  # Standard exponential backoff
+                    
                     logger.info(f"Retrying chunk {i+1} in {chunk_delay} seconds...")
                     time.sleep(chunk_delay)
             
@@ -730,20 +985,21 @@ def _transcribe_audio_segment_openai(
                 logger.info(f"Whisper: Language setting '{language_setting_from_client}' unrecognized, defaulting to auto-detect.")
                 # No 'language' key added for auto-detect
 
-            # CRITICAL FIX: Minimize or eliminate context prompt to prevent feedback loops
-            # Only use minimal context (2-3 words max) to avoid hallucination propagation
+            # PERFORMANCE & ACCURACY: Ultra-minimal context to maximize speed and reduce hallucinations
+            # For performance optimization, we use minimal to no context
             if rolling_context_prompt and len(rolling_context_prompt.strip()) > 0:
-                # Use only the last 2-3 words to minimize feedback loop risk
-                context_words = rolling_context_prompt.strip().split()[-2:]
+                # Use only the last 1-2 words for performance optimization
+                context_words = rolling_context_prompt.strip().split()[-1:]
                 minimal_context = " ".join(context_words)
-                if len(minimal_context) > 3:  # Only use if meaningful
+                # Only use context if it's a single meaningful word (>2 chars)
+                if len(minimal_context) > 2 and len(minimal_context) < 20:
                     data_payload['prompt'] = minimal_context
-                    logger.info(f"Whisper: Using minimal context (2-3 words): '{minimal_context}'")
+                    logger.debug(f"Whisper: Using ultra-minimal context: '{minimal_context}'")
                 else:
-                    logger.info("Whisper: Context too short, using no prompt to prevent hallucinations.")
+                    logger.debug("Whisper: Skipping context for optimal performance.")
             else:
-                logger.info("Whisper: No context provided, using no prompt to prevent hallucination feedback loops.")
-                # No prompt parameter added - let Whisper work without context bias
+                logger.debug("Whisper: No context - optimized for speed and accuracy.")
+                # No prompt parameter added - fastest processing
 
 
             # === DYNAMIC MIME TYPE DETECTION ===
@@ -776,8 +1032,9 @@ def _transcribe_audio_segment_openai(
             files_param = {'file': (file_name_for_api, audio_file_obj, mime_type)}
             # === END DYNAMIC MIME TYPE DETECTION ===
 
-            max_retries = 5  # Increased from 3 to 5
+            max_retries = 6  # Smart retry based on error type
             transcription_timeout = 900 # 15 minutes
+            consecutive_failures = 0  # Track consecutive failures for circuit breaking
             
             for attempt in range(max_retries):
                 try:
@@ -785,7 +1042,7 @@ def _transcribe_audio_segment_openai(
                     # Reset file pointer for retries if the file object is being reused
                     audio_file_obj.seek(0)
                     
-                    # Create a new requests session with retry configuration
+                    # Create optimized requests session with connection pooling
                     session = requests.Session()
                     from requests.adapters import HTTPAdapter
                     from urllib3.util.retry import Retry
@@ -795,10 +1052,16 @@ def _transcribe_audio_segment_openai(
                         total=0,  # We handle retries manually
                         connect=3,  # Retry connection failures
                         read=3,     # Retry read failures
-                        backoff_factor=1,
+                        backoff_factor=0.5,  # Faster backoff for performance
                         status_forcelist=[502, 503, 504]  # Retry on server errors
                     )
-                    adapter = HTTPAdapter(max_retries=retry_strategy)
+                    
+                    # Optimized adapter with connection pooling
+                    adapter = HTTPAdapter(
+                        max_retries=retry_strategy,
+                        pool_connections=10,  # Connection pool size
+                        pool_maxsize=20       # Max connections in pool
+                    )
                     session.mount("http://", adapter)
                     session.mount("https://", adapter)
                     
@@ -814,6 +1077,7 @@ def _transcribe_audio_segment_openai(
 
                     if 'segments' in transcription and isinstance(transcription['segments'], list):
                         logger.info(f"Successfully transcribed {audio_file_path} on attempt {attempt + 1}.")
+                        consecutive_failures = 0  # Reset failure counter on success
                         return transcription
                     else:
                         logger.warning(f"Unexpected transcription format for {audio_file_path}: {transcription}")
@@ -833,20 +1097,39 @@ def _transcribe_audio_segment_openai(
                         
                 except requests.exceptions.HTTPError as e:
                     logger.error(f"HTTP error transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
+                    consecutive_failures += 1
                     
-                    # Don't retry on certain HTTP errors
-                    if response.status_code in [400, 401, 403, 413]:  # Bad request, auth, or file too large
+                    # Categorize errors for intelligent retry
+                    if response.status_code in [400, 401, 403]:  # Client errors - don't retry
                         try:
                             error_detail = response.json()
-                            logger.error(f"OpenAI API error detail: {error_detail}")
-                            raise Exception(f"OpenAI API error: {error_detail.get('error', {}).get('message', str(e))}")
+                            logger.error(f"OpenAI API client error: {error_detail}")
+                            error_msg = error_detail.get('error', {}).get('message', str(e))
+                            raise Exception(f"OpenAI API client error: {error_msg}")
                         except json.JSONDecodeError:
                             logger.error(f"OpenAI API error response (non-JSON): {response.text[:500]}")
-                            raise Exception(f"OpenAI API error ({response.status_code}): {response.text[:200]}")
+                            raise Exception(f"OpenAI API client error ({response.status_code}): {response.text[:200]}")
                     
-                    # Retry on server errors
-                    if attempt == max_retries - 1: 
-                        raise Exception(f"Transcription failed after {max_retries} attempts due to server error")
+                    elif response.status_code == 413:  # File too large - don't retry
+                        raise Exception("File too large for OpenAI API (exceeds 25MB limit)")
+                    
+                    elif response.status_code == 429:  # Rate limit - longer backoff
+                        if attempt == max_retries - 1:
+                            raise Exception("OpenAI API rate limit exceeded after all retries")
+                        # Longer backoff for rate limits
+                        rate_limit_delay = min(60, 10 * (2 ** attempt))
+                        logger.warning(f"Rate limit hit. Backing off for {rate_limit_delay}s...")
+                        time.sleep(rate_limit_delay)
+                        continue
+                        
+                    elif response.status_code >= 500:  # Server errors - retry with backoff
+                        if attempt == max_retries - 1: 
+                            raise Exception(f"OpenAI API server error ({response.status_code}) persisted after {max_retries} attempts")
+                        logger.warning(f"Server error {response.status_code}, will retry...")
+                    
+                    else:  # Other HTTP errors
+                        if attempt == max_retries - 1: 
+                            raise Exception(f"HTTP error ({response.status_code}) after {max_retries} attempts")
                         
                 except requests.exceptions.RequestException as e:
                     logger.error(f"Request exception transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
@@ -858,13 +1141,26 @@ def _transcribe_audio_segment_openai(
                     if attempt == max_retries - 1: 
                         raise Exception(f"Transcription failed after {max_retries} attempts: {str(e)}")
                 
-                # Exponential backoff with jitter
+                # Smart backoff based on error type and consecutive failures
                 if attempt < max_retries - 1:
-                    base_delay = min(2 ** attempt, 16)  # Cap at 16 seconds
-                    jitter = base_delay * 0.1 * (0.5 - time.time() % 1)  # +/- 10% jitter
-                    delay = base_delay + jitter
-                    logger.info(f"Retrying in {delay:.2f} seconds...")
-                    time.sleep(delay) 
+                    # Circuit breaker: Longer delays for persistent failures
+                    if consecutive_failures >= 3:
+                        base_delay = min(30 + (consecutive_failures * 10), 120)  # 30s to 2min based on failures
+                        logger.warning(f"Circuit breaker activated: {consecutive_failures} consecutive failures detected")
+                    else:
+                        base_delay = min(2 ** attempt, 16)  # Standard exponential backoff, cap at 16s
+                    
+                    # Add jitter to avoid thundering herd
+                    jitter = base_delay * 0.2 * (0.5 - (time.time() % 1))  # +/- 20% jitter
+                    delay = max(1, base_delay + jitter)  # Minimum 1 second delay
+                    
+                    logger.info(f"Backing off for {delay:.1f}s (consecutive failures: {consecutive_failures})...")
+                    time.sleep(delay)
+                else:
+                    # Final attempt failed
+                    if consecutive_failures >= 3:
+                        logger.error(f"Circuit breaker tripped: {consecutive_failures} consecutive failures for {audio_file_path}")
+                        raise Exception(f"OpenAI API appears unstable - {consecutive_failures} consecutive failures. Please try again later.") 
             return None 
 
     except Exception as e:

@@ -1809,12 +1809,41 @@ def get_transcription_job_status(user: SupabaseUser, job_id: str):
     
     return jsonify(response_data), 200
 
+@app.route('/api/transcription/cancel/<job_id>', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def cancel_transcription_job(user: SupabaseUser, job_id: str):
+    """Cancel a running transcription job."""
+    if job_id not in transcription_jobs:
+        return jsonify({"error": "Job not found"}), 404
+    
+    job_data = transcription_jobs[job_id]
+    
+    # Verify user owns this job
+    if job_data.get('user_id') != user.id:
+        return jsonify({"error": "Access denied"}), 403
+    
+    # Check if job can be cancelled
+    current_status = job_data.get('status', 'unknown')
+    if current_status in ['completed', 'failed', 'cancelled']:
+        return jsonify({"error": f"Cannot cancel job with status: {current_status}"}), 400
+    
+    # Mark job as cancelled
+    update_job_progress(job_id, status='cancelled', current_step='Cancelled by user')
+    logger.info(f"Job {job_id} cancelled by user {user.id}")
+    
+    return jsonify({"message": "Job cancelled successfully", "job_id": job_id}), 200
+
 def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, original_filename: str, transcription_language: str, user: SupabaseUser):
     """Process transcription job in background thread with progress tracking."""
     temp_filepath = None
     transcription_successful = False
     
     try:
+        # Check for cancellation before starting
+        if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
+            logger.info(f"Job {job_id} was cancelled before processing started")
+            return
+            
         update_job_progress(job_id, status='processing', current_step='Downloading file from S3...')
         
         # 1. Download file from S3 to a temporary local path
@@ -1851,9 +1880,19 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
         
         from transcription_service import transcribe_large_audio_file_with_progress
 
+        # Check for cancellation before starting transcription
+        if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
+            logger.info(f"Job {job_id} was cancelled before transcription started")
+            return
+            
         logger.info(f"Job {job_id}: Starting transcription for {temp_filepath} with language: {transcription_language}...")
         
         def progress_callback(completed_chunks: int, total_chunks: int, current_step: str):
+            # Check for cancellation during progress updates
+            if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
+                logger.info(f"Job {job_id} cancelled during chunk processing")
+                raise Exception("Job cancelled by user")
+                
             progress = 0.1 + (completed_chunks / total_chunks) * 0.8  # 10% for download, 80% for transcription
             update_job_progress(job_id, 
                                progress=progress,
@@ -1869,10 +1908,37 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
             chunk_size_mb=20  # Use 20MB chunks
         )
 
-        # 4. Process result
+        # 4. Process result with intelligent fallback handling
         if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
             transcription_successful = True
             full_transcript_text = transcription_data['text']
+            
+            # Check if this is a partial result
+            if transcription_data.get('partial', False):
+                success_rate = transcription_data.get('success_rate', 1.0)
+                warning_msg = transcription_data.get('warning', 'Partial transcription completed')
+                logger.warning(f"Job {job_id}: Partial success with {success_rate:.1%} completion rate")
+                
+                # Update job with partial success indicator
+                result_data = {
+                    'transcript': full_transcript_text,
+                    'segments': transcription_data['segments'],
+                    'partial': True,
+                    'success_rate': success_rate,
+                    'warning': warning_msg
+                }
+                
+                update_job_progress(job_id, 
+                                   status='completed',
+                                   progress=success_rate,  # Use actual success rate as progress
+                                   current_step=f'Completed with {success_rate:.0%} success rate',
+                                   result=result_data)
+            else:
+                # Complete success
+                result_data = {
+                    'transcript': full_transcript_text,
+                    'segments': transcription_data['segments']
+                }
             segments = transcription_data['segments']
 
             user_name = user.user_metadata.get('full_name', user.email if user.email else 'UnknownUser')
