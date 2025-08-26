@@ -20,6 +20,7 @@ import subprocess
 import re
 from werkzeug.utils import secure_filename # Added for file uploads
 
+from transcription_service import transcribe_large_audio_file
 from utils.api_key_manager import get_api_key # Import the new key manager
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
@@ -249,6 +250,128 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
     # Deny by default if the key does not conform to any of the allowed patterns.
     logger.warning(f"SECURITY: Access denied for user {user.id} on key {s3_key} because it lacks an ownership identifier (uID) and is not a recognized shared resource path.")
     return False
+
+@app.route('/api/s3/generate-presigned-url', methods=['POST'])
+@supabase_auth_required(agent_required=False) # Agent name is in payload but doesn't need DB access check for this
+def generate_presigned_url(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agentName')
+    filename = data.get('filename')
+    file_type = data.get('fileType')
+
+    if not all([agent_name, filename, file_type]):
+        return jsonify({"error": "Missing agentName, filename, or fileType"}), 400
+
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        return jsonify({"error": "S3 service not configured"}), 503
+
+    secure_name = secure_filename(filename)
+    s3_key = f"organizations/river/agents/{agent_name}/uploads/{uuid.uuid4().hex}/{secure_name}"
+
+    try:
+        # Generate a presigned URL for a POST request
+        presigned_post = s3.generate_presigned_post(
+            Bucket=aws_s3_bucket,
+            Key=s3_key,
+            Fields={"Content-Type": file_type},
+            Conditions=[
+                {"Content-Type": file_type},
+                ["content-length-range", 1, 250000000]  # 1 byte to 250 MB
+            ],
+            ExpiresIn=900  # 15 minutes
+        )
+        
+        response_data = {
+            **presigned_post,
+            "s3Key": s3_key
+        }
+
+        return jsonify(response_data), 200
+
+    except Exception as e:
+        logger.error(f"Error generating presigned URL: {e}", exc_info=True)
+        return jsonify({"error": "Could not generate upload URL"}), 500
+
+@app.route('/api/transcription/start-job-from-s3', methods=['POST'])
+@supabase_auth_required(agent_required=True) # Agent name check is good here
+def start_transcription_from_s3(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agentName') # or agent? The decorator uses 'agent', payload might be 'agentName'
+    if not agent_name: agent_name = data.get('agent')
+    s3_key = data.get('s3Key')
+    original_filename = data.get('originalFilename')
+    # Let's add transcriptionLanguage from the frontend
+    transcription_language = data.get('transcriptionLanguage', 'any')
+
+    if not all([agent_name, s3_key, original_filename]):
+        return jsonify({"error": "Missing agentName, s3Key, or originalFilename"}), 400
+
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        return jsonify({"error": "S3 service not configured"}), 503
+
+    temp_filepath = None
+    try:
+        # 1. Download file from S3 to a temporary local path
+        unique_id = uuid.uuid4().hex
+        temp_filename = f"{unique_id}_{secure_filename(original_filename)}"
+        temp_filepath = os.path.join(UPLOAD_FOLDER, temp_filename)
+        
+        logger.info(f"Downloading s3://{aws_s3_bucket}/{s3_key} to {temp_filepath}")
+        s3.download_file(aws_s3_bucket, s3_key, temp_filepath)
+        logger.info("Download complete.")
+
+        # 2. Transcribe the downloaded file
+        openai_api_key = get_api_key(agent_name, 'openai')
+        if not openai_api_key:
+            logger.error(f"OpenAI API key not found for agent '{agent_name}'.")
+            return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
+        
+        logger.info(f"Starting transcription for {temp_filepath} (from S3) with language: {transcription_language}...")
+        transcription_data = transcribe_large_audio_file(
+            audio_file_path=temp_filepath,
+            openai_api_key=openai_api_key,
+            language_setting_from_client=transcription_language
+        )
+
+        # 3. Process result and return
+        if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
+            full_transcript_text = transcription_data['text']
+            segments = transcription_data['segments']
+
+            user_name = user.user_metadata.get('full_name', user.email if user.email else 'UnknownUser')
+            upload_timestamp_utc = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+            
+            header = (
+                f"# Transcript - Uploaded\n"
+                f"Agent: {agent_name}\n"
+                f"User: {user_name}\n"
+                f"Transcript Uploaded (UTC): {upload_timestamp_utc}\n\n"
+            )
+            
+            final_transcript_with_header = header + full_transcript_text
+            
+            logger.info(f"S3-based transcription successful for {original_filename}. Total Text Length (with header): {len(final_transcript_with_header)}, Segments: {len(segments)}")
+            return jsonify({"transcript": final_transcript_with_header, "segments": segments}), 200
+        else:
+            error_msg = "S3-based transcription failed or returned incomplete data."
+            logger.error(f"{error_msg} File: {original_filename} (S3: {s3_key}). API Result (if any): {str(transcription_data)[:500]}...")
+            return jsonify({"error": error_msg, "details": "No specific error details from service."}), 500
+
+    except Exception as e:
+        logger.error(f"Error processing S3 transcription job for {s3_key}: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error during S3 transcription job"}), 500
+    finally:
+        # 4. Clean up the temporary file
+        if temp_filepath and os.path.exists(temp_filepath):
+            try:
+                os.remove(temp_filepath)
+                logger.info(f"Cleaned up temporary file from S3 download: {temp_filepath}")
+            except Exception as e_clean:
+                logger.error(f"Error cleaning up temporary file {temp_filepath}: {e_clean}")
 
 UPLOAD_FOLDER = 'tmp/uploaded_transcriptions/'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
