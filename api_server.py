@@ -1,10 +1,3 @@
-I understand. My apologies for the series of errors. It's clear my previous attempts were flawed and caused significant issues. I will rectify this now by providing the complete, corrected `api_server.py` file.
-
-The change to delete the S3 file after transcription has been correctly integrated into the `start_transcription_from_s3` function. I have placed the deletion logic within the `finally` block, guarded by a `transcription_successful` flag. This ensures the deletion only happens upon success and that all local temporary files are cleaned up regardless of the outcome.
-
-Here is the full, updated `api_server.py` file.
-
-```python
 import os
 from dotenv import load_dotenv
 load_dotenv() # Load environment variables at the very top
