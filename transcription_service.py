@@ -153,6 +153,14 @@ def transcribe_chunk_wrapper(args):
     """Wrapper function for parallel chunk transcription."""
     chunk_path, chunk_index, total_chunks, openai_api_key, language_setting, chunk_context, progress_callback = args
     
+    # Add staggered delay to reduce concurrent load on OpenAI API
+    import time
+    import random
+    stagger_delay = chunk_index * 0.3 + random.uniform(0, 0.2)  # 0.3s per chunk + jitter
+    if stagger_delay > 0:
+        logger.debug(f"Staggering chunk {chunk_index + 1} by {stagger_delay:.1f}s to reduce API load")
+        time.sleep(stagger_delay)
+    
     logger.info(f"Starting parallel transcription of chunk {chunk_index + 1}/{total_chunks}: {os.path.basename(chunk_path)}")
     
     # Update progress if callback provided - report start of processing with percentage only
@@ -245,8 +253,8 @@ def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, r
             language_setting, chunk_context, progress_callback
         ))
     
-    # Process chunks in parallel with controlled concurrency
-    max_workers = min(3, len(chunk_paths))  # Limit to 3 concurrent to avoid rate limits
+    # Process chunks in parallel with controlled concurrency - reduced for better stability
+    max_workers = min(2, len(chunk_paths))  # Limit to 2 concurrent to reduce OpenAI API errors
     completed_chunks = []
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -751,7 +759,7 @@ def transcribe_large_audio_file_with_progress(
     # Performance optimization: Use parallel processing for multiple chunks  
     try:
         if len(chunk_paths) > 1:
-            logger.info(f"Using parallel processing for {len(chunk_paths)} chunks (max 3 concurrent)")
+            logger.info(f"Using parallel processing for {len(chunk_paths)} chunks (max 2 concurrent)")
             all_segments, combined_text_parts = _transcribe_chunks_parallel(
                 chunk_paths, openai_api_key, language_setting_from_client, 
                 rolling_context_prompt, adjusted_chunk_duration, progress_callback
@@ -1050,11 +1058,24 @@ def _transcribe_audio_segment_openai(
                     logger.warning(f"Could not determine specific audio MIME type for {file_name_for_api} (ext: {ext}). Using 'application/octet-stream'. OpenAI might infer.")
                     mime_type = 'application/octet-stream'
             
-            logger.info(f"Preparing to send {file_name_for_api} to OpenAI with detected MIME type: {mime_type}")
+            # Validate file before sending to OpenAI API
+            audio_file_obj.seek(0, 2)  # Seek to end to get file size
+            file_size = audio_file_obj.tell()
+            audio_file_obj.seek(0)  # Reset to beginning
+            
+            # Check file size (25MB OpenAI limit)
+            if file_size > 25 * 1024 * 1024:  # 25MB in bytes
+                raise Exception(f"File size {file_size / (1024*1024):.1f}MB exceeds OpenAI 25MB limit")
+            
+            # Check for empty file
+            if file_size == 0:
+                raise Exception("Empty audio file cannot be transcribed")
+                
+            logger.info(f"Preparing to send {file_name_for_api} ({file_size / (1024*1024):.1f}MB) to OpenAI with MIME type: {mime_type}")
             files_param = {'file': (file_name_for_api, audio_file_obj, mime_type)}
             # === END DYNAMIC MIME TYPE DETECTION ===
 
-            max_retries = 6  # Smart retry based on error type
+            max_retries = 4  # Reduced retries to fail faster on persistent issues
             transcription_timeout = 900 # 15 minutes
             consecutive_failures = 0  # Track consecutive failures for circuit breaking
             
@@ -1138,9 +1159,11 @@ def _transcribe_audio_segment_openai(
                     elif response.status_code == 429:  # Rate limit - longer backoff
                         if attempt == max_retries - 1:
                             raise Exception("OpenAI API rate limit exceeded after all retries")
-                        # Longer backoff for rate limits
-                        rate_limit_delay = min(60, 10 * (2 ** attempt))
-                        logger.warning(f"Rate limit hit. Backing off for {rate_limit_delay}s...")
+                        # Longer backoff for rate limits with jitter to avoid thundering herd
+                        base_delay = min(30, 5 * (2 ** attempt))  # 5s, 10s, 20s, 30s
+                        jitter = base_delay * 0.3 * (0.5 - (time.time() % 1))  # +/- 30% jitter
+                        rate_limit_delay = base_delay + jitter
+                        logger.warning(f"Rate limit hit. Backing off for {rate_limit_delay:.1f}s...")
                         time.sleep(rate_limit_delay)
                         continue
                         
