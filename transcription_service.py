@@ -457,10 +457,10 @@ def transcribe_large_audio_file_with_progress(
     # Smart chunking: Use file size to determine optimal chunk duration
     file_size_mb = os.path.getsize(audio_file_path) / (1024 * 1024)
     
-    if file_size_mb <= 50:  # Small-medium files: fewer, larger chunks
+    if file_size_mb <= 100:  # Small-medium files: fewer, larger chunks for efficiency
         adjusted_chunk_duration = min(chunk_duration, 600)  # 10 minutes per chunk
-    else:  # Large files: more chunks for better progress tracking
-        adjusted_chunk_duration = min(chunk_duration, 300)   # 5 minutes per chunk
+    else:  # Very large files: more chunks for better progress tracking
+        adjusted_chunk_duration = min(chunk_duration, 400)   # ~7 minutes per chunk
     
     logger.info(f"File size: {file_size_mb:.1f}MB, using {adjusted_chunk_duration}s chunks")
     
