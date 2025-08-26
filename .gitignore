@@ -10,6 +10,7 @@ anthropic_api_key.txt
 /test
 /transcripts
 /venv
+/tmp
 __pycache__/
 *.pyc
 claude_chat.logapi_server.log
