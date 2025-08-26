@@ -155,10 +155,10 @@ def transcribe_chunk_wrapper(args):
     
     logger.info(f"Starting parallel transcription of chunk {chunk_index + 1}/{total_chunks}: {os.path.basename(chunk_path)}")
     
-    # Update progress if callback provided
+    # Update progress if callback provided - report start of processing
     if progress_callback:
         try:
-            progress_callback(chunk_index, total_chunks, f"Processing chunk {chunk_index + 1}/{total_chunks}")
+            progress_callback(chunk_index, total_chunks, f"Transcribing audio segment {chunk_index + 1}/{total_chunks}")
         except Exception as e:
             # If progress callback raises exception (e.g., cancellation), stop processing
             logger.info(f"Chunk {chunk_index + 1} processing stopped: {e}")
@@ -255,7 +255,8 @@ def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, r
             for args in chunk_args
         }
         
-        # Collect results as they complete
+        # Collect results as they complete and report progress
+        completed_count = 0
         for future in concurrent.futures.as_completed(future_to_chunk):
             chunk_index = future_to_chunk[future]
             try:
@@ -266,14 +267,23 @@ def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, r
                     return [], []
                     
                 completed_chunks.append(result)
+                completed_count += 1
+                
+                # Report completion progress
+                if progress_callback:
+                    try:
+                        progress_callback(completed_count, len(chunk_paths), f"Completed {completed_count}/{len(chunk_paths)} segments")
+                    except:
+                        pass  # Don't fail on callback errors
                 
                 if result['success']:
-                    logger.info(f"Chunk {chunk_index + 1} completed successfully")
+                    logger.info(f"Chunk {chunk_index + 1} completed successfully ({completed_count}/{len(chunk_paths)})")
                 else:
-                    logger.warning(f"Chunk {chunk_index + 1} failed: {result.get('error', 'Unknown error')}")
+                    logger.warning(f"Chunk {chunk_index + 1} failed: {result.get('error', 'Unknown error')} ({completed_count}/{len(chunk_paths)})")
                     
             except Exception as e:
                 logger.error(f"Exception in parallel chunk processing: {e}")
+                completed_count += 1
                 completed_chunks.append({
                     'chunk_index': chunk_index,
                     'chunk_path': chunk_paths[chunk_index],
@@ -281,6 +291,13 @@ def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, r
                     'success': False,
                     'error': str(e)
                 })
+                
+                # Report completion progress even for failures
+                if progress_callback:
+                    try:
+                        progress_callback(completed_count, len(chunk_paths), f"Completed {completed_count}/{len(chunk_paths)} segments")
+                    except:
+                        pass
     
     # Sort results by chunk index to maintain order
     completed_chunks.sort(key=lambda x: x['chunk_index'])
@@ -762,18 +779,20 @@ def transcribe_large_audio_file_with_progress(
         processing_time = time.time() - start_time
         total_duration = get_audio_duration(audio_file_path)
         
-        # Enhanced success metrics
-        success_rate = len(all_segments) / len(chunk_paths) if chunk_paths else 0
-        logger.info(f"Successfully transcribed large file: {len(all_segments)} segments from {len(chunk_paths)} chunks (success rate: {success_rate:.1%}). Processing time: {processing_time:.1f}s for {total_duration:.1f}s of audio")
+        # Enhanced success metrics - fix calculation
+        successful_chunks = sum(1 for result in combined_text_parts if result.strip())  # Count non-empty results
+        success_rate = successful_chunks / len(chunk_paths) if chunk_paths else 0
+        logger.info(f"Successfully transcribed large file: {len(all_segments)} segments from {len(chunk_paths)} chunks ({successful_chunks}/{len(chunk_paths)} successful chunks, {success_rate:.1%} success rate). Processing time: {processing_time:.1f}s for {total_duration:.1f}s of audio")
         
         if progress_callback:
             progress_callback(len(chunk_paths), len(chunk_paths), "Transcription completed successfully!")
         
         return combined_result
     elif len(all_segments) > 0:
-        # INTELLIGENT FALLBACK: Partial success - return what we have with warning
+        # INTELLIGENT FALLBACK: Partial success - return what we have with warning  
         processing_time = time.time() - start_time
-        partial_success_rate = len(all_segments) / len(chunk_paths) if chunk_paths else 0
+        successful_chunks = sum(1 for result in combined_text_parts if result.strip())
+        partial_success_rate = successful_chunks / len(chunk_paths) if chunk_paths else 0
         
         logger.warning(f"Partial transcription success: {len(all_segments)} segments from {len(chunk_paths)} chunks ({partial_success_rate:.1%} success rate)")
         
