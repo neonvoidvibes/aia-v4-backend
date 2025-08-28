@@ -37,7 +37,7 @@ class VADIntegrationBridge:
         
         # Initialize VAD transcription manager
         # Mode 3 is the most aggressive and recommended for filtering out non-speech to prevent hallucinations.
-        vad_aggressiveness = int(os.getenv('VAD_AGGRESSIVENESS', '3'))
+        vad_aggressiveness = int(os.getenv('VAD_AGGRESSIVENESS', '2'))
         
         try:
             self.vad_manager = VADTranscriptionManager(
@@ -272,7 +272,7 @@ def log_vad_configuration():
     """Log current VAD configuration for debugging."""
     logger.info("=== VAD CONFIGURATION ===")
     logger.info(f"VAD Enabled Flag: {os.getenv('ENABLE_VAD_TRANSCRIPTION', 'true')}")
-    logger.info(f"VAD Aggressiveness: {os.getenv('VAD_AGGRESSIVENESS', '3')}")
+    logger.info(f"VAD Aggressiveness: {os.getenv('VAD_AGGRESSIVENESS', '2')}")
     logger.info(f"VAD Segment Duration: {os.getenv('VAD_SEGMENT_DURATION', '15.0')}s")
     logger.info(f"VAD Temp Directory: {os.getenv('VAD_TEMP_DIR', 'tmp_vad_audio_sessions')}")
     logger.info(f"Bridge Instance: {'Initialized' if _vad_bridge_instance else 'Not Initialized'}")
