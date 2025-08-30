@@ -270,6 +270,135 @@ class RetrievalHandler:
 
         except Exception as e: logger.error(f"Context retrieval error: {e}", exc_info=True); return []
 
+    def _mmr(self, candidates, embeddings, k: int = 15, lambda_mult: float = 0.6):
+        """Simple MMR over candidate list using score as relevance and cosine similarity over embeddings.
+        candidates: list of Pinecone match objects with .score and .id
+        embeddings: dict id->embedding vector (same query embedding used to derive similarity). If not provided,
+        fallback to score-only ranking.
+        """
+        try:
+            import numpy as np
+        except Exception:
+            # Fallback: return top-k by original score
+            return sorted(candidates, key=lambda x: x.score, reverse=True)[:k]
+
+        if not candidates:
+            return []
+        selected = []
+        remaining = candidates[:]
+        # Normalize score to [0,1]
+        max_s = max([c.score for c in candidates]) or 1.0
+        min_s = min([c.score for c in candidates])
+        denom = (max_s - min_s) or 1.0
+
+        def cosine(a, b):
+            na = np.linalg.norm(a); nb = np.linalg.norm(b)
+            if na == 0 or nb == 0: return 0.0
+            return float(np.dot(a, b) / (na * nb))
+
+        while remaining and len(selected) < k:
+            best = None; best_score = -1e9
+            for cand in remaining:
+                rel = (cand.score - min_s) / denom
+                if not embeddings or cand.id not in embeddings:
+                    mmr_score = rel
+                else:
+                    # diversity term: 1 - max cosine to already selected
+                    if not selected:
+                        div = 1.0
+                    else:
+                        cemb = embeddings.get(cand.id)
+                        max_sim = max([cosine(cemb, embeddings.get(s.id, cemb)) for s in selected])
+                        div = 1.0 - max_sim
+                    mmr_score = lambda_mult * rel + (1 - lambda_mult) * div
+                if mmr_score > best_score:
+                    best = cand; best_score = mmr_score
+            selected.append(best)
+            remaining.remove(best)
+        return selected
+
+    def get_relevant_context_tiered(
+        self,
+        query: str,
+        tier_caps: List[int] = [7, 5, 3],
+        mmr_k: int = 15,
+        mmr_lambda: float = 0.6,
+        include_t3: bool = True,
+    ) -> List[Document]:
+        """Event-scoped retrieval across tiers with MMR over union.
+        Tier1: {agent_name, event_id=current}
+        Tier2: {agent_name, event_id='0000'}
+        Tier3: {agent_name, event_id!=current and !='0000'} (optional)
+        """
+        if not self.index:
+            logger.info("Retriever: Skipping context retrieval as Pinecone index is not available.")
+            return []
+
+        # Prepare embedding for query (transformed)
+        transformed_query = self._transform_query(query)
+        try:
+            query_embedding = self.embeddings.embed_query(transformed_query)
+        except Exception as e:
+            logger.error(f"Retriever tiered: Embedding error: {e}", exc_info=True)
+            return []
+
+        tier_results = []
+        tiers = []
+        current_event = self.event_id or '0000'
+        # Tier 1
+        tiers.append({"filter": {"agent_name": self.namespace, "event_id": current_event}, "cap": tier_caps[0] if len(tier_caps)>0 else 7, "label": "t1"})
+        # Tier 2
+        tiers.append({"filter": {"agent_name": self.namespace, "event_id": "0000"}, "cap": tier_caps[1] if len(tier_caps)>1 else 5, "label": "t2"})
+        # Tier 3
+        if include_t3:
+            tiers.append({"filter": {"agent_name": self.namespace, "event_id": {"$ne": current_event}}, "cap": tier_caps[2] if len(tier_caps)>2 else 3, "label": "t3"})
+
+        all_matches = []
+        tier_hit_counts = {"t1": 0, "t2": 0, "t3": 0}
+        for tier in tiers:
+            try:
+                resp = self.index.query(
+                    vector=query_embedding,
+                    top_k=tier["cap"],
+                    namespace=self.namespace,
+                    filter=tier["filter"],
+                    include_metadata=True,
+                )
+                matches = resp.matches or []
+                tier_hit_counts[tier["label"]] = len(matches)
+                all_matches.extend(matches)
+            except Exception as e:
+                logger.error(f"Tiered query error ({tier['label']}): {e}")
+
+        if not all_matches:
+            logger.info("Retriever tiered: 0 results across tiers")
+            return []
+
+        # Build id->embedding cache if index supports; otherwise, use None and fallback to scores
+        # Pinecone query does not return embeddings; skip deep diversity across text, use score-only fallback in _mmr
+        selected = self._mmr(all_matches, embeddings=None, k=mmr_k, lambda_mult=mmr_lambda)
+
+        # Convert to docs
+        docs: List[Document] = []
+        for m in selected:
+            if not m.metadata: continue
+            content = m.metadata.get('content')
+            if not content: continue
+            meta = {k: v for (k, v) in m.metadata.items() if k != 'content'}
+            # Label non-event sources inline as requested
+            src_event = str(meta.get('event_id', '0000'))
+            if current_event and src_event != current_event:
+                if src_event == '0000':
+                    meta['source_label'] = '[shared-0000]'
+                else:
+                    meta['source_label'] = f"[other:{src_event}]"
+            meta['score'] = m.score
+            meta['vector_id'] = m.id
+            docs.append(Document(page_content=content, metadata=meta))
+
+        logger.info(f"Retriever tiered: hits t1={tier_hit_counts['t1']} t2={tier_hit_counts['t2']} t3={tier_hit_counts['t3']}; returning {len(docs)}")
+        return docs
+
     def reinforce_memories(self, docs: List[Document]):
         """Increments the access_count for a list of documents."""
         if not self.index:

@@ -35,6 +35,7 @@ from utils.supabase_client import get_supabase_client
 
 from langchain_core.documents import Document
 from utils.retrieval_handler import RetrievalHandler
+from utils.prompt_builder import prompt_builder
 from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
@@ -2647,6 +2648,7 @@ def handle_chat(user: SupabaseUser):
     initial_context_for_aicreator = data.get('initialContext')
     current_draft_content_for_aicreator = data.get('currentDraftContent')
     disable_retrieval = data.get('disableRetrieval', False) # New
+    signal_bias = data.get('signalBias', 'medium') # 'low' | 'medium' | 'high'
 
     def generate_stream():
         """
@@ -2664,14 +2666,8 @@ def handle_chat(user: SupabaseUser):
 
             # --- System Prompt and Context Assembly (UNIFIED & RE-ORDERED) ---
             s3_load_start_time = time.time()
-            
-            # --- Part 1: Core Identity ---
-            base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
-            final_system_prompt = "" # Start with an empty string
-            
-            # Combine base and agent-specific prompts into a single CORE DIRECTIVE block
-            core_directive_content = base_system_prompt
-            
+            final_system_prompt = ""
+
             if agent_name == '_aicreator':
                 # Special instructions for the agent creator wizard
                 # ... (this logic remains the same)
@@ -2699,22 +2695,28 @@ I've updated the prompt to include the dragon's personality as you requested. It
 - The value of `"system_prompt"` MUST be a string containing the complete, new prompt.
 - Do NOT add any text, comments, or trailing commas inside or after the JSON block.
 """
-                core_directive_content += ai_creator_instructions
+                core_directive_content = (get_latest_system_prompt(agent_name) or "You are a helpful assistant.") + ai_creator_instructions
                 if initial_context_for_aicreator:
                     core_directive_content += f"\n\n<document_context>\n{initial_context_for_aicreator}\n</document_context>"
                 if current_draft_content_for_aicreator:
                     core_directive_content += f"\n\n## User's Current Draft (Authoritative)\n<current_draft>\n{current_draft_content_for_aicreator}\n</current_draft>"
             
             final_system_prompt += f"=== CORE DIRECTIVE ===\n{core_directive_content}\n=== END CORE DIRECTIVE ==="
-
-            if not is_wizard:
-                objective_function = get_objective_function(agent_name)
-                if objective_function:
-                    final_system_prompt += f"\n\n=== OBJECTIVE FUNCTION ===\n{objective_function}\n=== END OBJECTIVE FUNCTION ==="
-                
-                frameworks = get_latest_frameworks(agent_name)
-                if frameworks:
-                    final_system_prompt += f"\n\n=== FRAMEWORKS & GUIDELINES ===\n{frameworks}\n=== END FRAMEWORKS & GUIDELINES ==="
+            else:
+                # Unified prompt builder path for regular agents (incl. event layer)
+                feature_event_prompts = os.getenv('FEATURE_EVENT_PROMPTS', 'true').lower() == 'true'
+                try:
+                    final_system_prompt = prompt_builder(
+                        agent=agent_name,
+                        event=event_id or os.getenv('DEFAULT_EVENT', '0000'),
+                        user_context=None,
+                        retrieval_hints=None,
+                        feature_event_prompts=feature_event_prompts,
+                    )
+                except Exception as e:
+                    logger.error(f"PromptBuilder error; falling back: {e}", exc_info=True)
+                    base_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
+                    final_system_prompt = f"=== CORE DIRECTIVE ===\n{base_system_prompt}\n=== END CORE DIRECTIVE ==="
 
             # --- Part 2: Dynamic Task-Specific Context (RAG) ---
             if not is_wizard:
@@ -2741,10 +2743,51 @@ I've updated the prompt to include the dragon's personality as you requested. It
                             event_id=event_id, anthropic_api_key=get_api_key(agent_name, 'anthropic'),
                             openai_api_key=get_api_key(agent_name, 'openai')
                         )
-                        retrieved_docs = retriever.get_relevant_context(query=last_actual_user_message_for_rag, top_k=10)
+                        # Event-scoped tiered retrieval with caps and MMR
+                        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,5,3').split(',')
+                        try:
+                            tier_caps = [int(x.strip()) for x in tier_caps_env]
+                        except Exception:
+                            tier_caps = [7, 5, 3]
+                        mmr_lambda = float(os.getenv('RETRIEVAL_MMR_LAMBDA', '0.6'))
+                        mmr_k = int(os.getenv('RETRIEVAL_MMR_K', '15'))
+                        allow_t3_low = os.getenv('ALLOW_T3_ON_LOW', 'false').lower() == 'true'
+                        include_t3 = True
+                        if (signal_bias or 'medium') == 'low' and not allow_t3_low:
+                            include_t3 = False
+                        retrieved_docs = retriever.get_relevant_context_tiered(
+                            query=last_actual_user_message_for_rag,
+                            tier_caps=tier_caps,
+                            mmr_k=mmr_k,
+                            mmr_lambda=mmr_lambda,
+                            include_t3=include_t3,
+                        )
                         retrieved_docs_for_reinforcement = retrieved_docs
                         if retrieved_docs:
-                            items = [f"--- START Context Source: {d.metadata.get('file_name','Unknown')} (Age: {d.metadata.get('age_display', 'Unknown')}, Score: {d.metadata.get('score',0):.2f}) ---\n{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---" for d in retrieved_docs]
+                            # Add disclosure if non-T1 sources present
+                            non_t1_events = sorted({
+                                str(d.metadata.get('event_id'))
+                                for d in retrieved_docs
+                                if str(d.metadata.get('event_id', '0000')) not in [str(event_id or '0000')]
+                            })
+                            if non_t1_events:
+                                disclosure = (
+                                    f"Context includes shared {agent_name}/0000 and/or other sub-teams: {', '.join(non_t1_events)}. "
+                                    f"Treat as background unless it directly affects {event_id or '0000'}."
+                                )
+                                final_system_prompt += f"\n\n[DISCLOSURE] {disclosure}"
+
+                            def src_label(md: dict) -> str:
+                                return md.get('source_label') or ''
+
+                            items = [
+                                (
+                                    f"--- START Context Source: {d.metadata.get('file_name','Unknown')} {src_label(d.metadata)} "
+                                    f"(Age: {d.metadata.get('age_display', 'Unknown')}, Score: {d.metadata.get('score',0):.2f}) ---\n"
+                                    f"{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---"
+                                )
+                                for d in retrieved_docs
+                            ]
                             final_system_prompt += "\n\n=== RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
                 except Exception as e:
                     logger.error(f"Unexpected RAG error: {e}", exc_info=True)
@@ -3336,8 +3379,14 @@ def save_chat_history(user: SupabaseUser):
             }
             if last_message_id:
                 update_payload['last_message_id_at_save'] = last_message_id
-
-            result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+            # Attempt to include event_id if column exists
+            try:
+                update_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
+                client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+            except Exception:
+                # retry without event_id if migration not applied
+                update_payload.pop('event_id', None)
+                result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
         else:
             # Idempotent creation by client_session_id, if provided
             if client_session_id:
@@ -3423,26 +3472,36 @@ def save_chat_history(user: SupabaseUser):
                     if last_message_id:
                         insert_payload['last_message_id_at_save'] = last_message_id
                     
-                    result = client.table('chat_history').insert(insert_payload).execute()
+                    # Try with event_id; on failure, retry without
+                    try:
+                        insert_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
+                        result = client.table('chat_history').insert(insert_payload).execute()
+                    except Exception:
+                        insert_payload.pop('event_id', None)
+                        result = client.table('chat_history').insert(insert_payload).execute()
                     chat_id = result.data[0]['id'] if result.data else None
                     title = result.data[0]['title'] if result.data else title
-            else:
-                # No recent chats, proceed with insert
-                insert_payload = {
-                    'user_id': user.id,
-                    'agent_id': agent_id,
-                    'title': title,
-                    'messages': messages,
-                    'client_session_id': client_session_id,
-                    'updated_at': 'now()',
-                    'last_message_at': 'now()',
-                }
-                if last_message_id:
-                    insert_payload['last_message_id_at_save'] = last_message_id
-                
+        else:
+            # No recent chats, proceed with insert
+            insert_payload = {
+                'user_id': user.id,
+                'agent_id': agent_id,
+                'title': title,
+                'messages': messages,
+                'client_session_id': client_session_id,
+                'updated_at': 'now()',
+                'last_message_at': 'now()',
+            }
+            if last_message_id:
+                insert_payload['last_message_id_at_save'] = last_message_id
+            try:
+                insert_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
                 result = client.table('chat_history').insert(insert_payload).execute()
-                chat_id = result.data[0]['id'] if result.data else None
-                title = result.data[0]['title'] if result.data else title
+            except Exception:
+                insert_payload.pop('event_id', None)
+                result = client.table('chat_history').insert(insert_payload).execute()
+            chat_id = result.data[0]['id'] if result.data else None
+            title = result.data[0]['title'] if result.data else title
         
         return jsonify({'success': True, 'chatId': chat_id, 'title': title})
     except Exception as e:
@@ -3454,6 +3513,7 @@ def save_chat_history(user: SupabaseUser):
 @retry_strategy_supabase
 def list_chat_history(user: SupabaseUser):
     agent_name = request.args.get('agentName')
+    event_id = request.args.get('event')  # optional filter
     client = get_supabase_client()
     if not agent_name or not client:
         return jsonify({'error': 'agentName parameter is required or DB is unavailable'}), 400
@@ -3464,11 +3524,16 @@ def list_chat_history(user: SupabaseUser):
             return jsonify([])
         agent_id = agent_result.data['id']
 
-        history_result = client.table('chat_history') \
-            .select('id, title, last_message_at, agent_id, messages') \
+        base_query = client.table('chat_history') \
+            .select('id, title, last_message_at, agent_id, messages, event_id') \
             .eq('user_id', user.id) \
-            .eq('agent_id', agent_id) \
-            .order('last_message_at', desc=True).limit(100).execute()
+            .eq('agent_id', agent_id)
+        if event_id:
+            try:
+                base_query = base_query.eq('event_id', event_id)
+            except Exception:
+                pass
+        history_result = base_query.order('last_message_at', desc=True).limit(100).execute()
 
         if not history_result.data:
             return jsonify([])
@@ -3518,6 +3583,7 @@ def list_chat_history(user: SupabaseUser):
                 'updatedAt': chat['last_message_at'],
                 'agentId': chat['agent_id'],
                 'agentName': agent_name,
+                'eventId': chat.get('event_id', None),
                 'isConversationSaved': is_convo_saved,
                 'hasSavedMessages': has_saved_messages
             })
