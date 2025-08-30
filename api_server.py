@@ -3613,16 +3613,32 @@ def list_chat_history(user: SupabaseUser):
             return jsonify([])
         agent_id = agent_result.data['id']
 
-        base_query = client.table('chat_history') \
-            .select('id, title, last_message_at, agent_id, messages, event_id') \
-            .eq('user_id', user.id) \
-            .eq('agent_id', agent_id)
-        if event_id:
-            try:
+        try:
+            # Try selecting with event_id (new schema)
+            base_query = client.table('chat_history') \
+                .select('id, title, last_message_at, agent_id, messages, event_id') \
+                .eq('user_id', user.id) \
+                .eq('agent_id', agent_id)
+            if event_id:
                 base_query = base_query.eq('event_id', event_id)
-            except Exception:
-                pass
-        history_result = base_query.order('last_message_at', desc=True).limit(100).execute()
+            history_result = base_query.order('last_message_at', desc=True).limit(100).execute()
+
+            # If no rows and event filter was applied, retry without the event filter (legacy rows)
+            if event_id and (not history_result.data or len(history_result.data) == 0):
+                history_result = client.table('chat_history') \
+                    .select('id, title, last_message_at, agent_id, messages') \
+                    .eq('user_id', user.id) \
+                    .eq('agent_id', agent_id) \
+                    .order('last_message_at', desc=True).limit(100).execute()
+                logger.info(f"Chat history fallback (no event filter) returned {len(history_result.data or [])} rows.")
+        except Exception as e:
+            # Schema likely missing event_id; select without it
+            logger.info(f"Chat history: event_id column not available or query failed ({e}); retrying without event column.")
+            history_result = client.table('chat_history') \
+                .select('id, title, last_message_at, agent_id, messages') \
+                .eq('user_id', user.id) \
+                .eq('agent_id', agent_id) \
+                .order('last_message_at', desc=True).limit(100).execute()
 
         if not history_result.data:
             return jsonify([])
