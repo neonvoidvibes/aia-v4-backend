@@ -188,6 +188,7 @@ class EmbeddingHandler:
                     vector_id = f"{sanitized_id_part}_{i}"
 
                 # Prepare metadata for Pinecone
+                from datetime import datetime, timezone
                 pinecone_metadata = {
                     **chunk_metadata,
                     'content': chunk_content,
@@ -198,10 +199,29 @@ class EmbeddingHandler:
                     'is_core_memory': is_core_memory_log, # Apply the log-level flag to every chunk
                     'triplets': triplets, # Add the extracted triplets
                 }
+                # Ensure key fields exist for retrieval policy compatibility
                 if 'agent_name' not in pinecone_metadata:
-                     pinecone_metadata['agent_name'] = metadata.get('agent_name', 'unknown')
-                if 'source' not in pinecone_metadata:
-                     pinecone_metadata['source'] = metadata.get('source', 'manual_upload')
+                    pinecone_metadata['agent_name'] = metadata.get('agent_name', 'unknown')
+                # Event awareness defaults to '0000' (shared)
+                if 'event_id' not in pinecone_metadata:
+                    pinecone_metadata['event_id'] = metadata.get('event_id', '0000')
+                # Standardize source type
+                if 'source_type' not in pinecone_metadata:
+                    # Map any legacy 'source' to a standard type when sensible
+                    src = metadata.get('source', 'manual_upload')
+                    default_type = 'doc'
+                    if 'transcript' in src:
+                        default_type = 'transcript'
+                    elif 'chat' in src:
+                        default_type = 'chat'
+                    pinecone_metadata['source_type'] = metadata.get('source_type', default_type)
+                # Created at timestamp
+                if 'created_at' not in pinecone_metadata:
+                    pinecone_metadata['created_at'] = datetime.now(timezone.utc).isoformat()
+                # Doc/Chunk identifiers
+                if 'doc_id' not in pinecone_metadata:
+                    pinecone_metadata['doc_id'] = metadata.get('source_identifier') or metadata.get('file_name') or 'unknown'
+                pinecone_metadata['chunk_id'] = i
 
                 vectors_to_upsert.append((vector_id, vector, pinecone_metadata))
 

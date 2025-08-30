@@ -2470,7 +2470,13 @@ def create_agent(user: SupabaseUser):
                     filename = secure_filename(doc.filename); temp_path = os.path.join(temp_dir, filename)
                     doc.save(temp_path)
                     with open(temp_path, 'r', encoding='utf-8') as f: content = f.read()
-                    metadata = {"source": "agent_creation_upload", "file_name": filename, "agent_name": agent_name}
+                    metadata = {
+                        "source": "agent_creation_upload",
+                        "source_type": "doc",
+                        "file_name": filename,
+                        "agent_name": agent_name,
+                        "event_id": "0000",
+                    }
                     embed_handler.embed_and_upsert(content, metadata)
                     logger.info(f"Embedded Pinecone doc '{filename}' for agent '{agent_name}'.")
             finally:
@@ -2700,8 +2706,8 @@ I've updated the prompt to include the dragon's personality as you requested. It
                     core_directive_content += f"\n\n<document_context>\n{initial_context_for_aicreator}\n</document_context>"
                 if current_draft_content_for_aicreator:
                     core_directive_content += f"\n\n## User's Current Draft (Authoritative)\n<current_draft>\n{current_draft_content_for_aicreator}\n</current_draft>"
-            
-            final_system_prompt += f"=== CORE DIRECTIVE ===\n{core_directive_content}\n=== END CORE DIRECTIVE ==="
+                
+                final_system_prompt += f"=== CORE DIRECTIVE ===\n{core_directive_content}\n=== END CORE DIRECTIVE ==="
             else:
                 # Unified prompt builder path for regular agents (incl. event layer)
                 feature_event_prompts = os.getenv('FEATURE_EVENT_PROMPTS', 'true').lower() == 'true'
@@ -3092,6 +3098,7 @@ def embed_recording_route(user: SupabaseUser):
     data = g.get('json_data', {})
     s3_key = data.get('s3Key')
     agent_name = data.get('agentName')
+    event_id_param = data.get('eventId') or data.get('event') or '0000'
 
     if not all([s3_key, agent_name]):
         return jsonify({"error": "s3Key and agentName are required"}), 400
@@ -3119,9 +3126,11 @@ def embed_recording_route(user: SupabaseUser):
         
         metadata_for_embedding = {
             "agent_name": agent_name,
-            "source": "recording", # As specified in the plan
+            "source": "recording",
+            "source_type": "doc",
             "file_name": virtual_filename,
             "s3_key": s3_key,
+            "event_id": event_id_param,
         }
 
         # Add the 'created_at' timestamp from S3's LastModified metadata
@@ -3157,6 +3166,7 @@ def save_chat_memory_log(user: SupabaseUser):
     
     messages = data.get('messages', [])
     session_id = data.get('sessionId')
+    event_id_param = data.get('eventId') or data.get('event') or '0000'
 
     client = get_supabase_client()
     if not all([agent_name, messages, session_id, client]):
@@ -3214,7 +3224,9 @@ def save_chat_memory_log(user: SupabaseUser):
             "supabase_log_id": supabase_log_id,
             "file_name": f"chat_memory_{session_id}.md", # A virtual filename
             "created_at": created_at_timestamp,
-            "triplets": triplets # Pass the triplets to the embedding handler
+            "triplets": triplets, # Pass the triplets to the embedding handler
+            "source_type": "chat",
+            "event_id": event_id_param,
         }
         
         upsert_success = embedding_handler.embed_and_upsert(structured_content, metadata_for_embedding)
@@ -3780,7 +3792,9 @@ def delete_message(user: SupabaseUser):
                         "source_identifier": chat_id,
                         "file_name": f"chat_memory_{chat_id}.md",
                         "saved_at": datetime.now(timezone.utc).timestamp(),
-                        "triplets": triplets
+                        "triplets": triplets,
+                        "source_type": "chat",
+                        "event_id": event_id_param,
                     })
                     logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
         else:
