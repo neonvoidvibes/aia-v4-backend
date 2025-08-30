@@ -3338,6 +3338,83 @@ def list_pinecone_indexes(user: SupabaseUser):
         logger.error(f"Internal API: Error listing Pinecone indexes: {e}", exc_info=True)
         return jsonify({"error": "Failed to list Pinecone indexes"}), 500
 
+# --- Pinecone Proxy Endpoints (ACL + Metadata Enforcement) ---
+
+@app.route('/api/pinecone/query', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def pinecone_query_proxy(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agent')
+    event_id = data.get('event', '0000')
+    query = data.get('query')
+    signal_bias = data.get('signalBias', 'medium')
+    top_k = int(data.get('topK', 15))
+
+    if not all([agent_name, query]):
+        return jsonify({"error": "agent and query are required"}), 400
+
+    try:
+        retriever = RetrievalHandler(
+            index_name="river",
+            agent_name=agent_name,
+            event_id=event_id,
+            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+            openai_api_key=get_api_key(agent_name, 'openai')
+        )
+        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,5,3').split(',')
+        try:
+            tier_caps = [int(x.strip()) for x in tier_caps_env]
+        except Exception:
+            tier_caps = [7, 5, 3]
+        mmr_lambda = float(os.getenv('RETRIEVAL_MMR_LAMBDA', '0.6'))
+        mmr_k = min(int(os.getenv('RETRIEVAL_MMR_K', '15')), top_k)
+        allow_t3_low = os.getenv('ALLOW_T3_ON_LOW', 'false').lower() == 'true'
+        include_t3 = not ((signal_bias or 'medium') == 'low' and not allow_t3_low)
+
+        docs = retriever.get_relevant_context_tiered(
+            query=query,
+            tier_caps=tier_caps,
+            mmr_k=mmr_k,
+            mmr_lambda=mmr_lambda,
+            include_t3=include_t3,
+        )
+        items = [
+            {
+                'content': d.page_content,
+                'metadata': d.metadata,
+            }
+            for d in docs
+        ]
+        return jsonify({'results': items}), 200
+    except Exception as e:
+        logger.error(f"Pinecone proxy query error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to query memory"}), 500
+
+
+@app.route('/api/pinecone/upsert', methods=['POST'])
+@supabase_auth_required(agent_required=True)
+def pinecone_upsert_proxy(user: SupabaseUser):
+    data = g.get('json_data', {})
+    agent_name = data.get('agent')
+    event_id = data.get('event', '0000')
+    content = data.get('content')
+    metadata = data.get('metadata', {}) or {}
+    if not all([agent_name, content]):
+        return jsonify({"error": "agent and content are required"}), 400
+
+    try:
+        embedding_handler = EmbeddingHandler(index_name="river", namespace=agent_name)
+        # Enforce required metadata fields
+        metadata.setdefault('agent_name', agent_name)
+        metadata.setdefault('event_id', event_id)
+        upsert_success = embedding_handler.embed_and_upsert(content, metadata)
+        if not upsert_success:
+            return jsonify({"error": "Failed to upsert memory"}), 500
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.error(f"Pinecone proxy upsert error: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error during upsert"}), 500
+
 # --- Restored User Chat History Endpoints ---
 
 def generate_chat_title(first_user_message: str) -> str:

@@ -59,11 +59,10 @@ class RollingTranscriptManager:
         
         # Initialize handlers
         self.doc_handler = DocumentHandler(chunk_size=500, chunk_overlap=100)
-        # Use {agent}-{event} as namespace
-        namespace = f"{agent_name}-{event_id}" if event_id else f"{agent_name}-0000"
+        # Align to single-namespace-per-agent; event scoping via metadata only
         self.embed_handler = EmbeddingHandler(
             index_name="river",
-            namespace=namespace
+            namespace=agent_name
         )
         
         # Get the folder path where transcripts are stored
