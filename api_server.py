@@ -3570,27 +3570,27 @@ def save_chat_history(user: SupabaseUser):
                         result = client.table('chat_history').insert(insert_payload).execute()
                     chat_id = result.data[0]['id'] if result.data else None
                     title = result.data[0]['title'] if result.data else title
-        else:
-            # No recent chats, proceed with insert
-            insert_payload = {
-                'user_id': user.id,
-                'agent_id': agent_id,
-                'title': title,
-                'messages': messages,
-                'client_session_id': client_session_id,
-                'updated_at': 'now()',
-                'last_message_at': 'now()',
-            }
-            if last_message_id:
-                insert_payload['last_message_id_at_save'] = last_message_id
-            try:
-                insert_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
-                result = client.table('chat_history').insert(insert_payload).execute()
-            except Exception:
-                insert_payload.pop('event_id', None)
-                result = client.table('chat_history').insert(insert_payload).execute()
-            chat_id = result.data[0]['id'] if result.data else None
-            title = result.data[0]['title'] if result.data else title
+            else:
+                # No recent chats, proceed with insert
+                insert_payload = {
+                    'user_id': user.id,
+                    'agent_id': agent_id,
+                    'title': title,
+                    'messages': messages,
+                    'client_session_id': client_session_id,
+                    'updated_at': 'now()',
+                    'last_message_at': 'now()',
+                }
+                if last_message_id:
+                    insert_payload['last_message_id_at_save'] = last_message_id
+                try:
+                    insert_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
+                    result = client.table('chat_history').insert(insert_payload).execute()
+                except Exception:
+                    insert_payload.pop('event_id', None)
+                    result = client.table('chat_history').insert(insert_payload).execute()
+                chat_id = result.data[0]['id'] if result.data else None
+                title = result.data[0]['title'] if result.data else title
         
         return jsonify({'success': True, 'chatId': chat_id, 'title': title})
     except Exception as e:
