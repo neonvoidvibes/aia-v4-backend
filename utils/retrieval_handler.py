@@ -1,5 +1,6 @@
 """Utilities for retrieving relevant document context for chat."""
 import logging
+import threading
 import traceback
 import time
 import math
@@ -16,6 +17,23 @@ from utils.pinecone_utils import init_pinecone, get_index
 from anthropic import Anthropic # Import Anthropic client
 
 logger = logging.getLogger(__name__)
+
+# Thread-safe, module-scope embeddings cache keyed by (api_key or 'ENV', model)
+_EMBEDDINGS_CACHE = {}
+_EMBEDDINGS_LOCK = threading.Lock()
+
+def get_cached_embeddings(model_name: str, api_key: Optional[str]) -> OpenAIEmbeddings:
+    key = (api_key or "ENV", model_name)
+    emb = _EMBEDDINGS_CACHE.get(key)
+    if emb is not None:
+        return emb
+    with _EMBEDDINGS_LOCK:
+        emb = _EMBEDDINGS_CACHE.get(key)
+        if emb is None:
+            emb = OpenAIEmbeddings(model=model_name, api_key=api_key)
+            _EMBEDDINGS_CACHE[key] = emb
+            logger.info(f"Retriever: Created Embeddings model '{model_name}' and cached (keyed by API).")
+    return emb
 
 # Define a default transform prompt
 DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more effective for searching a vector database. Your goal is to broaden the query slightly to catch related terms, but you must preserve the original keywords and intent.
@@ -51,7 +69,7 @@ class RetrievalHandler:
         session_id: Optional[str] = None,
         event_id: Optional[str] = None,
         final_top_k: int = 10,
-        initial_fetch_k: int = 24, # Trim initial pool to reduce tail latency
+        initial_fetch_k: int = 50, # Increased initial pool per request
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None # Agent-specific key
     ):
@@ -69,19 +87,7 @@ class RetrievalHandler:
         self.anthropic_api_key = anthropic_api_key
 
         try:
-            global _EMBEDDINGS_CACHE
-        except NameError:
-            _EMBEDDINGS_CACHE = {}
-
-        try:
-            cache_key = (openai_api_key or "ENV", self.embedding_model_name)
-            if cache_key not in _EMBEDDINGS_CACHE:
-                _EMBEDDINGS_CACHE[cache_key] = OpenAIEmbeddings(
-                    model=self.embedding_model_name,
-                    api_key=openai_api_key
-                )
-                logger.info(f"Retriever: Created Embeddings model '{self.embedding_model_name}'.")
-            self.embeddings = _EMBEDDINGS_CACHE[cache_key]
+            self.embeddings = get_cached_embeddings(self.embedding_model_name, openai_api_key)
         except Exception as e:
             raise RuntimeError("Failed Embeddings init") from e
         

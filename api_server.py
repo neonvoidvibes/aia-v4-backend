@@ -2564,6 +2564,9 @@ def create_agent(user: SupabaseUser):
             client.table("agents").delete().eq("id", agent_id).execute()
         return jsonify({"error": "An internal server error occurred during agent creation. The operation was rolled back."}), 500
 
+_WARMUP_INFLIGHT = set()
+_WARMUP_LOCK = threading.Lock()
+
 @app.route('/api/agent/warm-up', methods=['POST'])
 @supabase_auth_required(agent_required=True)
 def warm_up_agent_cache(user: SupabaseUser):
@@ -2577,6 +2580,13 @@ def warm_up_agent_cache(user: SupabaseUser):
     event_id = data.get('event', '0000')
 
     logger.info(f"Received cache warm-up request for agent: '{agent_name}', event: '{event_id}' from user: {user.id}")
+
+    singleflight_key = f"{agent_name}:{event_id}"
+    with _WARMUP_LOCK:
+        if singleflight_key in _WARMUP_INFLIGHT:
+            logger.info(f"Warm-up singleflight: already in progress for {singleflight_key}; skipping duplicate.")
+            return jsonify({"status": "success", "message": "Agent pre-caching already running"}), 202
+        _WARMUP_INFLIGHT.add(singleflight_key)
 
     def cache_worker(agent, event):
         with app.app_context(): # Ensure background thread has app context if needed
@@ -2592,6 +2602,9 @@ def warm_up_agent_cache(user: SupabaseUser):
                 logger.info(f"Background cache worker finished for agent: '{agent}', event: '{event}'")
             except Exception as e:
                 logger.error(f"Error in background cache worker for agent '{agent}': {e}", exc_info=True)
+            finally:
+                with _WARMUP_LOCK:
+                    _WARMUP_INFLIGHT.discard(f"{agent}:{event}")
 
     # Submit the caching tasks to the background executor
     app.executor.submit(cache_worker, agent_name, event_id)
