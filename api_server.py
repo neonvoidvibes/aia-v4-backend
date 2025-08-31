@@ -48,6 +48,7 @@ from utils.pinecone_utils import init_pinecone, create_namespace
 from utils.embedding_handler import EmbeddingHandler
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
+from groq import APIError as GroqAPIError
 import anthropic # Need the module itself for type hints
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
@@ -2994,26 +2995,46 @@ When you identify information that should be permanently stored in your agent do
             llm_api_key = get_api_key(agent_name, llm_provider)
 
             try:
+                # PERF marker: log immediately before sending to LLM
+                ctx_count = len(retrieved_docs_for_reinforcement) if 'retrieved_docs_for_reinforcement' in locals() and retrieved_docs_for_reinforcement else 0
+                logger.info(f"[PERF] LLM dispatch: provider={llm_provider}, model={model_selection}, ctx_count={ctx_count}, msgs={len(final_llm_messages)}, max_tokens={max_tokens_for_call}")
+                _llm_t0 = time.perf_counter()
+                _first_token_logged = False
                 if llm_provider == 'groq':
                     api_model_name = "openai/gpt-oss-120b" if model_selection == 'gpt-oss-120b' else "openai/gpt-oss-20b"
                     groq_stream = _call_groq_stream_with_retry(model_name=api_model_name, max_tokens=max_tokens_for_call, system_instruction=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key, temperature=temperature)
                     for chunk in groq_stream:
                         if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            if not _first_token_logged:
+                                logger.info(f"[PERF] LLM first_token: {time.perf_counter() - _llm_t0:.3f}s provider=groq model={api_model_name}")
+                                _first_token_logged = True
                             yield f"data: {json.dumps({'delta': chunk.choices[0].delta.content})}\n\n"
                 elif llm_provider == 'google':
                     gemini_stream = _call_gemini_stream_with_retry(model_name=model_selection, max_tokens=max_tokens_for_call, system_instruction=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key, temperature=temperature)
                     for chunk in gemini_stream:
-                        if chunk.parts: yield f"data: {json.dumps({'delta': chunk.text})}\n\n"
+                        if chunk.parts:
+                            if not _first_token_logged:
+                                logger.info(f"[PERF] LLM first_token: {time.perf_counter() - _llm_t0:.3f}s provider=google model={model_selection}")
+                                _first_token_logged = True
+                            yield f"data: {json.dumps({'delta': chunk.text})}\n\n"
                 elif llm_provider == 'openai':
                     openai_stream = _call_openai_stream_with_retry(model_name=model_selection, max_tokens=max_tokens_for_call, system_instruction=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key, temperature=temperature)
                     with openai_stream as stream:
                         for event in stream:
-                            if getattr(event, "type", "") == "response.output_text.delta": yield f"data: {json.dumps({'delta': event.delta})}\n\n"
+                            if getattr(event, "type", "") == "response.output_text.delta":
+                                if not _first_token_logged:
+                                    logger.info(f"[PERF] LLM first_token: {time.perf_counter() - _llm_t0:.3f}s provider=openai model={model_selection}")
+                                    _first_token_logged = True
+                                yield f"data: {json.dumps({'delta': event.delta})}\n\n"
                 else: # Anthropic
                     stream_manager = _call_anthropic_stream_with_retry(model=model_selection, max_tokens=max_tokens_for_call, system=final_system_prompt, messages=final_llm_messages, api_key=llm_api_key)
                     with stream_manager as stream:
                         for chunk in stream:
-                            if chunk.type == "content_block_delta": yield f"data: {json.dumps({'delta': chunk.delta.text})}\n\n"
+                            if chunk.type == "content_block_delta":
+                                if not _first_token_logged:
+                                    logger.info(f"[PERF] LLM first_token: {time.perf_counter() - _llm_t0:.3f}s provider=anthropic model={model_selection}")
+                                    _first_token_logged = True
+                                yield f"data: {json.dumps({'delta': chunk.delta.text})}\n\n"
                 
                 doc_ids_for_reinforcement = [doc.metadata.get('vector_id') for doc in retrieved_docs_for_reinforcement if doc.metadata.get('vector_id')]
                 sse_done_data = {'done': True, 'retrieved_doc_ids': doc_ids_for_reinforcement}
