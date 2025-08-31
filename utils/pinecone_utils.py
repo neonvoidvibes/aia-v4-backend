@@ -12,8 +12,11 @@ from langchain_pinecone import PineconeVectorStore
 from pinecone.exceptions import NotFoundException
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- Singleton client and index cache ---
+_PC_SINGLETON: Optional[Pinecone] = None
+_INDEX_CACHE: dict[str, object] = {}
 
 def init_pinecone() -> Optional[Pinecone]:
     """Initialize Pinecone with environment variables and return a Pinecone instance.
@@ -30,10 +33,12 @@ def init_pinecone() -> Optional[Pinecone]:
             logger.error("PINECONE_API_KEY not found in environment variables")
             return None
 
-        pc = Pinecone(api_key=api_key, environment=environment)
-        active_environment = environment or "default (client library)" # For logging
-        logger.info(f"Pinecone initialized with environment: {active_environment}")
-        return pc
+        global _PC_SINGLETON
+        if _PC_SINGLETON is None:
+            _PC_SINGLETON = Pinecone(api_key=api_key, environment=environment)
+            active_environment = environment or "default (client library)" # For logging
+            logger.info(f"Pinecone initialized with environment: {active_environment}")
+        return _PC_SINGLETON
     except Exception as e:
         logger.error(f"Error initializing Pinecone: {e}")
         return None
@@ -65,7 +70,9 @@ def create_or_verify_index(
             return None
         else:
             logger.info(f"Existing index '{index_name}' has the correct dimension ({dimension}).")
-            return pc.Index(index_name)
+            idx = pc.Index(index_name)
+            _INDEX_CACHE[index_name] = idx
+            return idx
 
     except NotFoundException:
         # Index does not exist, proceed to create it
@@ -87,7 +94,9 @@ def create_or_verify_index(
             while not pc.describe_index(index_name).status['ready']:
                 time.sleep(5)
             logger.info(f"Index '{index_name}' created successfully and is ready.")
-            return pc.Index(index_name)
+            idx = pc.Index(index_name)
+            _INDEX_CACHE[index_name] = idx
+            return idx
 
         except Exception as create_e:
             # Catch errors during creation specifically
@@ -179,7 +188,9 @@ def get_index_stats(index_name: str) -> Optional[dict]:
         pc = init_pinecone()
         if not pc:
             return None
-        index = pc.Index(index_name)
+        # Use cached index if available
+        index = _INDEX_CACHE.get(index_name) or pc.Index(index_name)
+        _INDEX_CACHE[index_name] = index
         stats = index.describe_index_stats()
         stats_dict = stats.to_dict() if hasattr(stats, 'to_dict') else stats
         logger.info(f"Retrieved stats for index '{index_name}': {stats_dict}")
@@ -189,4 +200,20 @@ def get_index_stats(index_name: str) -> Optional[dict]:
          return None
     except Exception as e:
         logger.error(f"Error getting index stats for '{index_name}': {e}")
+        return None
+
+def get_index(index_name: str) -> Optional[object]:
+    """Return a cached Index handle if available and exists, else None."""
+    pc = init_pinecone()
+    if not pc:
+        return None
+    try:
+        # Verify existence only once, then cache
+        if index_name not in pc.list_indexes().names():
+            return None
+        if index_name not in _INDEX_CACHE:
+            _INDEX_CACHE[index_name] = pc.Index(index_name)
+        return _INDEX_CACHE[index_name]
+    except Exception as e:
+        logger.error(f"get_index: failed to get index '{index_name}': {e}")
         return None

@@ -745,6 +745,13 @@ def health_check():
         "s3_client_initialized": get_s3_client() is not None
     }), 200
 
+@app.route('/healthz', methods=['GET'])
+def healthz():
+    # Constant-time, no external calls
+    resp = jsonify({"status": "ok"})
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp, 200
+
 def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> Dict[str, Any]:
     if session_id and session_id in active_sessions:
         session = active_sessions[session_id]

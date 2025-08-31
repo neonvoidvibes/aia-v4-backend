@@ -12,8 +12,7 @@ except Exception as e: logging.getLogger(__name__).warning(f"Early tiktoken impo
 
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
-from pinecone import Pinecone
-from utils.pinecone_utils import init_pinecone
+from utils.pinecone_utils import init_pinecone, get_index
 from anthropic import Anthropic # Import Anthropic client
 
 logger = logging.getLogger(__name__)
@@ -52,7 +51,7 @@ class RetrievalHandler:
         session_id: Optional[str] = None,
         event_id: Optional[str] = None,
         final_top_k: int = 10,
-        initial_fetch_k: int = 100, # Fetch a larger pool for better re-ranking
+        initial_fetch_k: int = 24, # Trim initial pool to reduce tail latency
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None # Agent-specific key
     ):
@@ -66,29 +65,33 @@ class RetrievalHandler:
         self.event_id = event_id if event_id and event_id != '0000' else None
         self.final_top_k = final_top_k
         self.initial_fetch_k = initial_fetch_k
-        self.embedding_model_name = "text-embedding-ada-002"
+        self.embedding_model_name = "text-embedding-3-small"
         self.anthropic_api_key = anthropic_api_key
 
         try:
-            # Initialize embeddings with the provided key. If None, it will fall back to the env var.
-            self.embeddings = OpenAIEmbeddings(
-                model=self.embedding_model_name,
-                api_key=openai_api_key
-            )
-            logger.info(f"Retriever: Initialized Embeddings model '{self.embedding_model_name}'.")
-        except Exception as e: raise RuntimeError("Failed Embeddings init") from e
+            global _EMBEDDINGS_CACHE
+        except NameError:
+            _EMBEDDINGS_CACHE = {}
 
-        pc = init_pinecone()
-        if not pc:
-            raise RuntimeError("Failed Pinecone init")
+        try:
+            cache_key = (openai_api_key or "ENV", self.embedding_model_name)
+            if cache_key not in _EMBEDDINGS_CACHE:
+                _EMBEDDINGS_CACHE[cache_key] = OpenAIEmbeddings(
+                    model=self.embedding_model_name,
+                    api_key=openai_api_key
+                )
+                logger.info(f"Retriever: Created Embeddings model '{self.embedding_model_name}'.")
+            self.embeddings = _EMBEDDINGS_CACHE[cache_key]
+        except Exception as e:
+            raise RuntimeError("Failed Embeddings init") from e
         
         try:
-            # Check if index exists before creating an Index object
-            if self.index_name not in pc.list_indexes().names():
+            index = get_index(self.index_name)
+            if not index:
                 logger.warning(f"Retriever: Index '{self.index_name}' does not exist. RAG will be disabled for this handler.")
                 self.index = None
             else:
-                self.index = pc.Index(self.index_name)
+                self.index = index
                 logger.info(f"Retriever: Connected to index '{self.index_name}'. Initial fetch k={self.initial_fetch_k}, Final k={self.final_top_k}")
         except Exception as e:
             logger.error(f"Retriever: Error connecting to or checking index '{self.index_name}': {e}", exc_info=True)
@@ -161,7 +164,14 @@ class RetrievalHandler:
                 query_filter["event_id"] = self.event_id
             logger.debug(f"Querying index='{self.index_name}', ns='{self.namespace}', filter={query_filter}, top_k={initial_k}")
             try:
-                response = self.index.query(vector=query_embedding, top_k=initial_k, namespace=self.namespace, filter=query_filter, include_metadata=True)
+                response = self.index.query(
+                    vector=query_embedding,
+                    top_k=initial_k,
+                    namespace=self.namespace,
+                    filter=query_filter,
+                    include_metadata=True,
+                    include_values=False,
+                )
                 if response.matches: all_matches.extend(response.matches)
             except Exception as query_e: logger.error(f"Pinecone query error for namespace '{self.namespace}': {query_e}", exc_info=True)
 
@@ -363,6 +373,7 @@ class RetrievalHandler:
                     namespace=self.namespace,
                     filter=tier["filter"],
                     include_metadata=True,
+                    include_values=False,
                 )
                 matches = resp.matches or []
                 tier_hit_counts[tier["label"]] = len(matches)
