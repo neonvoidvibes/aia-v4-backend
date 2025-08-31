@@ -70,6 +70,25 @@ class JsonFormatter(logging.Formatter):
             log_record['request_id'] = record.request_id
         return json.dumps(log_record)
 
+class RedactFilter(logging.Filter):
+    SENSITIVE_KEYS = ("authorization", "apikey", "api-key", "x-api-key", "cookie", "set-cookie")
+    _pattern = re.compile(r"(?i)(" + "|".join(SENSITIVE_KEYS) + r")(?:\s*[:=]\s*)([^,'"\]\s]+)")
+
+    def _redact(self, text: str) -> str:
+        try:
+            return self._pattern.sub(lambda m: f"{m.group(1)}: ***REDACTED***", text)
+        except Exception:
+            return text
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            record.msg = self._redact(str(record.msg))
+            if record.args:
+                record.args = tuple(self._redact(str(a)) for a in record.args)
+        except Exception:
+            pass
+        return True
+
 def setup_logging(debug=False):
     log_filename = 'api_server.log'; root_logger = logging.getLogger(); log_level = logging.DEBUG if debug else logging.INFO
     root_logger.setLevel(log_level)
@@ -82,7 +101,11 @@ def setup_logging(debug=False):
         print(f"Error setting up file logger: {e}", file=sys.stderr)
     ch = logging.StreamHandler(sys.stdout); ch.setLevel(log_level)
     cf = logging.Formatter('[%(levelname)-8s] %(name)s: %(message)s'); ch.setFormatter(cf); root_logger.addHandler(ch)
-    for lib in ['anthropic', 'httpx', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock', 'google.generativeai', 'google.api_core']:
+    # Add redaction filter globally (only once)
+    if not any(isinstance(f, RedactFilter) for f in root_logger.filters):
+        root_logger.addFilter(RedactFilter())
+
+    for lib in ['anthropic', 'httpx', 'httpcore', 'hpack', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock', 'google.generativeai', 'google.api_core']:
         logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.getLogger('transcription_service').setLevel(logging.DEBUG if debug else logging.INFO)
@@ -339,16 +362,7 @@ class CircuitBreaker:
             self.failure_count = 0
             self.state = self.STATE_CLOSED
 
-# Instantiate it globally
-anthropic_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
-gemini_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
-openai_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
-
-gemini_config_lock = threading.Lock()
-
-# Custom Exception for Circuit Breaker
-class CircuitBreakerOpen(Exception):
-    pass
+# Note: Circuit breaker instances and CircuitBreakerOpen are provided by utils.llm_api_utils
 
 SIMPLE_QUERIES_TO_BYPASS_RAG = frozenset([
     "hello", "hello :)", "hi", "hi :)", "hey", "hey :)", "yo", "greetings", "good morning", "good afternoon",
