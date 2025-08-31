@@ -72,11 +72,12 @@ class JsonFormatter(logging.Formatter):
 
 class RedactFilter(logging.Filter):
     SENSITIVE_KEYS = ("authorization", "apikey", "api-key", "x-api-key", "cookie", "set-cookie")
-    _pattern = re.compile(r"(?i)(" + "|".join(SENSITIVE_KEYS) + r")(?:\s*[:=]\s*)([^,'"\]\s]+)")
+    # Match "Header: value" or "header=value" and redact the value up to a delimiter
+    _pattern = re.compile("(" + "|".join(SENSITIVE_KEYS) + r")(\s*[:=]\s*)([^,;\s'\"]+)", re.IGNORECASE)
 
     def _redact(self, text: str) -> str:
         try:
-            return self._pattern.sub(lambda m: f"{m.group(1)}: ***REDACTED***", text)
+            return self._pattern.sub(lambda m: f"{m.group(1)}{m.group(2)}***REDACTED***", text)
         except Exception:
             return text
 
