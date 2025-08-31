@@ -2243,6 +2243,34 @@ def view_s3_document(user: SupabaseUser):
         logger.error(f"Error viewing S3 object '{s3_key}': {e}", exc_info=True)
         return jsonify({"error": "Internal server error viewing S3 object"}), 500
 
+@app.route('/api/s3/list-events', methods=['GET'])
+@supabase_auth_required(agent_required=True)
+def list_s3_events(user: SupabaseUser):
+    agent_name = request.args.get('agentName') or request.args.get('agent')
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not agent_name:
+        return jsonify({"error": "Missing agentName"}), 400
+    if not s3 or not aws_s3_bucket:
+        return jsonify({"error": "S3 service not configured"}), 503
+    prefix = f"organizations/river/agents/{agent_name}/events/"
+    try:
+        paginator = s3.get_paginator('list_objects_v2')
+        result = paginator.paginate(Bucket=aws_s3_bucket, Prefix=prefix, Delimiter='/')
+        event_ids = set()
+        for page in result:
+            for cp in page.get('CommonPrefixes', []):
+                full = cp.get('Prefix', '')
+                if full.startswith(prefix):
+                    tail = full[len(prefix):].strip('/')
+                    if tail:
+                        event_ids.add(tail)
+        events = sorted(event_ids)
+        return jsonify({"events": events}), 200
+    except Exception as e:
+        logger.error(f"List S3 events error for agent '{agent_name}': {e}", exc_info=True)
+        return jsonify({"error": "Failed to list events"}), 500
+
 @app.route('/api/s3/manage-file', methods=['POST'])
 @supabase_auth_required(agent_required=False) # Agent name from payload is used for path construction
 def manage_s3_file(user: SupabaseUser):
