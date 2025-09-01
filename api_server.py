@@ -3313,16 +3313,19 @@ def save_chat_memory_log(user: SupabaseUser):
             "event_id": event_id_param,
         }
         
-        upsert_success = embedding_handler.embed_and_upsert(structured_content, metadata_for_embedding)
+        try:
+            upsert_success = embedding_handler.embed_and_upsert(structured_content, metadata_for_embedding)
+        except Exception as e:
+            upsert_success = False
+            logger.warning(f"Save Memory Log: Pinecone embedding step failed with exception for session '{session_id}': {e}")
+
         if not upsert_success:
-            # This is a critical failure as the memory won't be retrievable.
-            logger.error(f"Save Memory Log: CRITICAL - Failed to upsert new vectors to Pinecone for session '{session_id}'.")
-            # We might want to rollback the Supabase entry or flag it for re-indexing here.
-            # For now, we return an error to the user.
-            return jsonify({"error": "Failed to index memory for retrieval"}), 500
+            # Degrade gracefully: Supabase log saved, but retrieval indexing unavailable.
+            logger.warning(f"Save Memory Log: Indexing unavailable; returning success with DB-only save for session '{session_id}'.")
+            return jsonify({"status": "success", "message": "Chat memory saved (indexing unavailable).", "log_id": supabase_log_id, "indexed": False}), 200
 
         logger.info(f"Save Memory Log: Pipeline completed successfully for session '{session_id}'.")
-        return jsonify({"status": "success", "message": "Chat memory saved and indexed.", "log_id": supabase_log_id}), 200
+        return jsonify({"status": "success", "message": "Chat memory saved and indexed.", "log_id": supabase_log_id, "indexed": True}), 200
 
     except Exception as e:
         logger.error(f"Save Memory Log: Unexpected error in pipeline for agent '{agent_name}', session '{session_id}': {e}", exc_info=True)
