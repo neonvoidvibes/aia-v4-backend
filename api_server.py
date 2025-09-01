@@ -4125,18 +4125,27 @@ def get_agents_capabilities(user: SupabaseUser):
     logger.info(f"Checking capabilities for {len(agent_names)} agents for user {user.id}")
     capabilities = {}
     try:
-        pc = init_pinecone()
-        if not pc:
-            raise Exception("Pinecone client not initialized")
-        
-        index = pc.Index("river")
-        index_stats = index.describe_index_stats()
-        
+        # Determine index name from env (fallback to default used in embedding handler)
+        import os
+        from utils.pinecone_utils import get_index_stats
+        index_name = os.getenv('PINECONE_INDEX', 'river')
+        stats = get_index_stats(index_name)
+        namespaces = {}
+        if stats:
+            # pinecone SDK returns namespaces as dict mapping namespace->meta
+            namespaces = stats.get('namespaces') or {}
+        else:
+            # If stats not available, treat capabilities as unknown/false
+            namespaces = {}
+
         for name in agent_names:
-            # Check from the already fetched stats to avoid multiple API calls to Pinecone
-            exists = name in index_stats.namespaces
+            exists = False
+            if isinstance(namespaces, dict):
+                exists = name in namespaces.keys()
+            elif isinstance(namespaces, list):
+                exists = name in namespaces
             capabilities[name] = {"pinecone_index_exists": exists}
-            
+
         return jsonify(capabilities), 200
     except Exception as e:
         logger.error(f"Error checking agent capabilities: {e}", exc_info=True)
