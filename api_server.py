@@ -3546,6 +3546,43 @@ def save_chat_history(user: SupabaseUser):
         title = generate_chat_title(first_user_message) if first_user_message else "New Chat"
 
     try:
+        def _merge_messages(existing_list, incoming_list):
+            try:
+                if not isinstance(existing_list, list) or not existing_list:
+                    return incoming_list or []
+                if not isinstance(incoming_list, list) or not incoming_list:
+                    return existing_list or []
+                by_id = {}
+                order = []
+                # preserve existing first
+                for m in existing_list:
+                    mid = m.get('id') if isinstance(m, dict) else None
+                    if mid is None:
+                        order.append((None, m))
+                        continue
+                    if mid not in by_id:
+                        by_id[mid] = m
+                        order.append((mid, None))
+                # overlay incoming (new/edited)
+                for m in incoming_list:
+                    mid = m.get('id') if isinstance(m, dict) else None
+                    if mid is None:
+                        order.append((None, m))
+                        continue
+                    by_id[mid] = m
+                    if (mid, None) not in order and all(x[0] != mid for x in order):
+                        order.append((mid, None))
+                # rebuild in recorded order; for None ids include raw entries
+                merged = []
+                for mid, placeholder in order:
+                    if mid is None and placeholder is not None:
+                        merged.append(placeholder)
+                    elif mid is not None and mid in by_id:
+                        merged.append(by_id[mid])
+                # fallback: if merged is unexpectedly empty, return incoming
+                return merged or incoming_list
+            except Exception:
+                return incoming_list or existing_list or []
         if chat_id:
             update_payload = {
                 'title': title,
@@ -3555,6 +3592,14 @@ def save_chat_history(user: SupabaseUser):
             }
             if last_message_id:
                 update_payload['last_message_id_at_save'] = last_message_id
+            # Merge with existing to avoid losing messages on partial saves
+            try:
+                existing_res = client.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
+                existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
+                merged_msgs = _merge_messages(existing_msgs, messages)
+                update_payload['messages'] = merged_msgs
+            except Exception:
+                pass
             # Attempt to include event_id if column exists
             try:
                 update_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
@@ -3585,6 +3630,13 @@ def save_chat_history(user: SupabaseUser):
                     }
                     if last_message_id:
                         update_payload['last_message_id_at_save'] = last_message_id
+                    try:
+                        existing_res = client.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
+                        existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
+                        merged_msgs = _merge_messages(existing_msgs, messages)
+                        update_payload['messages'] = merged_msgs
+                    except Exception:
+                        pass
                     client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
                     return jsonify({'success': True, 'chatId': chat_id, 'title': existing.data.get('title', title)})
 
@@ -3614,6 +3666,13 @@ def save_chat_history(user: SupabaseUser):
                             }
                             if last_message_id:
                                 update_payload['last_message_id_at_save'] = last_message_id
+                            try:
+                                existing_res = client.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
+                                existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
+                                merged_msgs = _merge_messages(existing_msgs, messages)
+                                update_payload['messages'] = merged_msgs
+                            except Exception:
+                                pass
                             
                             result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
                             break
