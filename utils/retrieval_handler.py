@@ -69,7 +69,7 @@ class RetrievalHandler:
         session_id: Optional[str] = None,
         event_id: Optional[str] = None,
         final_top_k: int = 10,
-        initial_fetch_k: int = 50, # Increased initial pool per request
+        initial_fetch_k: int = 100, # Increased initial pool per request
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None # Agent-specific key
     ):
