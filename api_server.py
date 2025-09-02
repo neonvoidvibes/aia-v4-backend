@@ -2925,12 +2925,15 @@ When you identify information that should be permanently stored in your agent do
                     else: # 'some'
                         all_summaries = get_transcript_summaries(agent_name, event_id)
                         summaries_to_add = []
+                        logger.info(f"Filtering summaries in 'some' mode. Available summaries: {len(all_summaries)}, Toggle states: {individual_memory_toggle_states}")
                         for s in all_summaries:
                             # Construct the summary S3 key that matches what frontend sends
                             summary_filename = s.get("metadata", {}).get("summary_filename", "")
                             if summary_filename:
                                 summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/{summary_filename}"
-                                if individual_memory_toggle_states.get(summary_s3_key, False):
+                                is_selected = individual_memory_toggle_states.get(summary_s3_key, False)
+                                logger.info(f"Summary check: filename='{summary_filename}', constructed_key='{summary_s3_key}', selected={is_selected}")
+                                if is_selected:
                                     summaries_to_add.append(s)
                     
                     if summaries_to_add:
