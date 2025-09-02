@@ -2924,7 +2924,14 @@ When you identify information that should be permanently stored in your agent do
                         summaries_to_add = get_transcript_summaries(agent_name, event_id)
                     else: # 'some'
                         all_summaries = get_transcript_summaries(agent_name, event_id)
-                        summaries_to_add = [s for s in all_summaries if individual_memory_toggle_states.get(s.get("metadata",{}).get("source_s3_key"), False)]
+                        summaries_to_add = []
+                        for s in all_summaries:
+                            # Construct the summary S3 key that matches what frontend sends
+                            summary_filename = s.get("metadata", {}).get("summary_filename", "")
+                            if summary_filename:
+                                summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/{summary_filename}"
+                                if individual_memory_toggle_states.get(summary_s3_key, False):
+                                    summaries_to_add.append(s)
                     
                     if summaries_to_add:
                         summaries_context_str = "=== SAVED TRANSCRIPT SUMMARIES ===\n"
