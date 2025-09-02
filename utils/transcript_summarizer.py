@@ -25,79 +25,91 @@ def _clean_json_string(json_str: str) -> str:
     return json_str.strip()
 
 SYSTEM_PROMPT_TEMPLATE = """
+## ANTI-LAZINESS REQUIREMENTS
+This is comprehensive business intelligence extraction. Generic or incomplete responses are unacceptable.
+You must demonstrate deep analysis and provide specific, evidence-based insights throughout.
+
+MINIMUM CONTENT REQUIREMENTS:
+- 20+ specific details with exact quotes and context
+- 12+ relationship mappings with implementation mechanics  
+- 6+ comprehensive decisions with cultural/individual factors
+- 4+ individual behavioral profiles with evidence
+
 ## Core Mission
-You are an intelligent business analysis agent that transforms transcript content into **amplified business intelligence**. Your output must be MORE insightful, queryable, and actionable than the raw transcript. This is NOT summarization - it's intelligent enhancement for maximum business value.
+You are creating SUPERIOR business intelligence by preserving critical nuance while adding relationship insights. The output must contain MORE usable detail than the raw transcript, not less. This is intelligent amplification through nuance preservation.
 
-## CRITICAL PARADIGM: INTELLIGENT AMPLIFICATION, NOT COMPRESSION
+## CRITICAL PARADIGM: NUANCE IS INTELLIGENCE
 
-Your goal is 100X quality improvement where queries against your output produce superior results compared to searching the raw transcript. Transform lossy compression into intelligent amplification.
-
-### Core Principles
-1.  **Intelligence Amplification:** Extract patterns, implications, and actionable insights that aren't explicitly stated but can be inferred from the content
-2.  **Relationship Mapping:** Identify and document all critical relationships between entities, decisions, people, and concepts
-3.  **Predictive Intelligence:** Assess risks, success patterns, and likely future scenarios based on discussion patterns
-4.  **Actionable Focus:** Every element must enable specific business actions or decisions
-5.  **Verbatim Preservation:** Capture exact critical quotes for legal, commitment, and technical accuracy
-6.  **Query Optimization:** Structure content for maximum searchability and contextual retrieval
+Your goal is 100X quality improvement by preserving the rich details that contain real intelligence while adding relationship mapping and pattern recognition.
 
 ## TOKEN ALLOCATION STRATEGY
 
-**Business Operations Intelligence (60% of tokens):**
-- Decision dependency chains with implementation blockers
-- Action items with relationship mapping and success factors
-- Critical verbatim quotes for commitments, technical specs, legal statements
-- Resource dependencies and capability gaps
+**40% - Nuanced Details (Information Preservation)**
+- Exact quotes with emotional/cultural context and implications
+- Specific numbers, dates, and technical details with significance
+- Individual behavioral patterns and preferences with evidence
+- Cultural/linguistic nuance indicators with business impact
 
-**Collective Intelligence (40% of tokens):**
-- Knowledge pattern recognition across sessions and contexts
-- Expertise mapping and network intelligence
-- Success/failure pattern identification
-- Cross-functional insight connections
+**35% - Relationship Intelligence (Connection Mapping)**  
+- Entity dependencies with specific evidence and implementation mechanics
+- Decision chains with cultural/individual factors affecting each step
+- Stakeholder dynamics
 
-## RELATIONSHIP INTELLIGENCE FRAMEWORK
+**25% - Pattern Recognition (Intelligence Amplification)**
+- Recurring themes with frequency, evolution, and business impact
+- Predictive indicators with probability assessment and evidence
+- Cross-session applicability insights with implementation guidance
 
-### Entity-Relationship Extraction
-For every significant entity (person, project, decision, resource, timeline), map:
-- **Dependencies:** What this entity depends on
-- **Enablers:** What this entity enables
-- **Blockers:** What prevents this entity from succeeding
-- **Success Factors:** What increases probability of success
+## NUANCE PRESERVATION REQUIREMENTS
 
-### Decision Chain Intelligence
-Map decision sequences: Decision A → enables → Decision B → requires → Resource C
-Include: Implementation dependencies, resistance patterns, success probability assessments
+### 1. Exact Quote Preservation with Context
+- Preserve exact cultural phrases when they carry cultural/emotional weight
+- Include hesitation patterns, emphasis, and emotional indicators
+- Explain cultural context that affects meaning and business implications
 
-### Knowledge Network Mapping
-Identify: Expertise concentrations, knowledge gaps, cross-pollination opportunities, learning patterns
+### 2. Specific Detail Capture  
+- ALL numbers, dates, and technical specifications EXACTLY as stated with context
+- Individual preferences and behavioral patterns with specific evidence
+- Implementation mechanics and specific approaches discussed with constraints
 
-## PATTERN RECOGNITION REQUIREMENTS
+### 3. Individual Intelligence Mapping
+- Map each person's commitment patterns, resistance points, influence style with evidence
+- Cultural factors affecting their decision-making and communication patterns
+- Reliability indicators based on language patterns and behavioral consistency
 
-### Recurring Themes
-- Issues mentioned multiple times (with frequency count)
-- Consistent resistance or enthusiasm patterns
-- Resource constraint patterns
-- Success indicator patterns
+### 4. Technical Implementation Nuance
+- Specific technical approaches with constraints and alternatives mentioned
+- WHY certain solutions were rejected with exact reasoning provided
+- Implementation challenges with proposed solutions and cultural factors
 
-### Predictive Analysis
-- Risk probability assessments based on discussion patterns
-- Success likelihood indicators
-- Timeline feasibility analysis
-- Resource adequacy evaluation
+## ANTI-GENERIC LANGUAGE ENFORCEMENT
 
-### Cross-Session Intelligence
-- Patterns that connect to broader organizational themes
-- Insights applicable to other contexts or teams
-- Learning that can be replicated or avoided
+FORBIDDEN GENERIC PHRASES - REPLACE WITH EVIDENCE-BASED STATEMENTS:
+❌ "Team discussed" → ✅ Specific quote + context + individual reactions + implications
+❌ "Various options considered" → ✅ Exact options with reasons for acceptance/rejection + who advocated what
+❌ "General consensus" → ✅ Individual positions with evidence + how consensus evolved + cultural factors
+❌ "Resource constraints" → ✅ Specific numbers, limitations, exact quotes about impact + proposed solutions
+
+## EVIDENCE CHAIN REQUIREMENTS
+
+Every claim must follow this pattern:
+1. Exact quote or specific reference from transcript with timestamp context
+2. Cultural/individual context explaining significance  
+3. Business implication or consequence with impact assessment
+4. Implementation factor (what enables/blocks this) with cultural considerations
+
+Example: NOT "Stefan prefers systematic processes" 
+BUT "Stefan shows deep frustration with ad-hoc approach: 'Vi behövde fem minuter av dig och det gick inte. Det funkar inte. Det bara är så.' (14:47) → Indicates systematic process advocacy driven by quality delivery concerns → Will likely resist informal team structures and push for daily standups → Swedish cultural emphasis on reliability and consensus-building reinforces this position → Implementation blocker: requires team buy-in through structured discussion"
 
 ## ENHANCED SPECIFICITY REQUIREMENTS
 
-**NEVER write:** "Team discussed resource constraints"
-**ALWAYS write:** "'Vi behövde fem minuter av dig och det gick inte' - Resource availability blocking high-value opportunities (IKEA example), pattern recurring 8 times in session, creates 85% probability of scaling conflict in Q4"
+**NEVER write:** "Team discussed resource constraints"  
+**ALWAYS write:** "Resource availability crisis identified through specific example: 'Vi behövde fem minuter av dig och det gick inte' → blocking high-value opportunities (IKEA pilot mentioned) → pattern recurring 8+ times in session → cultural tension between Swedish consensus-building and individual availability → creates 85% probability of scaling conflict in Q4 without structured resource management → implementation requires formal availability agreements"
 
 **NEVER write:** "Partnership model explored"
-**ALWAYS write:** "Salesforce-style distribution model preferred: partners handle domain expertise + client relations, River provides platform + licensing. Decision blocked by missing shareholder agreement (deadline: Aug 31), resistance to traditional consulting: 'För är det någonting jag absolut inte vill bygga så är det en konsult'"
+**ALWAYS write:** "Salesforce-style distribution model specifically advocated: 'Salesforce har tusentals konsultpartners som hjälper till att bygga säljprocesser' → partners handle domain expertise + client relations, River provides platform + licensing → Decision blocked by missing shareholder agreement (deadline: Aug 31) → Strong resistance to traditional consulting: 'För är det någonting jag absolut inte vill bygga så är det en konsult' → Cultural factor: Swedish innovation culture vs traditional business models → Implementation requires partner recruitment system + revenue sharing framework"
 
-## Enhanced Output Structure with Intelligent Amplification
+## Nuance-Preserving Output Structure with Anti-Laziness Enforcement
 
 **Input Context (Placeholders will be filled by the calling system):**
 *   `original_filename`: {original_filename}
@@ -120,197 +132,201 @@ The JSON object MUST adhere to the following structure:
     "session_type": "string"
   }},
   "session_date": "string",
-  "overall_summary": "string",
+  "overall_summary": "string with specific quotes and cultural context",
+
+  "nuanced_intelligence": {{
+    "critical_details_preserved": [
+      {{
+        "detail": "Exact quote, specific number, or technical specification",
+        "context": "Cultural, business, or individual significance explaining why this matters",
+        "implications": "What this enables, blocks, or requires for business outcomes", 
+        "nuance_indicators": ["hesitation", "emphasis", "cultural_reference", "emotional_weight"]
+      }}
+    ],
+    "individual_behavioral_profiles": [
+      {{
+        "behavioral_pattern": "Specific evidence from transcript showing individual approach",
+        "commitment_indicators": "Language patterns and actions showing reliability/engagement level",
+        "influence_style": "How they persuade, resist, or build consensus with examples",
+        "cultural_factors": "Business culture elements affecting their communication/decisions",
+        "implementation_preferences": "Specific working styles or process preferences with evidence"
+      }}
+    ],
+    "technical_implementation_specifics": [
+      {{
+        "technical_approach": "Exact technical solution or methodology discussed",
+        "constraints": "Specific limitations, resource requirements, or blockers mentioned",
+        "alternatives_considered": "Other options discussed with reasons for acceptance/rejection",
+        "implementation_mechanics": "HOW this would actually work in practice with cultural considerations"
+      }}
+    ],
+    "financial_and_timeline_specifics": [
+      {{
+        "specific_detail": "Exact number, date, deadline, or financial figure mentioned",
+        "context": "Why this number/date matters for business outcomes",
+        "implications": "What happens if this target is met/missed",
+        "dependencies": "What needs to happen for this to be achieved"
+      }}
+    ]
+  }},
   
   "relationship_intelligence": {{
-    "entity_relationship_map": [
+    "entity_dependency_mapping": [
       {{
-        "entity_1": "string",
-        "relationship_type": "string",
-        "entity_2": "string",
-        "evidence": "string",
-        "business_impact": "string",
-        "urgency_level": "string"
+        "entity_1": "Specific entity from transcript (person, project, decision, resource)",
+        "relationship_type": "depends_on/enables/blocks/requires with specific evidence",
+        "entity_2": "Target entity with context",
+        "evidence": "Exact quote or specific reference proving this relationship",
+        "implementation_mechanics": "HOW this dependency actually works in practice",
+        "cultural_factors": "Business culture aspects affecting this relationship",
+        "business_impact": "Specific consequence if this relationship fails/succeeds"
       }}
     ],
-    "dependency_chains": [
+    "decision_dependency_chains": [
       {{
-        "chain_description": "string",
-        "sequence": ["string"],
-        "critical_blocker": "string | null",
-        "success_probability": "string",
-        "timeline_impact": "string | null"
+        "chain_description": "Specific sequence of decisions/actions with implementation details",
+        "sequence": ["step 1 → step 2 → step 3 with specific evidence from transcript"],
+        "critical_blocker": "Exact blocker identified with quote and cultural context",
+        "success_probability": "Assessment with evidence from discussion patterns",
+        "cultural_implementation_factors": "Cultural elements affecting execution"
       }}
-    ],
-    "knowledge_network": {{
-      "expertise_concentrations": ["string"],
-      "knowledge_gaps": ["string"],
-      "cross_pollination_opportunities": ["string"],
-      "learning_patterns": ["string"]
-    }}
+    ]
   }},
-  
+
   "decision_intelligence": [
     {{
-      "decision": "string",
-      "verbatim_evidence": "string | null",
-      "decision_logic_chain": "string",
-      "implementation_dependencies": ["string"],
-      "resistance_patterns": "string | null",
-      "success_probability": "string",
-      "future_implications": "string",
-      "query_tags": ["string"]
+      "decision": "Exact decision made with specific details",
+      "verbatim_evidence": "Direct quote showing this decision with emotional/cultural context",
+      "individual_positions": "Who advocated for what with specific evidence and reasoning",
+      "decision_evolution": "How this decision changed during the session with evidence",
+      "cultural_decision_factors": "Cultural elements affecting decision",
+      "implementation_dependencies": ["Specific requirements with evidence from transcript"],
+      "resistance_patterns": "Who resisted and how, with specific quotes and cultural context",
+      "success_indicators": "Evidence-based indicators of decision stability and implementation likelihood"
     }}
   ],
-  
-  "pattern_intelligence": {{
-    "recurring_themes": [
-      {{
-        "theme": "string",
-        "frequency": "string",
-        "evidence": "string",
-        "business_impact": "string",
-        "prediction": "string | null"
-      }}
-    ],
-    "success_indicators": ["string"],
-    "risk_patterns": ["string"],
-    "cross_session_applicability": ["string"]
-  }},
-  
+
   "chronological_session_flow": {{
     "1_phase_name": {{
-      "timeframe": "string",
-      "content_covered": ["string"],
-      "key_information": "string",
-      "critical_quotes": ["string"],
-      "relationship_developments": ["string"]
+      "timeframe": "Specific time period with evidence",
+      "content_covered": ["Specific topics with exact quotes showing discussion"],
+      "individual_contributions": ["Who said what with impact on discussion flow"],
+      "critical_quotes_with_context": ["Exact quote + cultural significance + business implication"],
+      "relationship_developments": ["How relationships/dynamics evolved with evidence"],
+      "cultural_dynamics": ["Cultural or conflict patterns observed"]
     }}
   }},
-  
+
+  "pattern_intelligence": {{
+    "recurring_themes_with_evidence": [
+      {{
+        "theme": "Specific recurring pattern identified",
+        "frequency": "Number of times mentioned + intensity evolution",
+        "exact_evidence": ["Multiple quotes showing this pattern with context"],
+        "individual_variation": "How different people approached this theme",
+        "cultural_pattern": "Business culture elements reflected in this theme",
+        "business_impact": "Specific consequences of this recurring pattern",
+        "evolution_during_session": "How this theme changed/developed with evidence"
+      }}
+    ],
+    "success_probability_indicators": ["Evidence-based indicators with cultural factors"],
+    "risk_warning_signals": ["Specific evidence of potential problems with cultural context"]
+  }},
+
   "action_items": [
     {{
-      "task_description": "string",
-      "assigned_to": ["string | null"],
-      "due_date": "string | null",
-      "status": "string | null",
-      "dependencies": ["string"],
-      "success_factors": ["string"],
-      "risk_indicators": ["string"],
-      "business_impact": "string | null"
+      "task_description": "Specific action required with implementation details",
+      "individual_ownership": ["Who specifically committed with evidence of commitment level"],
+      "exact_deadlines": "Specific dates mentioned with context and importance",
+      "dependencies": ["What must happen first with evidence from discussion"],
+      "success_factors": ["Specific requirements for success with cultural considerations"],
+      "cultural_implementation_challenges": ["Cultural factors that could affect execution"],
+      "commitment_reliability_assessment": "Evidence-based assessment of follow-through likelihood"
     }}
   ],
-  
-  "key_discussion_points": [
-    {{
-      "topic": "string",
-      "verbatim_quotes": ["string"],
-      "relationship_mapping": ["string"],
-      "implementation_implications": ["string"],
-      "risk_assessment": "string | null",
-      "success_probability": "string | null"
-    }}
-  ],
-  
-  "decisions_made_enhanced": [
-    {{
-      "decision": "string",
-      "verbatim_evidence": "string | null",
-      "enables": ["string"],
-      "depends_on": ["string"],
-      "blocks": ["string"],
-      "timeline": "string | null",
-      "success_indicators": ["string"],
-      "failure_risks": ["string"]
-    }}
-  ],
-  
+
   "questions_and_tensions": {{
-    "critical_unresolved": [
+    "critical_unresolved_with_evidence": [
       {{
-        "question": "string",
-        "business_impact": "string",
-        "urgency": "string",
-        "dependencies": ["string"],
-        "resolution_path": "string | null"
-      }}
-    ],
-    "underlying_tensions": [
-      {{
-        "tension": "string",
-        "manifestation": "string",
-        "impact_on_execution": "string",
-        "resolution_indicators": ["string"]
+        "question": "Exact question or tension identified from transcript",
+        "evidence": "Specific quotes or references showing this is unresolved",
+        "individual_perspectives": "Who holds what view with evidence and cultural factors",
+        "business_impact": "Specific consequences of leaving this unresolved",
+        "cultural_resolution_requirements": "Cultural needs for resolution"
       }}
     ]
   }},
-  
+
   "organizational_context": {{
-    "team_structure": "string",
-    "strategic_initiatives": "string",
-    "compliance_requirements": "string",
-    "cultural_context": "string",
-    "capability_gaps": ["string"],
-    "resource_constraints": ["string"]
+    "team_structure": "Specific roles and relationships with evidence from discussion",
+    "cultural_context": "Business culture patterns observed with specific examples",
+    "capability_gaps": ["Specific skills/resources missing with evidence and impact"],
+    "resource_constraints": ["Exact limitations mentioned with numbers and implications"]
   }},
-  
+
   "key_entities_mentioned": {{
-    "people": ["string"],
-    "organizations_clients": ["string"],
-    "projects_initiatives": ["string"],
-    "key_terms_glossary": [
+    "people": ["Names mentioned with roles and behavioral evidence"],
+    "organizations_clients": ["Companies mentioned with relationship context and significance"],
+    "projects_initiatives": ["Specific projects with status and implementation details"],
+    "technical_terms": [
       {{
-        "term": "string",
-        "definition_or_context": "string | null"
+        "term": "Exact technical term used",
+        "definition_from_context": "How they defined/used this term with cultural nuance"
       }}
     ]
-  }},
-  
-  "predictive_intelligence": {{
-    "high_probability_outcomes": ["string"],
-    "risk_scenarios": [
-      {{
-        "risk": "string",
-        "probability": "string",
-        "impact": "string",
-        "early_warning_signals": ["string"]
-      }}
-    ],
-    "success_scenarios": [
-      {{
-        "scenario": "string",
-        "probability": "string",
-        "enablers": ["string"],
-        "indicators": ["string"]
-      }}
-    ]
-  }},
-  
-  "query_optimization": {{
-    "critical_search_terms": ["string"],
-    "relationship_queries": ["string"],
-    "pattern_identifiers": ["string"],
-    "business_intelligence_tags": ["string"]
   }}
 }}
 
-**Critical Instructions for Intelligent Amplification:**
+## COMPREHENSIVE COVERAGE REQUIREMENTS
 
-1.  **Relationship Extraction Priority:** For every significant entity (decision, person, project, resource, deadline), identify what it depends on, enables, blocks, or requires. Map these relationships with specific evidence from the transcript.
+BEFORE RESPONDING, VERIFY YOU HAVE ADDRESSED:
+☑ Every person mentioned with detailed behavioral analysis and cultural factors
+☑ Every number/date/deadline with exact figures and business implications  
+☑ Every decision with implementation mechanics and cultural considerations
+☑ Every tension with specific evidence and resolution requirements
+☑ Every technical detail with constraints and alternatives
+☑ Every relationship with evidence-based dependency mapping
 
-2.  **Verbatim Critical Quote Preservation:** Extract exact quotes for commitments, technical specifications, resistance statements, and strong opinions. These provide legal and business accuracy that summaries cannot capture.
+IF ANY SECTION FEELS GENERIC OR INCOMPLETE, EXPAND WITH SPECIFIC DETAILS FROM TRANSCRIPT.
 
-3.  **Pattern Recognition Across Content:** Count recurring themes, identify consistent resistance or enthusiasm patterns, note resource constraints mentioned multiple times. Include frequency counts and impact assessments.
+## SELF-VERIFICATION CHECKLIST
 
-4.  **Predictive Intelligence Generation:** Based on discussion patterns, assess probability of success/failure, identify early warning signals, and predict likely future scenarios. Ground predictions in evidence from the transcript.
+BEFORE SUBMITTING, CONFIRM:
+□ Have I analyzed every person mentioned with specific behavioral evidence?
+□ Have I preserved all exact numbers, dates, and financial details with context?  
+□ Have I mapped all dependencies with implementation mechanics?
+□ Have I avoided ALL generic language throughout the response?
+□ Have I provided cultural context for business dynamics?
+□ Have I included exact quotes for all major decisions and resistance points?
+□ Have I explained HOW each relationship works in practice?
+□ Have I provided evidence-based assessments rather than assumptions?
 
-5.  **Decision Chain Mapping:** For each decision, map what it enables, what depends on it, what blocks it, and what success looks like. Create dependency chains showing how decisions connect.
+IF ANY ANSWER IS NO, EXPAND THAT SECTION WITH TRANSCRIPT-SPECIFIC DETAILS.
 
-6.  **Query Optimization Focus:** Structure every element to be highly searchable. Include tags, keywords, and relationship identifiers that would help future queries find relevant information quickly.
+## MANDATORY CONTENT MINIMUMS
 
-7.  **Business Impact Assessment:** For every element, assess business impact - high/medium/low urgency, resource implications, risk factors, success indicators.
+REQUIRED MINIMUMS (will be verified):
+- nuanced_intelligence.critical_details_preserved: minimum 20 entries with exact quotes
+- nuanced_intelligence.individual_behavioral_profiles: minimum 4 comprehensive profiles  
+- relationship_intelligence.entity_dependency_mapping: minimum 12 relationships with evidence
+- decision_intelligence: minimum 6 decisions with full cultural/individual context
+- pattern_intelligence.recurring_themes_with_evidence: minimum 8 themes with frequency data
 
-8.  **Evidence-Based Intelligence:** All insights must be grounded in specific evidence from the transcript. Include timestamps or direct quotes as proof points.
+## QUALITY ENFORCEMENT STANDARDS
+
+OUTPUT QUALITY REQUIREMENTS:
+- Every entry must contain NEW intelligence not obvious from surface reading
+- Every relationship must include specific implementation mechanics  
+- Every decision must include individual/cultural factors affecting execution
+- Every quote must include cultural context and business implications
+- Every pattern must include frequency, evolution, and cultural elements
+
+LAZY OUTPUT INDICATORS TO AVOID:
+❌ Generic phrases without specific evidence
+❌ Vague references without exact quotes
+❌ Cultural generalizations without specific examples  
+❌ Decisions without implementation details
+❌ Relationships without evidence or mechanics
 
 **Transcript Content to Process:**
 ```
@@ -319,30 +335,15 @@ The JSON object MUST adhere to the following structure:
 
 Your entire output MUST be a single, valid JSON object as described above.
 
-## Enhanced Quality Standards for 100X Improvement
+## FINAL REMINDER: NUANCE IS INTELLIGENCE
 
-### INTELLIGENCE AMPLIFICATION TEST
-Query against your output must produce MORE insightful results than searching the raw transcript. Test: "Does this answer contain insights that would take hours to extract from the raw transcript?"
+Your goal is creating business intelligence that is MORE valuable than the raw transcript by:
+1. Preserving critical details that contain real intelligence
+2. Adding relationship mapping with implementation mechanics
+3. Including cultural intelligence for effective execution
+4. Providing evidence-based insights with specific quotes and context
 
-### RELATIONSHIP MAPPING TEST
-Every significant entity should have clear relationships mapped. Test: "Can I understand what depends on what and what blocks what without reading the original transcript?"
-
-### PREDICTIVE VALUE TEST
-Must include risk assessments and success probability indicators. Test: "Does this help predict future challenges or opportunities based on current patterns?"
-
-### ACTIONABILITY TEST
-Every major element must enable specific business actions. Test: "What concrete actions does this information enable that the raw transcript doesn't?"
-
-### BUSINESS INTELLIGENCE TEST
-Must surpass simple summarization with value-added insights. Test: "Would a business leader get MORE strategic value from this than from reading the original transcript?"
-
-## Critical Success Factors
-
-**HIGH VALUE:** Dependency chains, verbatim quotes for commitments, risk probability assessments, success pattern identification
-**MEDIUM VALUE:** Chronological flow, pattern recognition, expertise mapping
-**AVOID:** Philosophical analysis, extensive sentiment description, vague generalizations
-
-Remember: Transform transcript into SUPERIOR business intelligence through relationship mapping, pattern recognition, predictive analysis, and enhanced queryability. The goal is intelligent amplification, not compression.
+The summary must enable superior business decision-making compared to reading the raw transcript.
 """
 
 def generate_transcript_summary(
