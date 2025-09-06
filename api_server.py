@@ -2,6 +2,10 @@ import os
 from dotenv import load_dotenv
 load_dotenv() # Load environment variables at the very top
 
+# Quiet gRPC/absl noise unless explicitly overridden
+os.environ.setdefault('GRPC_VERBOSITY', 'ERROR')
+os.environ.setdefault('GRPC_LOG_SEVERITY_LEVEL', 'ERROR')
+
 import sys
 import logging
 from flask import Flask, jsonify, request, Response, stream_with_context, g
@@ -3764,7 +3768,18 @@ def list_chat_history(user: SupabaseUser):
         return jsonify({'error': 'agentName parameter is required or DB is unavailable'}), 400
 
     try:
-        agent_result = client.table('agents').select('id').eq('name', agent_name).single().execute()
+        # Robust agent lookup with small retry to handle transient HTTP/2 disconnects
+        agent_result = None
+        last_err = None
+        for i in range(3):
+            try:
+                agent_result = client.table('agents').select('id').eq('name', agent_name).single().execute()
+                break
+            except (httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+                last_err = e
+                time.sleep(min(1.5, 0.2 * (2 ** i)))
+        if agent_result is None:
+            raise last_err or Exception('Unknown error fetching agent id')
         if not agent_result.data:
             return jsonify([])
         agent_id = agent_result.data['id']
