@@ -24,7 +24,7 @@ def get_api_key(agent_name: str, service_name: str) -> Optional[str]:
 
     Args:
         agent_name (str): The name of the agent.
-        service_name (str): The service name ('anthropic', 'openai', or 'google').
+        service_name (str): The service name ('anthropic', 'openai', 'google', or 'groq').
 
     Returns:
         str: The appropriate API key, or None if not found.
