@@ -205,6 +205,9 @@ class EmbeddingHandler:
                 # Event awareness defaults to '0000' (shared)
                 if 'event_id' not in pinecone_metadata:
                     pinecone_metadata['event_id'] = metadata.get('event_id', '0000')
+                # Ensure transcript scoping metadata present
+                if 'transcript' not in pinecone_metadata:
+                    pinecone_metadata['transcript'] = str(metadata.get('event_id', '0000'))
                 # Standardize source type
                 if 'source_type' not in pinecone_metadata:
                     # Map any legacy 'source' to a standard type when sensible

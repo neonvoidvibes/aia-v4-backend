@@ -48,6 +48,7 @@ from utils.s3_utils import (
     write_agent_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
+from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript
 from utils.pinecone_utils import init_pinecone, create_namespace
 from utils.embedding_handler import EmbeddingHandler
 from pinecone.exceptions import NotFoundException
@@ -56,8 +57,25 @@ from groq import APIError as GroqAPIError
 import anthropic # Need the module itself for type hints
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, retry_if_exception_type
 from flask_cors import CORS
+import boto3
 
 from transcription_service import process_audio_segment_and_update_s3
+
+# ---------------------------
+# New: Multi-Agent Transcript Save Endpoint helpers/imports
+# ---------------------------
+from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript  # re-import for clarity
+import boto3 as _boto3
+
+def _read_transcript_text_for_ma(s3_key: str) -> str:
+    if s3_key.startswith("s3://"):
+        _, _, bucket_and_key = s3_key.partition("s3://")
+        bucket, _, key = bucket_and_key.partition("/")
+        s3c = _boto3.client("s3")
+        obj = s3c.get_object(Bucket=bucket, Key=key)
+        return obj["Body"].read().decode("utf-8")
+    with open(s3_key, "r", encoding="utf-8") as f:
+        return f.read()
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -1214,6 +1232,39 @@ def stop_recording_route(user: SupabaseUser):
         "session_id": session_id,
         "recording_status": {"is_recording": False, "is_backend_processing_paused": False} 
     })
+
+# New: Multi-Agent Transcript Save Endpoint
+@app.post("/api/transcripts/save")
+@supabase_auth_required(agent_required=False)
+def save_transcript(user: SupabaseUser):
+    data = g.get('json_data', {}) or {}
+    agent = data.get("agentName")
+    event = data.get("eventId") or "0000"
+    s3_key = data.get("s3Key")
+    if not agent or not s3_key:
+        return jsonify({"error": "agentName and s3Key required"}), 400
+
+    logger.info(f"tx.save.start {{agent:{agent}, event:{event}, s3Key:{s3_key}}}")
+    text = _read_transcript_text_for_ma(s3_key)
+    full = ma_summarize_transcript(agent_name=agent, event_id=event, transcript_text=text, source_identifier=s3_key)
+
+    for layer in ["layer1", "layer2", "layer3", "layer4"]:
+        content = json.dumps(full[layer], ensure_ascii=False)
+        EmbeddingHandler(index_name="river", namespace=f"{agent}.{layer}").embed_and_upsert(
+            content=content,
+            metadata={
+                "agent_name": agent,
+                "event_id": event,
+                "transcript": event,
+                "source": "transcript_summary",
+                "source_type": "transcript",
+                "source_identifier": s3_key,
+                "file_name": f"{layer}.json",
+                "doc_id": f"{s3_key}:{layer}",
+            },
+        )
+
+    return jsonify({"ok": True, "layers": ["layer1", "layer2", "layer3", "layer4"]}), 200
 
 @app.route('/api/audio-recording/stop', methods=['POST'])
 @supabase_auth_required(agent_required=False)
@@ -4306,6 +4357,8 @@ if __name__ == '__main__':
     idle_cleanup_thread.start()
     logger.info("Idle session cleanup thread started.")
 
+    
+
     port = int(os.getenv('PORT', 5001)); debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     logger.info(f"Starting API server on port {port} (Debug: {debug_mode})")
     
@@ -4315,7 +4368,7 @@ if __name__ == '__main__':
 
     use_reloader_env = os.getenv('FLASK_USE_RELOADER', 'False').lower() == 'true'
     
-    if not os.getenv("GUNICORN_CMD"): 
+    if not os.getenv("GUNICORN_CMD"):
         effective_reloader = use_reloader_env if debug_mode else False
         logger.info(f"Running with Flask dev server. Debug: {debug_mode}, Reloader: {effective_reloader}")
         app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=effective_reloader)
