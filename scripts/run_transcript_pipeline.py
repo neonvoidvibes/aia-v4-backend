@@ -63,16 +63,32 @@ def main():
     steps = run_pipeline_steps(text)
     full = steps["full"]
 
-    # Optional dump of intermediates
-    if args.dump_dir:
-        os.makedirs(args.dump_dir, exist_ok=True)
+    # Determine default dump directory when a local text file is provided
+    default_dump_dir = None
+    written_files = []
+    if args.text_path and os.path.isfile(args.text_path):
+        default_dump_dir = os.path.dirname(os.path.abspath(args.text_path))
+
+    dump_dir = args.dump_dir or default_dump_dir
+    if dump_dir:
+        os.makedirs(dump_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(args.text_path or "transcript"))[0]
+        # Write all intermediate JSONs
         for k in ["segments", "mirror", "lens", "portal", "layer3", "layer4", "full"]:
-            with open(os.path.join(args.dump_dir, f"{k}.json"), "w", encoding="utf-8") as f:
+            out_path = os.path.join(dump_dir, f"{base}__{k}.json")
+            with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(steps[k], f, ensure_ascii=False, indent=2)
+            written_files.append(out_path)
 
     if not args.no_upsert:
         # Upsert final summary as Markdown to a single namespace (agent)
         md = full_summary_to_markdown(full)
+        # Save local markdown alongside source if possible
+        if dump_dir:
+            md_path = os.path.join(dump_dir, f"{base}__transcript_summary.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(md)
+            written_files.append(md_path)
         EmbeddingHandler(index_name="river", namespace=f"{args.agent}").embed_and_upsert(
             content=md,
             metadata={
@@ -86,8 +102,12 @@ def main():
                 "doc_id": f"{source_id}:summary",
             },
         )
-
-    print(json.dumps({"ok": True, "upserted": (not args.no_upsert), "dump_dir": args.dump_dir or None}))
+    print(json.dumps({
+        "ok": True,
+        "upserted": (not args.no_upsert),
+        "dump_dir": dump_dir,
+        "written": written_files
+    }))
 
 
 if __name__ == "__main__":
