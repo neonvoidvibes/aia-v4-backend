@@ -20,6 +20,7 @@ def parse_reality_check_feedback(reality_check_md: str) -> Dict[str, str]:
         "business_reality": "", 
         "organizational_dynamics": "",
         "strategic_implications": "",
+        "wisdom_learning": "",
         "next_actions": ""
     }
     
@@ -64,6 +65,7 @@ def parse_reality_check_feedback(reality_check_md: str) -> Dict[str, str]:
     feedback["business_reality"] = _extract_business_reality_feedback(sections)
     feedback["organizational_dynamics"] = _extract_org_dynamics_feedback(sections)
     feedback["strategic_implications"] = _extract_strategic_feedback(sections)
+    feedback["wisdom_learning"] = _extract_wisdom_learning_feedback(sections)
     feedback["next_actions"] = _extract_actions_feedback(sections)
     
     return feedback
@@ -169,6 +171,35 @@ def _extract_strategic_feedback(sections: Dict[str, str]) -> str:
             relevant_content.append(f"**Strategic Relevance Feedback**: {strategic_feedback}")
     
     return '\n\n'.join(relevant_content) if relevant_content else "No specific strategic implications feedback provided."
+
+
+def _extract_wisdom_learning_feedback(sections: Dict[str, str]) -> str:
+    """Extract feedback relevant to wisdom and learning."""
+    relevant_content = []
+    
+    # Look for wisdom and learning related feedback
+    for section_name, content in sections.items():
+        if any(keyword in section_name for keyword in ['wisdom', 'learning', 'layer 5', 'framework', 'insight']):
+            relevant_content.append(f"**{section_name.title()}**: {content}")
+    
+    # Extract formatting violations
+    violations_section = sections.get('critical formatting violations', '')
+    if violations_section:
+        relevant_content.append(f"**Formatting Violations**: {violations_section}")
+    
+    # Extract content quality violations  
+    quality_section = sections.get('content quality violations', '')
+    if quality_section:
+        relevant_content.append(f"**Content Quality Issues**: {quality_section}")
+    
+    # Extract from accuracy check
+    accuracy_section = sections.get('accuracy check', '')
+    if accuracy_section:
+        wisdom_feedback = _extract_layer_specific_feedback(accuracy_section, ['wisdom', 'learning', 'layer 5', 'framework'])
+        if wisdom_feedback:
+            relevant_content.append(f"**Framework Feedback**: {wisdom_feedback}")
+    
+    return '\n\n'.join(relevant_content) if relevant_content else "No specific wisdom and learning feedback provided."
 
 
 def _extract_actions_feedback(sections: Dict[str, str]) -> str:

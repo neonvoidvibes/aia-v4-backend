@@ -8,6 +8,7 @@ from .business_reality_agent import BusinessRealityAgent
 from .organizational_dynamics_agent import OrganizationalDynamicsAgent
 from .strategic_implications_agent import StrategicImplicationsAgent
 from .reality_check_agent import RealityCheckAgent
+from .wisdom_learning_agent import WisdomLearningAgent
 from .integration_agent import IntegrationAgent
 from .feedback_parser import parse_reality_check_feedback
 
@@ -47,7 +48,11 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
     # Step 5: Strategic Implications (now has direct segment access)
     strategic_md = StrategicImplicationsAgent().run(segs, business_reality_md, org_dynamics_md, context_md)
     
-    # Step 6: Reality Check
+    # Step 6: Wisdom and Learning
+    wisdom_learning_md = WisdomLearningAgent().run(segs, context_md, business_reality_md,
+                                                   org_dynamics_md, strategic_md)
+    
+    # Step 7: Reality Check
     reality_check_md = RealityCheckAgent().run(segs, context_md, business_reality_md, 
                                               org_dynamics_md, strategic_md)
     
@@ -72,7 +77,12 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
                                                          strategic_md, feedback["strategic_implications"], 
                                                          context_md)
     
-    # Step 7: Final Integration
+    if feedback.get("wisdom_learning"):
+        wisdom_learning_md = WisdomLearningAgent().refine(segs, context_md, business_reality_md,
+                                                         org_dynamics_md, strategic_md, 
+                                                         wisdom_learning_md, feedback["wisdom_learning"])
+    
+    # Step 8: Final Integration
     final_md = IntegrationAgent().run_md(
         context_md=context_md,
         business_reality_md=business_reality_md,
@@ -87,6 +97,7 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
         "business_reality_md": business_reality_md,
         "org_dynamics_md": org_dynamics_md,
         "strategic_md": strategic_md,
+        "wisdom_learning_md": wisdom_learning_md,
         "reality_check_md": reality_check_md,
         "full_md": final_md,
     }

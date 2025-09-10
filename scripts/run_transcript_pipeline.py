@@ -84,6 +84,7 @@ def main():
             ("business_reality_md", "business_reality"), 
             ("org_dynamics_md", "org_dynamics"),
             ("strategic_md", "strategic_implications"),
+            ("wisdom_learning_md", "wisdom_learning"),
             ("reality_check_md", "reality_check")
         ]
         
@@ -100,7 +101,8 @@ def main():
             ("context_md", "context"),
             ("business_reality_md", "business_reality"), 
             ("org_dynamics_md", "org_dynamics"),
-            ("strategic_md", "strategic_implications")
+            ("strategic_md", "strategic_implications"),
+            ("wisdom_learning_md", "wisdom_learning")
         ]
         
         for md_key, file_name in full_agent_outputs:
@@ -132,7 +134,8 @@ def main():
             ("context_md", "context"),
             ("business_reality_md", "business_reality"), 
             ("org_dynamics_md", "org_dynamics"),
-            ("strategic_md", "strategic_implications")
+            ("strategic_md", "strategic_implications"),
+            ("wisdom_learning_md", "wisdom_learning")
         ]
         
         for md_key, file_name in upsert_agent_outputs:
