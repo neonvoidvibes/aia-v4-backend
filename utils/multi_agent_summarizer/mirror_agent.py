@@ -26,23 +26,8 @@ class MirrorAgent(Agent):
         seg_min = min([s.get("start_min", 0) for s in segments] or [0])
         seg_max = max([s.get("end_min", 0) for s in segments] or [0])
 
-        # Pass A: metadata only (tiny prompt)
-        meta_user = {
-            "language_hint": lang_hint,
-            "task": "meeting_metadata_only",
-            "segments": [{"id": s.get("id"), "text": s.get("text", "")[:1200]} for s in segments[:1]],
-            "approx_duration_minutes": max(1, int(seg_max - seg_min)),
-        }
-        messages_meta = [
-            {"role": "system", "content": "Return Markdown only. Keys in English; content in original language."},
-            {"role": "user", "content": json.dumps(meta_user, ensure_ascii=False)},
-        ]
+        # Pass A is skipped to avoid duplication; reduce step will include Layer 1 metadata
         meta_md = ""
-        try:
-            resp_meta = chat(std_model(), messages_meta, max_tokens=400, temperature=0.1)
-            meta_md = resp_meta or ""
-        except Exception as e:
-            logger.error(f"MirrorAgent meta LLM error: {e}")
 
         # Map per-segment evidence packs
         packs: List[str] = []
@@ -119,4 +104,4 @@ class MirrorAgent(Agent):
             md.append(kv_line({"timestamp": "unknown", "duration_minutes": max(1, int(seg_max - seg_min)), "participants_count": 1, "meeting_type": "unspecified", "primary_purpose": "unspecified"}))
             md.append("\n" + L2_HEADER + "\n### Mirror\n- engagement_distribution: unknown\n\n")
 
-        return "\n".join([m for m in [meta_md.strip(), "\n".join(md).strip()] if m])
+        return "\n".join([m for m in ["\n".join(md).strip()] if m])

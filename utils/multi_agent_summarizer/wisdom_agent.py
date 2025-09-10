@@ -13,8 +13,34 @@ logger = logging.getLogger(__name__)
 class WisdomAgent(Agent):
     name = "wisdom"
 
-    def run(self, layer1_md: str, layer2_md: str) -> str:
-        payload = {"layer1_markdown": layer1_md, "layer2_markdown": layer2_md, "template": """
+    def run(self, segments: Dict[str, Any]) -> str:
+        # Map: per-segment wisdom bullets
+        packs = []
+        for s in segments:
+            payload = {
+                "segment": {"id": s.get("id"), "text": s.get("text")},
+                "template": """
+### Wisdom Pack {seg_id}
+- insight: <text> | individual_growth: <text>
+- relationship_shift: <text> | collaboration_quality: <text>
+- systems_insight: <text> | broader_context: <text>
+- aesthetic_insight: <text> | elegance_factor: <text>
+- truth_revealed: <text> | reality_alignment: <text>
+- life_affirming_direction: <text> | stakeholder_benefit: <text>
+- awareness_deepening: <text> | empathy_development: <text>
+- sense_making_advancement: <text> | complexity_navigation: <text>
+- responsibility_taking: <text> | purposeful_action: <text>
+"""}
+            try:
+                pack = chat(std_model(), [
+                    {"role": "system", "content": "Extract Layer 3 (Wisdom) bullets for this segment. Markdown only."},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
+                ], max_tokens=1100, temperature=0.1)
+                packs.append(pack or '')
+            except Exception as e:
+                logger.error(f"WisdomAgent map error seg={s.get('id')}: {e}")
+
+        reduce_payload = {"packs": packs, "template": """
 # Layer 3 — Wisdom Integration
 ### Connectedness Patterns
 - insight: <text> | individual_growth: <text>
@@ -30,17 +56,12 @@ class WisdomAgent(Agent):
 - sense_making_advancement: <text> | complexity_navigation: <text>
 - responsibility_taking: <text> | purposeful_action: <text>
 """}
-        messages = [
-            {"role": "system", "content": "Generate Layer 3 as Markdown. Use prior layer markdown; keys in English, content in original language."},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-        ]
         try:
-            import time
-            t0 = time.perf_counter()
-            resp = chat(std_model(), messages, max_tokens=1200, temperature=0.1)
-            dt = (time.perf_counter() - t0) * 1000
-            logger.info(f"tx.agent.done name=WisdomAgent ms={dt:.1f} out_chars={len(resp or '')}")
-            return resp or ""
+            resp = chat(std_model(), [
+                {"role": "system", "content": "Merge Wisdom packs across all segments into a concise section. Markdown only."},
+                {"role": "user", "content": json.dumps(reduce_payload, ensure_ascii=False)}
+            ], max_tokens=1400, temperature=0.1)
+            return resp or "# Layer 3 — Wisdom Integration\n"
         except Exception as e:
-            logger.error(f"WisdomAgent LLM error: {e}")
-        return "# Layer 3 — Wisdom Integration\n"
+            logger.error(f"WisdomAgent reduce error: {e}")
+            return "# Layer 3 — Wisdom Integration\n"

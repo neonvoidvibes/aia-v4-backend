@@ -13,8 +13,34 @@ logger = logging.getLogger(__name__)
 class LearningAgent(Agent):
     name = "learning"
 
-    def run(self, layer1_md: str, layer2_md: str, layer3_md: str) -> str:
-        payload = {"layer1_markdown": layer1_md, "layer2_markdown": layer2_md, "layer3_markdown": layer3_md, "template": """
+    def run(self, segments: Dict[str, Any]) -> str:
+        # Map: per-segment learning bullets
+        packs = []
+        for s in segments:
+            payload = {
+                "segment": {"id": s.get("id"), "text": s.get("text")},
+                "template": """
+### Learning Pack {seg_id}
+- error_correction: <text> | process_improvement: <text>
+- assumption_questioning: <text> | mental_model_shift: <text>
+- context_examination: <text> | paradigm_transformation: <text>
+- relationship_between: a, b | pattern: <text> | systemic_impact: <text>
+- contexts: a, b | emergent_property: <text>
+- system_characteristic: <text> | health_indicator: <text>
+- insight: <text> | application_potential: <text> | integration_path: <text>
+- wisdom_expression: <text> | depth_indicator: <text> | collective_impact: <text>
+- capacity: <text> | development_trajectory: <text>
+"""}
+            try:
+                pack = chat(std_model(), [
+                    {"role": "system", "content": "Extract Layer 4 (Learning) bullets for this segment. Markdown only."},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
+                ], max_tokens=1100, temperature=0.1)
+                packs.append(pack or '')
+            except Exception as e:
+                logger.error(f"LearningAgent map error seg={s.get('id')}: {e}")
+
+        reduce_payload = {"packs": packs, "template": """
 # Layer 4 — Learning & Development
 ### Triple Loop Learning
 - error_correction: <text> | process_improvement: <text>
@@ -29,17 +55,12 @@ class LearningAgent(Agent):
 - wisdom_expression: <text> | depth_indicator: <text> | collective_impact: <text>
 - capacity: <text> | development_trajectory: <text>
 """}
-        messages = [
-            {"role": "system", "content": "Generate Layer 4 as Markdown from prior layers. Keys in English; content in original language."},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-        ]
         try:
-            import time
-            t0 = time.perf_counter()
-            resp = chat(std_model(), messages, max_tokens=1200, temperature=0.1)
-            dt = (time.perf_counter() - t0) * 1000
-            logger.info(f"tx.agent.done name=LearningAgent ms={dt:.1f} out_chars={len(resp or '')}")
-            return resp or ""
+            resp = chat(std_model(), [
+                {"role": "system", "content": "Merge Learning packs across all segments into a concise section. Markdown only."},
+                {"role": "user", "content": json.dumps(reduce_payload, ensure_ascii=False)}
+            ], max_tokens=1400, temperature=0.1)
+            return resp or "# Layer 4 — Learning & Development\n"
         except Exception as e:
-            logger.error(f"LearningAgent LLM error: {e}")
+            logger.error(f"LearningAgent reduce error: {e}")
             return "# Layer 4 — Learning & Development\n"
