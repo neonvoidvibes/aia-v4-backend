@@ -94,9 +94,9 @@ class MirrorAgent(Agent):
 
 # Layer 2 — Collective Intelligence
 ### Mirror
-- theme: <text> | frequency: <int> | segment_ids: seg:1,seg:2
+- theme: <text> | context: <text> | frequency: <int> | segment_ids: seg:1,seg:2
 - agreement: <text> | confidence: low|medium|high | segment_ids: seg:1
-- quote: <verbatim> | significance: <text> | segment_ids: seg:1
+- quote: <verbatim> | context: <text> | significance: <text> | segment_ids: seg:1
 - engagement_distribution: <string> | energy_shifts: a, b
 """
         }

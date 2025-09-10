@@ -1,6 +1,20 @@
 import re
 from typing import Dict, Any, List
 
+_LIST_KEYS = {
+    'segment_ids', 'dependencies', 'evidence_ids', 'predicted_outcomes',
+    'relationship_between', 'contexts', 'energy_shifts'
+}
+
+def _clean_scalar(v: str) -> str:
+    if not isinstance(v, str):
+        return v
+    # Strip markdown emphasis and verbatim wrappers
+    v = v.strip()
+    v = v.replace('**', '')
+    v = v.replace('<verbatim>', '').replace('</verbatim>', '')
+    return v
+
 
 def _parse_fields(line: str) -> Dict[str, Any]:
     # expects '- key: val | key2: val2 | list: a, b'
@@ -15,12 +29,9 @@ def _parse_fields(line: str) -> Dict[str, Any]:
             continue
         k, v = part.split(':', 1)
         k = k.strip()
-        v = v.strip()
-        # list by comma
-        if ',' in v and not re.search(r"seg:\d+:\d+", v):
-            out[k] = [x.strip() for x in v.split(',') if x.strip()]
-        else:
-            out[k] = v
+        v = _clean_scalar(v.strip())
+        # Do not auto-listize here; handled downstream for known keys
+        out[k] = v
     return out
 
 
@@ -66,6 +77,17 @@ def parse_full_markdown(md: str) -> Dict[str, Any]:
 
         if line.startswith('- '):
             fields = _parse_fields(line)
+            # Normalize known list fields to lists
+            for lk in _LIST_KEYS:
+                if lk in fields:
+                    val = fields[lk]
+                    if isinstance(val, str):
+                        # split by comma
+                        fields[lk] = [ _clean_scalar(x.strip()) for x in val.split(',') if x.strip() ]
+                    elif isinstance(val, list):
+                        fields[lk] = [_clean_scalar(x) for x in val]
+                    else:
+                        fields[lk] = [ _clean_scalar(val) ]
             if sec == 'confidence':
                 # '- layer1: 0.75'
                 for k, v in fields.items():
@@ -91,10 +113,16 @@ def parse_full_markdown(md: str) -> Dict[str, Any]:
                     # Mirror bullets
                     # detect type by available keys
                     if 'theme' in fields:
+                        # ensure required fields
+                        fields.setdefault('context', '')
                         res['layer2']['mirror_level']['explicit_themes'].append(fields)
                     elif 'agreement' in fields:
+                        fields.setdefault('segment_ids', [])
                         res['layer2']['mirror_level']['stated_agreements'].append(fields)
                     elif 'quote' in fields:
+                        fields.setdefault('context', '')
+                        fields.setdefault('significance', '')
+                        fields.setdefault('segment_ids', [])
                         res['layer2']['mirror_level']['direct_quotes'].append(fields)
                     elif 'engagement_distribution' in fields or 'energy_shifts' in fields:
                         res['layer2']['mirror_level']['participation_patterns'].update(fields)
@@ -109,10 +137,24 @@ def parse_full_markdown(md: str) -> Dict[str, Any]:
                         res['layer2']['lens_level']['paradoxes_contradictions'].append(fields)
                 elif 'portal' in sub:
                     if 'possibility' in fields:
+                        # ensure grounding_in_lens/evidence_ids types
+                        if 'evidence_ids' in fields and not isinstance(fields['evidence_ids'], list):
+                            fields['evidence_ids'] = [fields['evidence_ids']]
+                        if 'grounding_in_lens' not in fields and fields.get('evidence_ids'):
+                            lens_eids = [e for e in fields['evidence_ids'] if isinstance(e, str) and e.startswith('lens:')]
+                            if lens_eids:
+                                fields['grounding_in_lens'] = lens_eids[0]
                         res['layer2']['portal_level']['emergent_possibilities'].append(fields)
                     elif 'leverage_point' in fields:
+                        if 'evidence_ids' in fields and not isinstance(fields['evidence_ids'], list):
+                            fields['evidence_ids'] = [fields['evidence_ids']]
+                        # normalize predicted_outcomes
+                        if 'predicted_outcomes' in fields and not isinstance(fields['predicted_outcomes'], list):
+                            fields['predicted_outcomes'] = [fields['predicted_outcomes']]
                         res['layer2']['portal_level']['intervention_opportunities'].append(fields)
                     elif 'shift' in fields:
+                        if 'evidence_ids' in fields and not isinstance(fields['evidence_ids'], list):
+                            fields['evidence_ids'] = [fields['evidence_ids']]
                         res['layer2']['portal_level']['paradigm_shifts'].append(fields)
 
             elif sec == 'layer3':
@@ -157,14 +199,67 @@ def parse_full_markdown(md: str) -> Dict[str, Any]:
                 elif 'capacity' in fields:
                     res['layer4']['knowledge_evolution']['capacity_building'].append(fields)
 
-    # Coerce common numeric fields
+    # Coerce common numeric fields & defaults
     try:
         mm = res.get('layer1', {}).get('meeting_metadata', {})
-        if isinstance(mm.get('duration_minutes'), str) and mm['duration_minutes'].isdigit():
-            mm['duration_minutes'] = int(mm['duration_minutes'])
-        if isinstance(mm.get('participants_count'), str) and mm['participants_count'].isdigit():
-            mm['participants_count'] = int(mm['participants_count'])
+        # duration
+        if isinstance(mm.get('duration_minutes'), str):
+            mm['duration_minutes'] = int(mm['duration_minutes']) if mm['duration_minutes'].isdigit() else 0
+        elif not isinstance(mm.get('duration_minutes'), int):
+            mm['duration_minutes'] = 0
+        # participants
+        if isinstance(mm.get('participants_count'), str):
+            mm['participants_count'] = int(mm['participants_count']) if mm['participants_count'].isdigit() else 1
+        elif not isinstance(mm.get('participants_count'), int):
+            mm['participants_count'] = 1
     except Exception:
         pass
+
+    # Coerce numbers within structures
+    for item in res.get('layer2', {}).get('mirror_level', {}).get('explicit_themes', []):
+        try:
+            if isinstance(item.get('frequency'), str) and item['frequency'].isdigit():
+                item['frequency'] = int(item['frequency'])
+        except Exception:
+            pass
+
+    for item in res.get('layer2', {}).get('portal_level', {}).get('intervention_opportunities', []):
+        try:
+            ps = item.get('probability_score')
+            if isinstance(ps, str):
+                ps = ps.replace('%','').strip()
+                item['probability_score'] = float(ps)/100.0 if '%' in item.get('probability_score','') else float(ps)
+        except Exception:
+            pass
+
+    # Ensure required fields exist where schemas expect them
+    for item in res.get('layer2', {}).get('mirror_level', {}).get('explicit_themes', []):
+        item.setdefault('context', '')
+        if isinstance(item.get('segment_ids'), str):
+            item['segment_ids'] = [item['segment_ids']]
+        item.setdefault('segment_ids', [])
+    for item in res.get('layer2', {}).get('mirror_level', {}).get('stated_agreements', []):
+        if isinstance(item.get('segment_ids'), str):
+            item['segment_ids'] = [item['segment_ids']]
+        item.setdefault('segment_ids', [])
+    for item in res.get('layer2', {}).get('mirror_level', {}).get('direct_quotes', []):
+        item.setdefault('context', '')
+        item.setdefault('significance', '')
+        if isinstance(item.get('segment_ids'), str):
+            item['segment_ids'] = [item['segment_ids']]
+        item.setdefault('segment_ids', [])
+    for item in res.get('layer1', {}).get('actionable_outputs', {}).get('tasks', []):
+        if isinstance(item.get('dependencies'), str):
+            item['dependencies'] = [item['dependencies']]
+        item.setdefault('dependencies', [])
+    for cat in ['emergent_possibilities','intervention_opportunities','paradigm_shifts']:
+        for item in res.get('layer2', {}).get('portal_level', {}).get(cat, []):
+            if isinstance(item.get('evidence_ids'), str):
+                item['evidence_ids'] = [item['evidence_ids']]
+            item.setdefault('evidence_ids', [])
+            if cat == 'emergent_possibilities' and 'grounding_in_lens' not in item and item.get('evidence_ids'):
+                lens_eids = [e for e in item['evidence_ids'] if isinstance(e, str) and e.startswith('lens:')]
+                if lens_eids:
+                    item['grounding_in_lens'] = lens_eids[0]
     return res
     
