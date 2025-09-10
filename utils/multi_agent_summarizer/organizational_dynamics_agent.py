@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class OrganizationalDynamicsAgent(Agent):
     name = "organizational_dynamics"
 
-    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, context_md: str | None = None) -> str:
+    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
         """Identify organizational patterns from segments, business reality content.
         Focus on communication patterns, power dynamics, tensions.
         """
@@ -27,7 +27,8 @@ class OrganizationalDynamicsAgent(Agent):
         payload = {
             "segments_content": combined_text[:10000],
             "business_reality_content": business_reality_md[:6000],
-            "business_context": (context_md or "")[:2000]
+            "business_context": (context_md or "")[:2000],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:
@@ -45,7 +46,7 @@ class OrganizationalDynamicsAgent(Agent):
             logger.error(f"OrganizationalDynamicsAgent error: {e}")
             return "# Layer 2 — Organizational Dynamics\n(Error analyzing dynamics)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, previous_output: str, feedback: str, context_md: str | None = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
         """Refine previous organizational dynamics analysis based on reality check feedback."""
         
         # Combine segments for reference
@@ -59,7 +60,8 @@ class OrganizationalDynamicsAgent(Agent):
             "business_reality_content": business_reality_md[:4000],
             "previous_org_dynamics": previous_output[:3000],
             "reality_check_feedback": feedback[:2500],
-            "business_context": (context_md or "")[:1500]
+            "business_context": (context_md or "")[:1500],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:

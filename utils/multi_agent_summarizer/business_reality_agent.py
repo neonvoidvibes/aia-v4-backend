@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class BusinessRealityAgent(Agent):
     name = "business_reality"
 
-    def run(self, segments: List[Dict[str, Any]], context_md: str | None = None) -> str:
+    def run(self, segments: List[Dict[str, Any]], context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
         """Extract explicit business content: decisions, tasks, commitments, constraints.
         Returns markdown focusing on concrete business realities discussed.
         """
@@ -33,7 +33,8 @@ class BusinessRealityAgent(Agent):
             "combined_text": combined_text[:12000],  # Limit for token management
             "context_excerpt": (context_md or "")[:2000],
             "meeting_duration": duration,
-            "segment_count": len(segments)
+            "segment_count": len(segments),
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:
@@ -51,7 +52,7 @@ class BusinessRealityAgent(Agent):
             logger.error(f"BusinessRealityAgent error: {e}")
             return "# Layer 1 — Business Reality\n(Error extracting business content)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str, context_md: str | None = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
         """Refine previous business reality analysis based on reality check feedback."""
         
         # Combine segments for reference
@@ -65,7 +66,8 @@ class BusinessRealityAgent(Agent):
             "original_transcript": combined_text[:8000],
             "previous_business_reality": previous_output[:4000],
             "reality_check_feedback": feedback[:3000],
-            "context_excerpt": (context_md or "")[:1500]
+            "context_excerpt": (context_md or "")[:1500],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:

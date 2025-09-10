@@ -14,7 +14,7 @@ class RealityCheckAgent(Agent):
     name = "reality_check"
 
     def run(self, segments: List[Dict[str, Any]], context_md: str, business_reality_md: str, 
-            organizational_dynamics_md: str, strategic_implications_md: str) -> str:
+            organizational_dynamics_md: str, strategic_implications_md: str, repetition_analysis: Dict[str, Any] = None) -> str:
         """Validate accuracy and usefulness of all previous layer outputs.
         Check against original transcript for accuracy and practical value.
         """
@@ -30,7 +30,8 @@ class RealityCheckAgent(Agent):
             "context_output": context_md[:2000],
             "business_reality_output": business_reality_md[:4000],  # Increased since it now includes next actions
             "organizational_dynamics_output": organizational_dynamics_md[:3000],
-            "strategic_implications_output": strategic_implications_md[:3000]
+            "strategic_implications_output": strategic_implications_md[:3000],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:

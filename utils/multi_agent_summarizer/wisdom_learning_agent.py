@@ -14,7 +14,7 @@ class WisdomLearningAgent(Agent):
     name = "wisdom_learning"
 
     def run(self, segments: List[Dict[str, Any]], context_md: str, business_reality_md: str, 
-            organizational_dynamics_md: str, strategic_implications_md: str) -> str:
+            organizational_dynamics_md: str, strategic_implications_md: str, repetition_analysis: Dict[str, Any] = None) -> str:
         """Extract wisdom and learning insights using analytical frameworks from previous layers."""
         
         # Combine segments for reference
@@ -28,7 +28,8 @@ class WisdomLearningAgent(Agent):
             "context_content": context_md[:3000],
             "business_reality_content": business_reality_md[:4000],
             "organizational_dynamics_content": organizational_dynamics_md[:3000],
-            "strategic_implications_content": strategic_implications_md[:3000]
+            "strategic_implications_content": strategic_implications_md[:3000],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:
@@ -48,7 +49,7 @@ class WisdomLearningAgent(Agent):
 
     def refine(self, segments: List[Dict[str, Any]], context_md: str, business_reality_md: str,
                organizational_dynamics_md: str, strategic_implications_md: str, previous_output: str, 
-               feedback: str) -> str:
+               feedback: str, repetition_analysis: Dict[str, Any] = None) -> str:
         """Refine previous wisdom and learning analysis based on reality check feedback."""
         
         # Combine segments for reference  
@@ -64,7 +65,8 @@ class WisdomLearningAgent(Agent):
             "organizational_dynamics_content": organizational_dynamics_md[:3000],
             "strategic_implications_content": strategic_implications_md[:3000],
             "previous_wisdom_analysis": previous_output[:4000],
-            "reality_check_feedback": feedback[:2000]
+            "reality_check_feedback": feedback[:2000],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:

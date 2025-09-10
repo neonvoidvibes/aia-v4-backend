@@ -47,11 +47,16 @@ class RepetitionDetector:
         segment_texts = {}
         
         for i, seg in enumerate(segments):
-            # Combine summary, quotes, and any other text fields
+            # Combine all text fields from segments
             text_parts = []
-            if 'summary' in seg:
-                text_parts.append(seg['summary'])
-            if 'quotes' in seg:
+            
+            # Check for common text fields in segments
+            for field in ['text', 'summary', 'content']:
+                if field in seg and seg[field]:
+                    text_parts.append(seg[field])
+            
+            # Also check for quotes if they exist
+            if 'quotes' in seg and isinstance(seg['quotes'], list):
                 for quote in seg['quotes']:
                     if isinstance(quote, dict) and 'text' in quote:
                         text_parts.append(quote['text'])

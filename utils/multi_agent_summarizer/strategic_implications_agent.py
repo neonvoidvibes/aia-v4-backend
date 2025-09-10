@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class StrategicImplicationsAgent(Agent):
     name = "strategic_implications"
 
-    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, context_md: str | None = None) -> str:
+    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
         """Assess strategic implications from segments, business reality and organizational dynamics.
         Focus on business impact, alignment, risks, and opportunities.
         """
@@ -28,7 +28,8 @@ class StrategicImplicationsAgent(Agent):
             "segments_content": combined_text[:8000],
             "business_reality_content": business_reality_md[:5000],
             "organizational_dynamics_content": organizational_dynamics_md[:4000],
-            "business_context": (context_md or "")[:2000]
+            "business_context": (context_md or "")[:2000],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:
@@ -46,7 +47,7 @@ class StrategicImplicationsAgent(Agent):
             logger.error(f"StrategicImplicationsAgent error: {e}")
             return "# Layer 3 — Strategic Implications\n(Error analyzing implications)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, previous_output: str, feedback: str, context_md: str | None = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
         """Refine previous strategic implications analysis based on reality check feedback."""
         
         payload = {
@@ -54,7 +55,8 @@ class StrategicImplicationsAgent(Agent):
             "organizational_dynamics_content": organizational_dynamics_md[:3000],
             "previous_strategic_implications": previous_output[:3500],
             "reality_check_feedback": feedback[:2500],
-            "business_context": (context_md or "")[:1500]
+            "business_context": (context_md or "")[:1500],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:
