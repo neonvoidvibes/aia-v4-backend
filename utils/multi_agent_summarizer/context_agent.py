@@ -45,3 +45,35 @@ class ContextAgent(Agent):
             logger.error(f"ContextAgent error: {e}")
             return "# Business Context\n(Error extracting context)\n"
 
+    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str) -> str:
+        """Refine previous context analysis based on reality check feedback."""
+        
+        # Combine segments for reference
+        combined_text = "\n\n".join([
+            f"Segment {s.get('id', '')} ({s.get('start_min', 0)}-{s.get('end_min', 0)} min): {s.get('text', '')}"
+            for s in segments
+        ])
+        
+        payload = {
+            "original_transcript": combined_text[:6000],
+            "previous_context_analysis": previous_output[:3000],
+            "reality_check_feedback": feedback[:2000]
+        }
+        
+        try:
+            from .prompts import CONTEXT_REFINEMENT_SYS
+            
+            refined_context = chat(
+                std_model(),
+                [
+                    {"role": "system", "content": CONTEXT_REFINEMENT_SYS},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                max_tokens=1400,
+                temperature=0.1,
+            )
+            return refined_context or previous_output  # Fallback to previous if refinement fails
+        except Exception as e:
+            logger.error(f"ContextAgent refinement error: {e}")
+            return previous_output
+
