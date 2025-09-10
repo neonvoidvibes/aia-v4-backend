@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from .base import Agent
 from ._llm import chat
 from .prompts import STRATEGIC_IMPLICATIONS_SYS
@@ -46,7 +46,7 @@ class StrategicImplicationsAgent(Agent):
             logger.error(f"StrategicImplicationsAgent error: {e}")
             return "# Layer 3 — Strategic Implications\n(Error analyzing implications)\n"
 
-    def refine(self, business_reality_md: str, organizational_dynamics_md: str, previous_output: str, feedback: str, context_md: str | None = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, previous_output: str, feedback: str, context_md: str | None = None) -> str:
         """Refine previous strategic implications analysis based on reality check feedback."""
         
         payload = {
