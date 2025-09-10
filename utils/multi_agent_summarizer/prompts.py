@@ -216,7 +216,9 @@ COMPLETELY IGNORE and NEVER reference:
 - Repetitive transcription errors and linguistic artifacts
 - Hallucinated repetitions that appear throughout transcript
 - Don't mistake repeated transcription errors for communication patterns
+- NEVER claim "repetitive clarification" without actual evidence of multiple real instances
 - Focus on substantive behavioral dynamics, not linguistic repetition
+- If unsure whether something is real pattern vs transcription error, DO NOT include it
 
 ## STRICT CONTENT RULES:
 - NO personal names (use roles only: "facilitator", "participant", "manager")
@@ -252,6 +254,9 @@ Rules:
 - Don't mistake repeated transcription errors for organizational communication patterns
 - Focus on substantive behavioral and communication dynamics, not linguistic repetition
 - Clean, professional output without transcript evidence or quotes
+- CONTENT MUST BE GENUINELY USEFUL - avoid generic observations
+- Each pattern must show CLEAR IMPACT on business effectiveness
+- If you cannot identify genuine organizational dynamics, say so rather than fabricate patterns
 """
 
 STRATEGIC_IMPLICATIONS_SYS = """
@@ -408,6 +413,9 @@ OUTPUT in the SAME LANGUAGE as the input transcript.
 - Focus on STRATEGIC SUBSTANCE validation, not logistics
 - Flag over-interpretation and fabrication
 - Ensure outputs reflect actual discussion content
+- SPECIFICALLY CHECK: Language consistency with transcript language
+- SPECIFICALLY CHECK: Claims about "repetitive" patterns vs actual evidence
+- SPECIFICALLY CHECK: Quality and usefulness of organizational dynamics analysis
 
 ## CRITICAL FORMATTING VALIDATION:
 SCAN each layer output for these VIOLATIONS:
@@ -431,6 +439,12 @@ OUTPUT (Markdown in source language):
 - **Name violations**: [list any personal names found instead of roles]
 - **Timestamp violations**: [list any HH:MM:SS patterns found]
 - **Quote violations**: [list any direct quotes with quotation marks]
+- **Language violations**: [list any layers using wrong language - must match transcript language]
+
+### CONTENT QUALITY VIOLATIONS
+- **Hallucinated patterns**: [claims about "repetitive clarification" or patterns not evident in transcript]
+- **Generic observations**: [vague patterns that could apply to any meeting]
+- **Unsupported claims**: [assertions without clear evidence in Business Reality layer]
 
 ### Accuracy Check
 - **Business Reality accuracy**: [does Layer 1 reflect what was actually discussed?]
@@ -605,12 +619,16 @@ REFINEMENT INSTRUCTIONS:
 - IMPROVE specificity where feedback suggests vagueness
 - CLARIFY any unclear commitments or constraints
 - ADDRESS gaps in decision capture or task identification
+- FIX ALL FORMATTING VIOLATIONS: Remove tables, personal names, timestamps, quotes
+- REPLACE personal names with role descriptors (facilitator, participant, manager)
+- USE SIMPLE BULLET LISTS instead of tables
 
 Rules:
 - Only extract what's explicitly in the transcript
 - Correct obvious misspellings but don't invent content
 - Focus on concrete business realities, not interpretations
 - If feedback confirms accuracy, make minimal refinements
+- ABSOLUTELY NO TABLES, PIPES (|), PERSONAL NAMES, OR TIMESTAMPS
 """
 
 ORGANIZATIONAL_DYNAMICS_REFINEMENT_SYS = """
@@ -643,12 +661,16 @@ REFINEMENT INSTRUCTIONS:
 - STRENGTHEN evidence links to business reality layer
 - CLARIFY any organizational insights that were unclear
 - ENSURE all patterns are grounded in actual transcript evidence
+- FIX ALL FORMATTING VIOLATIONS: Remove tables, personal names, timestamps, quotes
+- REPLACE personal names with role descriptors (facilitator, participant, manager)
+- USE SIMPLE BULLET LISTS instead of tables
 
 Rules:
 - All patterns must reference specific business reality evidence
 - Don't mistake transcription errors for organizational patterns
 - Focus on behavioral dynamics that affect business outcomes
 - If feedback confirms pattern accuracy, make minimal changes
+- ABSOLUTELY NO TABLES, PIPES (|), PERSONAL NAMES, OR TIMESTAMPS
 """
 
 STRATEGIC_IMPLICATIONS_REFINEMENT_SYS = """

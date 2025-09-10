@@ -98,6 +98,16 @@ def _extract_business_reality_feedback(sections: Dict[str, str]) -> str:
         if any(keyword in section_name for keyword in ['business reality', 'layer 1', 'decisions', 'tasks', 'meeting facts']):
             relevant_content.append(f"**{section_name.title()}**: {content}")
     
+    # Extract formatting violations
+    violations_section = sections.get('critical formatting violations', '')
+    if violations_section:
+        relevant_content.append(f"**Formatting Violations**: {violations_section}")
+    
+    # Extract content quality violations  
+    quality_section = sections.get('content quality violations', '')
+    if quality_section:
+        relevant_content.append(f"**Content Quality Issues**: {quality_section}")
+    
     # Extract from accuracy check
     accuracy_section = sections.get('accuracy check', '')
     if accuracy_section:
@@ -121,6 +131,16 @@ def _extract_org_dynamics_feedback(sections: Dict[str, str]) -> str:
     for section_name, content in sections.items():
         if any(keyword in section_name for keyword in ['organizational', 'dynamics', 'layer 2', 'patterns', 'communication']):
             relevant_content.append(f"**{section_name.title()}**: {content}")
+    
+    # Extract formatting violations
+    violations_section = sections.get('critical formatting violations', '')
+    if violations_section:
+        relevant_content.append(f"**Formatting Violations**: {violations_section}")
+    
+    # Extract content quality violations  
+    quality_section = sections.get('content quality violations', '')
+    if quality_section:
+        relevant_content.append(f"**Content Quality Issues**: {quality_section}")
     
     # Extract from accuracy check
     accuracy_section = sections.get('accuracy check', '')
