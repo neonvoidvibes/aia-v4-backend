@@ -67,6 +67,10 @@ Rules:
 - NO creative interpretation
 - Use roles/functions, never personal names
 - Focus on business value and constraints
+- IGNORE repetitive phrases/artifacts that appear throughout transcript (transcription errors, repeated filler phrases, system artifacts)
+- Look for substantive content patterns, not linguistic repetition
+- ACCOUNT for misspelled words and transcription errors - interpret intended meaning where context makes it clear
+- Don't quote misspelled words verbatim - correct obvious transcription errors when extracting content
 """
 
 BUSINESS_REALITY_SYS = """
@@ -106,10 +110,15 @@ OUTPUT (Markdown only):
 
 Rules:
 - Extract ONLY what was explicitly said
-- Use exact phrases when possible  
+- Use exact phrases when possible, but correct obvious misspellings
 - NO interpretation or creative filling
 - Use roles, never personal names
 - If uncertain, mark as "unclear" rather than guess
+- IGNORE repetitive transcription artifacts (repeated phrases, filler words, system glitches)
+- Distinguish between meaningful repetition (emphasis) and transcription errors
+- Focus on unique business content, not linguistic patterns
+- CORRECT obvious misspellings and transcription errors when extracting content
+- Interpret intended meaning where context makes misspellings clear
 """
 
 ORGANIZATIONAL_DYNAMICS_SYS = """
@@ -141,7 +150,12 @@ Rules:
 - Reference specific evidence from Business Reality layer
 - NO speculation beyond reasonable inference
 - Focus on patterns that affect business outcomes
-- Use exact quotes to support observations
+- Use exact quotes to support observations, correcting obvious misspellings
+- IGNORE repetitive transcription artifacts when identifying patterns
+- Don't mistake repeated transcription errors for organizational communication patterns
+- Focus on substantive behavioral and communication dynamics, not linguistic repetition
+- ACCOUNT for misspellings and transcription errors when analyzing communication patterns
+- Interpret intended meaning from context when words are misspelled
 """
 
 STRATEGIC_IMPLICATIONS_SYS = """
@@ -177,6 +191,10 @@ Rules:
 - Focus on business implications, not abstract concepts
 - Identify concrete opportunities and risks
 - Avoid transformation jargon
+- IGNORE transcription artifacts when assessing strategic patterns
+- Base strategic insights on substantive content, not repeated phrases or transcription errors
+- ACCOUNT for misspellings and transcription errors when interpreting content
+- Focus on intended meaning rather than exact transcribed words
 """
 
 NEXT_ACTIONS_SYS = """
@@ -213,6 +231,10 @@ Rules:
 - Include realistic time estimates
 - Ground in actual issues discussed
 - Focus on what can realistically be accomplished
+- IGNORE repetitive transcription artifacts when identifying actionable items
+- Base actions on substantive business needs, not repeated phrases or system glitches
+- ACCOUNT for misspellings and transcription errors when extracting actionable content
+- Interpret intended meaning from context, don't be thrown off by misspelled words
 """
 
 REALITY_CHECK_SYS = """
@@ -256,6 +278,12 @@ Rules:
 - Flag any content that seems invented or over-interpreted  
 - Focus on practical business value
 - Suggest specific improvements
+- DISTINGUISH between transcription artifacts and actual content when validating accuracy
+- Don't penalize agents for ignoring repetitive transcription errors
+- Validate that insights are based on substantive content, not linguistic patterns or repeated phrases
+- ACCOUNT for the fact that transcripts contain misspellings and errors
+- Don't penalize agents for correcting obvious misspellings when interpreting content
+- Focus on whether agents captured intended meaning, not exact transcribed words
 """
 
 INTEGRATION_SYS = """
@@ -304,4 +332,8 @@ Rules:
 - Maintain focus on what was actually discussed
 - Ensure all actions are concrete and assignable
 - Flag any significant uncertainties or gaps
+- FOCUS on substantive business insights, ignoring any repetitive transcription artifacts
+- Ensure final summary reflects genuine meeting content, not linguistic repetition patterns
+- ACCOUNT for misspellings and transcription errors throughout all layers
+- Present clean, properly spelled content in final summary regardless of transcript quality
 """
