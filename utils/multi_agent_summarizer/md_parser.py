@@ -270,5 +270,15 @@ def parse_full_markdown(md: str) -> Dict[str, Any]:
         if isinstance(nm.get('required_participants'), str):
             nm['required_participants'] = [nm['required_participants']]
         nm.setdefault('required_participants', [])
+    # Layer3 sovereignty_development: ensure required subfields
+    for item in res.get('layer3', {}).get('sovereignty_development', {}).get('intelligence_integration', []):
+        item.setdefault('complexity_navigation', '')
+    # Layer4 triple_loop: ensure required subfields
+    for item in res.get('layer4', {}).get('triple_loop_learning', {}).get('single_loop', []):
+        item.setdefault('process_improvement', '')
+    for item in res.get('layer4', {}).get('triple_loop_learning', {}).get('double_loop', []):
+        item.setdefault('mental_model_shift', '')
+    for item in res.get('layer4', {}).get('triple_loop_learning', {}).get('triple_loop', []):
+        item.setdefault('paradigm_transformation', '')
     return res
     
