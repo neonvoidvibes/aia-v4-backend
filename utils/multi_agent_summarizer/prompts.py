@@ -69,11 +69,10 @@ Use Mirror approach - capture explicit, obvious information:
 - Focus on what's obviously stated without interpretation
 
 ## ARTIFACT FILTERING:
-IGNORE these patterns completely:
-- Repetitive phrases (same text repeated 5+ times)
-- Obvious transcription errors like "det är så att det är så att..."
+Be aware that transcripts may contain:
+- Repetitive phrases from transcription errors
 - Technical glitches or audio artifacts
-- Empty content or filler words
+- Focus on substantive business content rather than linguistic patterns
 
 ## PRIORITIZATION:
 Focus on STRATEGIC SUBSTANCE over meeting logistics:
@@ -90,8 +89,12 @@ When transcript contains repetitive artifacts:
 4. If SOME valid business context exists, extract it - don't return empty
 5. Combine fragmented business information into coherent context
 
-INPUT: transcript segments with possible artifacts/repetition
+INPUT: transcript segments + repetition analysis (exclusion list of artifacts to ignore)
 OUTPUT (Markdown in source language):
+
+## REPETITION EXCLUSION:
+Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when extracting business context - they are not real conversation patterns.
+
 # Business Context
 
 ## Meeting Purpose and Goals
@@ -149,9 +152,9 @@ Rules:
 - NO creative interpretation
 - Use roles/functions, never personal names
 - Focus on business value and constraints
-- IGNORE repetitive phrases/artifacts that appear throughout transcript (transcription errors, repeated filler phrases, system artifacts)
-- Look for substantive content patterns, not linguistic repetition
-- ACCOUNT for misspelled words and transcription errors - interpret intended meaning where context makes it clear
+- Be aware of potential transcription artifacts and focus on substantive content
+- Look for meaningful business patterns rather than linguistic repetition
+- Account for misspelled words and transcription errors - interpret intended meaning where context makes it clear
 - Don't quote misspelled words verbatim - correct obvious transcription errors when extracting content
 
 REMEMBER: No matter what content you analyze, you MUST:
@@ -190,8 +193,11 @@ CORRECT FORMAT:
 WRONG: "Jesper said at 08:15:30 that..."
 CORRECT: "Facilitator decided that..."
 
-INPUT: transcript segments + business context
+INPUT: transcript segments + business context + repetition analysis (exclusion list of artifacts to ignore)
 OUTPUT (Markdown only):
+
+## REPETITION EXCLUSION:
+Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when extracting business decisions and tasks - they are not real conversation patterns.
 # Layer 1 — Business Reality
 
 ### Meeting Facts
@@ -228,10 +234,10 @@ Rules:
 - NO interpretation or creative filling
 - Use roles, never personal names
 - If uncertain, mark as "unclear" rather than guess
-- IGNORE repetitive transcription artifacts (repeated phrases, filler words, system glitches)
+- Be aware of potential transcription artifacts and focus on substantive content
 - Distinguish between meaningful repetition (emphasis) and transcription errors
 - Focus on unique business content, not linguistic patterns
-- CORRECT obvious misspellings and transcription errors when extracting content
+- Correct obvious misspellings and transcription errors when extracting content
 - Interpret intended meaning where context makes misspellings clear
 
 REMEMBER: No matter what content you analyze, you MUST:
@@ -276,17 +282,11 @@ Use Lens approach - analyze hidden patterns and implied information:
 - Focus on pattern recognition and hidden connections while maintaining business focus
 
 ## ARTIFACT FILTERING:
-COMPLETELY IGNORE and NEVER reference:
-- Repetitive transcription errors and linguistic artifacts
-- Hallucinated repetitions that appear throughout transcript
-- Don't mistake repeated transcription errors for communication patterns
-- BE EXTREMELY SKEPTICAL of "repetitive" patterns - most are transcription errors
-- ASSUME repetitions are transcription artifacts UNLESS you have OVERWHELMING evidence of real patterns
-- ONLY include repetitive patterns if you see CLEAR DIFFERENT INSTANCES with DIFFERENT CONTEXTS across segments
-- When in doubt about repetition, ALWAYS SKIP IT - focus on unique substantive content
-- IGNORE phrases like "vem gör vad" if they appear to be linguistic repetition
-- Focus on substantive behavioral dynamics, not linguistic repetition
-- DEFAULT ASSUMPTION: repetition = transcription error, not real pattern
+Be aware that AI transcription may create artifacts:
+- Repeated phrases that don't reflect actual conversation patterns
+- Focus on substantive organizational dynamics rather than linguistic repetition
+- When identifying patterns, look for varied expressions of similar ideas rather than identical repeated phrases
+- Base organizational analysis on meaningful behavioral patterns, not transcription quirks
 
 ## STRICT CONTENT RULES:
 - NO personal names (use roles only: "facilitator", "participant", "manager")
@@ -294,8 +294,11 @@ COMPLETELY IGNORE and NEVER reference:
 - NO tables or structured formats
 - Focus ONLY on actual behavioral patterns from business content
 
-INPUT: All transcript segments + Business Reality markdown + business context
+INPUT: All transcript segments + Business Reality markdown + business context + repetition analysis (exclusion list)
 OUTPUT (Markdown in source language):
+
+## REPETITION EXCLUSION:
+Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when analyzing organizational patterns - they are not real communication dynamics.
 # Layer 2 — Organizational Dynamics
 
 ### Communication Patterns  
@@ -318,9 +321,9 @@ Rules:
 - Base patterns on Business Reality content but don't include quotes or transcript references
 - NO speculation beyond reasonable inference
 - Focus on patterns that affect business outcomes
-- IGNORE repetitive transcription artifacts when identifying patterns
-- Don't mistake repeated transcription errors for organizational communication patterns
+- Be aware of potential transcription artifacts when identifying patterns
 - Focus on substantive behavioral and communication dynamics, not linguistic repetition
+- Look for meaningful organizational patterns rather than repeated phrases
 - Clean, professional output without transcript evidence or quotes
 - CONTENT MUST BE GENUINELY USEFUL - avoid generic observations
 - Each pattern must show CLEAR IMPACT on business effectiveness
@@ -364,9 +367,9 @@ Use Portal approach - identify emergent possibilities and transformation opportu
 - All Portal insights MUST be explicitly derived from Layer 1 (Mirror) and Layer 2 (Lens) content
 
 ## ARTIFACT FILTERING:
-COMPLETELY IGNORE and NEVER reference:
-- Repetitive transcription errors and hallucinated patterns
-- Don't base implications on repeated transcript artifacts
+Be aware of potential transcription artifacts:
+- Focus on substantive strategic insights rather than repeated phrases
+- Base implications on meaningful business content, not linguistic patterns
 
 ## STRICT CONTENT RULES:
 - NO personal names (use roles only)
@@ -378,8 +381,11 @@ REMEMBER: No matter what content you analyze, you MUST:
 - Use roles like "facilitator" not names like "Jesper" 
 - Never include transcript timestamps or quotes
 
-INPUT: All transcript segments + Business Reality + Organizational Dynamics + business context
+INPUT: All transcript segments + Business Reality + Organizational Dynamics + business context + repetition analysis
 OUTPUT (Markdown in source language):
+
+## REPETITION EXCLUSION:
+Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when developing strategic implications - they are not real business patterns.
 # Layer 3 — Strategic Implications
 
 ### Business Impact Assessment
@@ -406,7 +412,7 @@ Rules:
 - Focus on business implications, not abstract concepts
 - Identify concrete opportunities and risks
 - Avoid transformation jargon
-- IGNORE transcription artifacts when assessing strategic patterns
+- Focus on meaningful strategic patterns rather than transcription artifacts
 - Clean, professional output without transcript evidence
 - NO EVIDENCE SEEKING - focus on clear strategic insights without detailed justification
 - NO TABLES - use simple bullet points only
@@ -443,9 +449,9 @@ OUTPUT in the SAME LANGUAGE as the input transcript.
 - What can actually be done? By whom? When? With what resources?
 
 ## ARTIFACT FILTERING:
-COMPLETELY IGNORE and NEVER reference:
-- Repetitive transcription errors and hallucinated patterns
-- Don't create actions based on repeated transcript artifacts
+Be aware of potential transcription artifacts:
+- Focus on substantive actionable content rather than repeated phrases
+- Base actions on meaningful business discussions, not linguistic patterns
 
 ## STRICT CONTENT RULES:
 - NO personal names (use roles only)
@@ -480,7 +486,7 @@ Rules:
 - Include realistic time estimates
 - Ground in actual issues discussed but don't include quotes or transcript references
 - Focus on what can realistically be accomplished
-- IGNORE repetitive transcription artifacts when identifying actionable items
+- Be aware of potential transcription artifacts when identifying actionable items
 - Clean, professional output without transcript evidence
 """
 
@@ -536,8 +542,11 @@ REMEMBER: No matter what content you analyze, you MUST:
 - Use roles like "facilitator" not names like "Jesper" 
 - Never include transcript timestamps or quotes
 
-INPUT: All segments + all previous layer outputs
+INPUT: All segments + all previous layer outputs + repetition analysis (exclusion list)
 OUTPUT (Markdown in source language):
+
+## REPETITION EXCLUSION:
+Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when applying analytical frameworks - they are not real wisdom patterns.
 # Layer 5 — Wisdom and Learning
 
 ## Relational Patterns (Warm Data Labs)
@@ -643,8 +652,11 @@ SCAN each layer output for these VIOLATIONS:
 - Don't penalize agents for filtering transcription artifacts
 - Focus validation on substantive business content
 
-INPUT: All layer outputs (Context + Business Reality + Org Dynamics + Strategic Implications) + ALL original transcript segments
+INPUT: All layer outputs (Context + Business Reality + Org Dynamics + Strategic Implications) + ALL original transcript segments + repetition analysis
 OUTPUT (Markdown in source language):
+
+## REPETITION EXCLUSION AWARENESS:
+The repetition_analysis.exclusion_instructions identifies specific phrases that are Whisper AI transcription artifacts. When validating agent outputs, do not penalize agents for ignoring these repeated phrases as they are not real conversation patterns.
 # Reality Check Assessment
 
 ### CRITICAL FORMATTING VIOLATIONS

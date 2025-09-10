@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class ContextAgent(Agent):
     name = "context"
 
-    def run(self, segments: List[Dict[str, Any]]) -> str:
+    def run(self, segments: List[Dict[str, Any]], repetition_analysis: Dict[str, Any] = None) -> str:
         """Extract business context to set clear context for other agents.
         Returns markdown only. Focus on business purpose, stakeholders, constraints.
         """
@@ -27,7 +27,8 @@ class ContextAgent(Agent):
         payload = {
             "segments": segments,
             "combined_text": combined_text[:8000],  # Limit to avoid token issues
-            "language_hint": "auto"  # Let the LLM detect language
+            "language_hint": "auto",  # Let the LLM detect language
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:
@@ -45,7 +46,7 @@ class ContextAgent(Agent):
             logger.error(f"ContextAgent error: {e}")
             return "# Business Context\n(Error extracting context)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str) -> str:
+    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str, repetition_analysis: Dict[str, Any] = None) -> str:
         """Refine previous context analysis based on reality check feedback."""
         
         # Combine segments for reference
@@ -57,7 +58,8 @@ class ContextAgent(Agent):
         payload = {
             "original_transcript": combined_text[:6000],
             "previous_context_analysis": previous_output[:3000],
-            "reality_check_feedback": feedback[:2000]
+            "reality_check_feedback": feedback[:2000],
+            "repetition_analysis": repetition_analysis or {"exclusion_instructions": "No repetitive phrases detected."}
         }
         
         try:

@@ -11,6 +11,7 @@ from .reality_check_agent import RealityCheckAgent
 from .wisdom_learning_agent import WisdomLearningAgent
 from .integration_agent import IntegrationAgent
 from .feedback_parser import parse_reality_check_feedback
+from .repetition_detector import RepetitionDetector
 
 
 def summarize_transcript(agent_name: str, event_id: str, transcript_text: str, source_identifier: str) -> Dict:
@@ -35,52 +36,63 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
     # Step 1: Segmentation
     segs = SegmentationAgent().run(text=transcript_text)
     
+    # Step 2: Repetition Detection
+    repetition_detector = RepetitionDetector()
+    repetition_analysis = repetition_detector.detect_repetitions(segs)
+    
     # PASS 1: Initial Analysis
-    # Step 2: Business Context
-    context_md = ContextAgent().run(segments=segs)
+    # Step 3: Business Context
+    context_md = ContextAgent().run(segments=segs, repetition_analysis=repetition_analysis)
 
-    # Step 3: Business Reality
-    business_reality_md = BusinessRealityAgent().run(segments=segs, context_md=context_md)
+    # Step 4: Business Reality
+    business_reality_md = BusinessRealityAgent().run(segments=segs, context_md=context_md, 
+                                                      repetition_analysis=repetition_analysis)
     
-    # Step 4: Organizational Dynamics (now has direct segment access)
-    org_dynamics_md = OrganizationalDynamicsAgent().run(segs, business_reality_md, context_md)
+    # Step 5: Organizational Dynamics (now has direct segment access)
+    org_dynamics_md = OrganizationalDynamicsAgent().run(segs, business_reality_md, context_md, 
+                                                         repetition_analysis=repetition_analysis)
     
-    # Step 5: Strategic Implications (now has direct segment access)
-    strategic_md = StrategicImplicationsAgent().run(segs, business_reality_md, org_dynamics_md, context_md)
+    # Step 6: Strategic Implications (now has direct segment access)
+    strategic_md = StrategicImplicationsAgent().run(segs, business_reality_md, org_dynamics_md, context_md, 
+                                                     repetition_analysis=repetition_analysis)
     
-    # Step 6: Wisdom and Learning
+    # Step 7: Wisdom and Learning
     wisdom_learning_md = WisdomLearningAgent().run(segs, context_md, business_reality_md,
-                                                   org_dynamics_md, strategic_md)
+                                                   org_dynamics_md, strategic_md, 
+                                                   repetition_analysis=repetition_analysis)
     
-    # Step 7: Reality Check
+    # Step 8: Reality Check
     reality_check_md = RealityCheckAgent().run(segs, context_md, business_reality_md, 
-                                              org_dynamics_md, strategic_md)
+                                              org_dynamics_md, strategic_md,
+                                              repetition_analysis=repetition_analysis)
     
     # PASS 2: Refinement based on Reality Check feedback
     feedback = parse_reality_check_feedback(reality_check_md)
     
     # Refine each agent's output if feedback exists
     if feedback.get("context"):
-        context_md = ContextAgent().refine(segs, context_md, feedback["context"])
+        context_md = ContextAgent().refine(segs, context_md, feedback["context"], repetition_analysis)
     
     if feedback.get("business_reality"):
         business_reality_md = BusinessRealityAgent().refine(segs, business_reality_md, 
-                                                          feedback["business_reality"], context_md)
+                                                          feedback["business_reality"], context_md,
+                                                          repetition_analysis)
     
     if feedback.get("organizational_dynamics"):
         org_dynamics_md = OrganizationalDynamicsAgent().refine(segs, business_reality_md, 
                                                              org_dynamics_md, feedback["organizational_dynamics"], 
-                                                             context_md)
+                                                             context_md, repetition_analysis)
     
     if feedback.get("strategic_implications"):
         strategic_md = StrategicImplicationsAgent().refine(segs, business_reality_md, org_dynamics_md, 
                                                          strategic_md, feedback["strategic_implications"], 
-                                                         context_md)
+                                                         context_md, repetition_analysis)
     
     if feedback.get("wisdom_learning"):
         wisdom_learning_md = WisdomLearningAgent().refine(segs, context_md, business_reality_md,
                                                          org_dynamics_md, strategic_md, 
-                                                         wisdom_learning_md, feedback["wisdom_learning"])
+                                                         wisdom_learning_md, feedback["wisdom_learning"],
+                                                         repetition_analysis)
     
     # Step 8: Final Integration
     final_md = IntegrationAgent().run_md(
