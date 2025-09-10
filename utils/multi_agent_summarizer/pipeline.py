@@ -16,7 +16,8 @@ def summarize_transcript(agent_name: str, event_id: str, transcript_text: str, s
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         mirror_f = pool.submit(MirrorAgent().run, segments=segs)
-        lens_f = pool.submit(lambda: LensAgent().run(segments=segs, mirror=mirror_f.result()))
+        # For token efficiency, Lens uses mirror artifacts, not raw text; pass segments meta only
+        lens_f = pool.submit(lambda: LensAgent().run(segments=[{"id": s.get("id"), "start_min": s.get("start_min"), "end_min": s.get("end_min")} for s in segs], mirror=mirror_f.result()))
         portal_f = pool.submit(lambda: PortalAgent().run(mirror=mirror_f.result(), lens=lens_f.result()))
 
     mirror_out = mirror_f.result()
@@ -45,7 +46,7 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
     segs = SegmentationAgent().run(text=transcript_text)
     with ThreadPoolExecutor(max_workers=4) as pool:
         mirror_f = pool.submit(MirrorAgent().run, segments=segs)
-        lens_f = pool.submit(lambda: LensAgent().run(segments=segs, mirror=mirror_f.result()))
+        lens_f = pool.submit(lambda: LensAgent().run(segments=[{"id": s.get("id"), "start_min": s.get("start_min"), "end_min": s.get("end_min")} for s in segs], mirror=mirror_f.result()))
         portal_f = pool.submit(lambda: PortalAgent().run(mirror=mirror_f.result(), lens=lens_f.result()))
     mirror_out = mirror_f.result()
     layer1 = mirror_out.get("layer1", {})

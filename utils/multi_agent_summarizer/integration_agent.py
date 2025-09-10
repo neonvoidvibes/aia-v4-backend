@@ -41,7 +41,7 @@ class IntegrationAgent(Agent):
         try:
             import time
             t0 = time.perf_counter()
-            resp = chat(integ_model(), messages, max_tokens=3200, temperature=0.1)
+            resp = chat(integ_model(), messages, max_tokens=3200, temperature=0.1, response_format={"type": "json_object"})
             data = safe_json_parse(resp)
             if isinstance(data, dict) and all(k in data for k in ["layer1", "layer2", "layer3", "layer4", "confidence"]):
                 dt = (time.perf_counter() - t0) * 1000

@@ -22,7 +22,7 @@ class LearningAgent(Agent):
         try:
             import time
             t0 = time.perf_counter()
-            resp = chat(std_model(), messages, max_tokens=1400, temperature=0.1)
+            resp = chat(std_model(), messages, max_tokens=1400, temperature=0.1, response_format={"type": "json_object"})
             data = safe_json_parse(resp)
             if isinstance(data, dict) and "layer4" in data:
                 dt = (time.perf_counter() - t0) * 1000

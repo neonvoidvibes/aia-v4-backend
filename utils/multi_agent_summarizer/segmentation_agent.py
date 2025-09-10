@@ -1,83 +1,90 @@
 import re
 from typing import List, Dict, Any
 
+def _parse_timestamps(text: str) -> List[Dict[str, Any]]:
+    # Matches [HH:MM:SS] or HH:MM:SS or HH:MM
+    pat = re.compile(r"\[?(?P<h>\d{1,2}):(?P<m>\d{2})(?::(?P<s>\d{2}))?\]?")
+    out = []
+    for m in pat.finditer(text):
+        try:
+            h = int(m.group('h'))
+            mi = int(m.group('m'))
+            s = int(m.group('s') or 0)
+            minute = h * 60 + mi + s / 60.0
+            out.append({"pos": m.start(), "minute": minute})
+        except Exception:
+            continue
+    return out
+
 
 class SegmentationAgent:
     def run(self, text: str) -> List[Dict[str, Any]]:
-        # Simple heuristic:
-        # 1) Try to segment by timestamps like [HH:MM:SS], HH:MM:SS, or HH:MM
-        # 2) Fallback to fixed-size character windows approximating 30 minutes with 15-minute overlap
         if not text:
             return []
 
-        ts_pattern = re.compile(r"(?:\[)?(?P<h>\d{1,2}):(?P<m>\d{2})(?::(?P<s>\d{2}))?(?:\])?")
-        positions = [(m.start(), m.groupdict()) for m in ts_pattern.finditer(text)]
-
         segments: List[Dict[str, Any]] = []
-        if len(positions) >= 3:  # use timestamp-based segmentation
-            # Build boundaries at detected timestamps, but keep chronological order
-            cut_points = [pos for (pos, _gd) in positions]
-            cut_points = sorted(set([0] + cut_points + [len(text)]))
-            # ensure minimum chunk size to avoid tiny segments
-            min_chunk = max(2000, len(text) // 40)
-            buckets = []
-            for i in range(len(cut_points) - 1):
-                a, b = cut_points[i], cut_points[i + 1]
-                if b - a >= min_chunk:
-                    buckets.append((a, b))
-            if not buckets:
-                buckets = [(0, len(text))]
-
-            # map to minutes by naive diff between timestamp groups if possible
-            def parse_min(d):
-                try:
-                    h = int(d.get("h") or 0)
-                    m = int(d.get("m") or 0)
-                    s = int(d.get("s") or 0)
-                    return h * 60 + m + (s / 60.0)
-                except Exception:
-                    return None
-
-            mins = [parse_min(gd) for (_p, gd) in positions]
-            approx_mins = [m for m in mins if m is not None]
-            # create segments ~30 minutes, but it's okay if irregular based on timestamps
-            for i, (a, b) in enumerate(buckets, start=1):
-                start_min = approx_mins[i - 1] if i - 1 < len(approx_mins) else (i - 1) * 30
-                end_min = approx_mins[i] if i < len(approx_mins) else start_min + 30
-                seg_text = text[a:b]
-                segments.append({
-                    "id": f"seg:{i}",
-                    "start_min": max(0, int(start_min)),
-                    "end_min": max(int(start_min) + 1, int(end_min)),
-                    "text": seg_text.strip(),
-                    "bridge_in": "",
-                    "bridge_out": "",
-                })
+        stamps = _parse_timestamps(text)
+        if stamps:
+            # Build time-windowed segments around minutes (30m windows with 15m overlap)
+            minutes = [s["minute"] for s in stamps]
+            t_start = int(minutes[0])
+            t_end = int(minutes[-1])
+            if t_end <= t_start:
+                t_end = t_start + 60
+            window = 30
+            overlap = 15
+            seg_idx = 1
+            t = t_start
+            while t < t_end:
+                w_start = t
+                w_end = min(t_end, t + window)
+                # Find character bounds spanning this time window
+                idxs = [s for s in stamps if w_start <= s["minute"] <= w_end]
+                if not idxs:
+                    # include span between nearest timestamps
+                    idxs = [min(stamps, key=lambda s: abs(s["minute"] - w_start)), min(stamps, key=lambda s: abs(s["minute"] - w_end))]
+                    idxs = sorted(idxs, key=lambda s: s["pos"])
+                a = idxs[0]["pos"]
+                b = idxs[-1]["pos"]
+                if a >= b:
+                    b = min(len(text), a + 8000)
+                seg_text = text[a:b].strip()
+                if seg_text:
+                    segments.append({
+                        "id": f"seg:{seg_idx}",
+                        "start_min": int(w_start),
+                        "end_min": max(int(w_start + 1), int(w_end)),
+                        "text": seg_text,
+                        "bridge_in": "",
+                        "bridge_out": "",
+                    })
+                    seg_idx += 1
+                t += (window - overlap)
         else:
-            # Fixed-size windows: 30-min segment approximated by ~10k chars with 5k overlap
-            seg_chars = 10000
-            overlap = 5000
+            # Token-ish char windows (approx) with overlap
+            seg_chars = 9000
+            overlap = 4500
             i = 0
             seg_idx = 1
             approx_min_per_char = 30.0 / max(seg_chars, 1)
             while i < len(text):
                 a = i
                 b = min(len(text), i + seg_chars)
-                seg_text = text[a:b]
+                seg_text = text[a:b].strip()
                 start_min = int(a * approx_min_per_char)
                 end_min = int(start_min + 30)
-                segments.append({
-                    "id": f"seg:{seg_idx}",
-                    "start_min": start_min,
-                    "end_min": end_min,
-                    "text": seg_text.strip(),
-                    "bridge_in": "",
-                    "bridge_out": "",
-                })
-                seg_idx += 1
+                if seg_text:
+                    segments.append({
+                        "id": f"seg:{seg_idx}",
+                        "start_min": start_min,
+                        "end_min": end_min,
+                        "text": seg_text,
+                        "bridge_in": "",
+                        "bridge_out": "",
+                    })
+                    seg_idx += 1
                 if b == len(text):
                     break
                 i = max(a + seg_chars - overlap, a + 1)
 
         return segments
-
