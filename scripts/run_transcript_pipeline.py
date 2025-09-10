@@ -21,7 +21,6 @@ except Exception:
 sys.path.append('.')
 
 from utils.multi_agent_summarizer.pipeline import summarize_transcript, run_pipeline_steps
-from utils.multi_agent_summarizer.markdown import full_summary_to_markdown
 from utils.embedding_handler import EmbeddingHandler
 
 
@@ -61,7 +60,8 @@ def main():
         source_id = args.s3_key
 
     steps = run_pipeline_steps(text)
-    full = steps["full"]
+    # New pipeline doesn't have "full" - use full_md directly
+    final_md = steps.get("full_md", "")
 
     # Determine default dump directory when a local text file is provided
     default_dump_dir = None
@@ -78,22 +78,39 @@ def main():
         with open(seg_path, "w", encoding="utf-8") as f:
             json.dump(steps["segments"], f, ensure_ascii=False, indent=2)
         written_files.append(seg_path)
-        # Write markdown artifacts
-        for k in ["story_md","mirror_md","lens_md","portal_md","layer3_md","layer4_md","full_md"]:
-            if steps.get(k):
-                out_path = os.path.join(dump_dir, f"{base}__{k.replace('_md','')}.md")
+        # Write new business-first agent outputs
+        agent_outputs = [
+            ("context_md", "context"),
+            ("business_reality_md", "business_reality"), 
+            ("org_dynamics_md", "org_dynamics"),
+            ("strategic_md", "strategic_implications"),
+            ("next_actions_md", "next_actions"),
+            ("reality_check_md", "reality_check"),
+            ("full_md", "final_summary")
+        ]
+        
+        for md_key, file_name in agent_outputs:
+            if steps.get(md_key):
+                out_path = os.path.join(dump_dir, f"{base}__{file_name}.md")
                 with open(out_path, "w", encoding="utf-8") as f:
-                    f.write(steps[k])
+                    f.write(steps[md_key])
                 written_files.append(out_path)
-        # Full JSON
-        full_json_path = os.path.join(dump_dir, f"{base}__full.json")
-        with open(full_json_path, "w", encoding="utf-8") as f:
-            json.dump(full, f, ensure_ascii=False, indent=2)
-        written_files.append(full_json_path)
+        
+        # Steps metadata JSON
+        steps_json_path = os.path.join(dump_dir, f"{base}__pipeline_steps.json")
+        with open(steps_json_path, "w", encoding="utf-8") as f:
+            # Create summary dict without the large markdown content
+            steps_summary = {
+                "agent_outputs": list(steps.keys()),
+                "segments_count": len(steps.get("segments", [])),
+                "pipeline_version": "business_first_v1"
+            }
+            json.dump(steps_summary, f, ensure_ascii=False, indent=2)
+        written_files.append(steps_json_path)
 
     if not args.no_upsert:
         # Upsert final summary as Markdown to a single namespace (agent)
-        md = steps.get("full_md") or full_summary_to_markdown(full)
+        md = final_md or "# No Summary Generated\n"
         # Save local markdown alongside source if possible
         if dump_dir:
             md_path = os.path.join(dump_dir, f"{base}__transcript_summary.md")
@@ -111,6 +128,7 @@ def main():
                 "source_identifier": source_id,
                 "file_name": "transcript_summary.md",
                 "doc_id": f"{source_id}:summary",
+                "pipeline_version": "business_first_v1",
             },
         )
     print(json.dumps({
