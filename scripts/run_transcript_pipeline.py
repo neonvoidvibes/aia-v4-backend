@@ -79,7 +79,7 @@ def main():
             json.dump(steps["segments"], f, ensure_ascii=False, indent=2)
         written_files.append(seg_path)
         # Write markdown artifacts
-        for k in ["mirror_md","lens_md","portal_md","layer3_md","layer4_md","full_md"]:
+        for k in ["story_md","mirror_md","lens_md","portal_md","layer3_md","layer4_md","full_md"]:
             if steps.get(k):
                 out_path = os.path.join(dump_dir, f"{base}__{k.replace('_md','')}.md")
                 with open(out_path, "w", encoding="utf-8") as f:

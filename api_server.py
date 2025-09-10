@@ -1275,6 +1275,7 @@ def save_transcript(user: SupabaseUser):
         # Include compact intermediates for debugging
         payload["steps"] = {
             "segments": steps.get("segments"),
+            "story_md": steps.get("story_md"),
             "mirror_md": steps.get("mirror_md"),
             "lens_md": steps.get("lens_md"),
             "portal_md": steps.get("portal_md"),

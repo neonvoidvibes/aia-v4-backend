@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class MirrorAgent(Agent):
     name = "mirror"
 
-    def run(self, segments: List[Dict[str, Any]]):
+    def run(self, segments: List[Dict[str, Any]], context_md: str | None = None):
         """Map-Reduce Mirror producing Markdown sections for Layer1 metadata and Mirror level.
         Returns a markdown string of the two sections.
         """
@@ -35,6 +35,7 @@ class MirrorAgent(Agent):
             user = {
                 "language_hint": lang_hint,
                 "segment": {"id": s.get("id"), "start_min": s.get("start_min"), "end_min": s.get("end_min"), "text": s.get("text")},
+                "story_context_excerpt": (context_md or "")[:3000],
                 "template": """
 ## Mirror Pack {seg_id}
 ### Quotes
@@ -48,7 +49,7 @@ class MirrorAgent(Agent):
 """
             }
             msg = [
-                {"role": "system", "content": "Extract Mirror evidence for this single segment. Return Markdown only. Preserve original language in content; use English keys."},
+                {"role": "system", "content": "Extract Mirror evidence for this single segment. Use provided story context only to disambiguate; do not invent facts. Return Markdown only. Preserve original language in content; use English keys."},
                 {"role": "user", "content": json.dumps(user, ensure_ascii=False)}
             ]
             try:
@@ -62,6 +63,7 @@ class MirrorAgent(Agent):
             "language_hint": lang_hint,
             "approx_duration_minutes": max(1, int(seg_max - seg_min)),
             "evidence_packs": packs,
+            "story_context_excerpt": (context_md or "")[:3000],
             "template": """
 # Layer 1 — Traditional Business
 - timestamp: <ISO or 'unknown'>
@@ -86,7 +88,7 @@ class MirrorAgent(Agent):
 """
         }
         reduce_msg = [
-            {"role": "system", "content": "Merge segment packs into Layer1 and Mirror sections. Markdown only. Keep keys in English, content in original language."},
+            {"role": "system", "content": "Merge segment packs into Layer1 and Mirror sections. Let the story context set tone and names, but keep claims evidence-based. Markdown only. Keep keys in English, content in original language."},
             {"role": "user", "content": json.dumps(reduce_user, ensure_ascii=False)}
         ]
         try:
