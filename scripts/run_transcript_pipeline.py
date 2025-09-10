@@ -78,15 +78,14 @@ def main():
         with open(seg_path, "w", encoding="utf-8") as f:
             json.dump(steps["segments"], f, ensure_ascii=False, indent=2)
         written_files.append(seg_path)
-        # Write new business-first agent outputs
+        # Write individual agent outputs (no executive summaries)
         agent_outputs = [
             ("context_md", "context"),
             ("business_reality_md", "business_reality"), 
             ("org_dynamics_md", "org_dynamics"),
             ("strategic_md", "strategic_implications"),
             ("next_actions_md", "next_actions"),
-            ("reality_check_md", "reality_check"),
-            ("full_md", "final_summary")
+            ("reality_check_md", "reality_check")
         ]
         
         for md_key, file_name in agent_outputs:
@@ -95,6 +94,18 @@ def main():
                 with open(out_path, "w", encoding="utf-8") as f:
                     f.write(steps[md_key])
                 written_files.append(out_path)
+        
+        # Create concatenated full.md with all agent outputs
+        full_content_parts = []
+        for md_key, file_name in agent_outputs:
+            if steps.get(md_key):
+                full_content_parts.append(steps[md_key])
+        
+        full_content = "\n\n=======\n\n".join(full_content_parts)
+        full_path = os.path.join(dump_dir, f"{base}__full.md")
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(full_content)
+        written_files.append(full_path)
         
         # Steps metadata JSON
         steps_json_path = os.path.join(dump_dir, f"{base}__pipeline_steps.json")
@@ -109,26 +120,35 @@ def main():
         written_files.append(steps_json_path)
 
     if not args.no_upsert:
-        # Upsert final summary as Markdown to a single namespace (agent)
-        md = final_md or "# No Summary Generated\n"
-        # Save local markdown alongside source if possible
-        if dump_dir:
-            md_path = os.path.join(dump_dir, f"{base}__transcript_summary.md")
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(md)
-            written_files.append(md_path)
+        # Create full content for upserting (all agent outputs concatenated)
+        full_content_parts = []
+        agent_outputs = [
+            ("context_md", "context"),
+            ("business_reality_md", "business_reality"), 
+            ("org_dynamics_md", "org_dynamics"),
+            ("strategic_md", "strategic_implications"),
+            ("next_actions_md", "next_actions"),
+            ("reality_check_md", "reality_check")
+        ]
+        
+        for md_key, file_name in agent_outputs:
+            if steps.get(md_key):
+                full_content_parts.append(steps[md_key])
+        
+        full_content = "\n\n=======\n\n".join(full_content_parts) or "# No Summary Generated\n"
+        
         EmbeddingHandler(index_name="river", namespace=f"{args.agent}").embed_and_upsert(
-            content=md,
+            content=full_content,
             metadata={
                 "agent_name": args.agent,
                 "event_id": args.event,
                 "transcript": args.event,
-                "source": "transcript_summary",
+                "source": "transcript_full",
                 "source_type": "transcript",
                 "source_identifier": source_id,
-                "file_name": "transcript_summary.md",
-                "doc_id": f"{source_id}:summary",
-                "pipeline_version": "business_first_v1",
+                "file_name": "full.md",
+                "doc_id": f"{source_id}:full",
+                "pipeline_version": "business_first_v2",
             },
         )
     print(json.dumps({
