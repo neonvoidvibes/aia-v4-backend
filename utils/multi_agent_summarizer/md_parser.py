@@ -3,7 +3,7 @@ from typing import Dict, Any, List
 
 _LIST_KEYS = {
     'segment_ids', 'dependencies', 'evidence_ids', 'predicted_outcomes',
-    'relationship_between', 'contexts', 'energy_shifts'
+    'relationship_between', 'contexts', 'energy_shifts', 'required_participants'
 }
 
 def _clean_scalar(v: str) -> str:
@@ -261,5 +261,14 @@ def parse_full_markdown(md: str) -> Dict[str, Any]:
                 lens_eids = [e for e in item['evidence_ids'] if isinstance(e, str) and e.startswith('lens:')]
                 if lens_eids:
                     item['grounding_in_lens'] = lens_eids[0]
+            if cat == 'paradigm_shifts':
+                item.setdefault('indicators', '')
+                item.setdefault('readiness_assessment', '')
+
+    # Ensure next_meetings.required_participants is a list
+    for nm in res.get('layer1', {}).get('actionable_outputs', {}).get('next_meetings', []):
+        if isinstance(nm.get('required_participants'), str):
+            nm['required_participants'] = [nm['required_participants']]
+        nm.setdefault('required_participants', [])
     return res
     
