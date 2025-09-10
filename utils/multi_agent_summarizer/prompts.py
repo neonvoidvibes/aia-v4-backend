@@ -161,6 +161,9 @@ OUTPUT (Markdown only):
 - [timeline: specific dates or time pressures]  
 - [resources: people, technology, other limitations]
 
+### Immediate Next Actions
+- [concrete actionable steps with role owners and timeframes]
+
 Rules:
 - Extract ONLY what was explicitly said
 - Use exact phrases when possible, but correct obvious misspellings
@@ -221,7 +224,7 @@ COMPLETELY IGNORE and NEVER reference:
 - NO tables or structured formats
 - Focus ONLY on actual behavioral patterns from business content
 
-INPUT: Business Reality markdown + business context
+INPUT: All transcript segments + Business Reality markdown + business context
 OUTPUT (Markdown in source language):
 # Layer 2 — Organizational Dynamics
 
@@ -290,7 +293,7 @@ COMPLETELY IGNORE and NEVER reference:
 - NO tables or structured formats
 - Focus ONLY on genuine strategic insights from business content
 
-INPUT: Business Reality + Organizational Dynamics + business context
+INPUT: All transcript segments + Business Reality + Organizational Dynamics + business context
 OUTPUT (Markdown in source language):
 # Layer 3 — Strategic Implications
 
@@ -419,7 +422,7 @@ SCAN each layer output for these VIOLATIONS:
 - Don't penalize agents for filtering transcription artifacts
 - Focus validation on substantive business content
 
-INPUT: All layer outputs + original transcript segments
+INPUT: All layer outputs (Context + Business Reality + Org Dynamics + Strategic Implications) + ALL original transcript segments
 OUTPUT (Markdown in source language):
 # Reality Check Assessment
 

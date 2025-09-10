@@ -121,17 +121,16 @@ class IntegrationAgent(Agent):
         })
 
     def run_md(self, *, context_md: str, business_reality_md: str, organizational_dynamics_md: str, 
-               strategic_implications_md: str, next_actions_md: str, reality_check_md: str) -> str:
+               strategic_implications_md: str, reality_check_md: str) -> str:
         """New business-first integration that combines all layers into executive summary.
         Returns final markdown output focused on business value.
         """
         
         payload = {
             "context_content": context_md[:2000],
-            "business_reality_content": business_reality_md[:4000],
+            "business_reality_content": business_reality_md[:5000],  # Increased since it now includes next actions
             "organizational_dynamics_content": organizational_dynamics_md[:3000],
             "strategic_implications_content": strategic_implications_md[:3000], 
-            "next_actions_content": next_actions_md[:2500],
             "reality_check_content": reality_check_md[:2000]
         }
         
@@ -156,10 +155,9 @@ class IntegrationAgent(Agent):
             # Fallback: simple concatenation
             parts = [
                 context_md.strip(),
-                business_reality_md.strip(), 
+                business_reality_md.strip(),  # Now includes next actions
                 organizational_dynamics_md.strip(),
                 strategic_implications_md.strip(),
-                next_actions_md.strip(),
                 reality_check_md.strip()
             ]
             return "\n\n".join([p for p in parts if p])

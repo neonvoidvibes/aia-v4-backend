@@ -13,13 +13,20 @@ logger = logging.getLogger(__name__)
 class OrganizationalDynamicsAgent(Agent):
     name = "organizational_dynamics"
 
-    def run(self, business_reality_md: str, context_md: str | None = None) -> str:
-        """Identify organizational patterns from business reality content.
+    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, context_md: str | None = None) -> str:
+        """Identify organizational patterns from segments, business reality content.
         Focus on communication patterns, power dynamics, tensions.
         """
         
+        # Combine segments for analysis
+        combined_text = "\n\n".join([
+            f"Segment {s.get('id', '')} ({s.get('start_min', 0)}-{s.get('end_min', 0)} min): {s.get('text', '')}"
+            for s in segments
+        ])
+        
         payload = {
-            "business_reality_content": business_reality_md[:8000],
+            "segments_content": combined_text[:10000],
+            "business_reality_content": business_reality_md[:6000],
             "business_context": (context_md or "")[:2000]
         }
         

@@ -14,24 +14,23 @@ class RealityCheckAgent(Agent):
     name = "reality_check"
 
     def run(self, segments: List[Dict[str, Any]], context_md: str, business_reality_md: str, 
-            organizational_dynamics_md: str, strategic_implications_md: str, next_actions_md: str) -> str:
+            organizational_dynamics_md: str, strategic_implications_md: str) -> str:
         """Validate accuracy and usefulness of all previous layer outputs.
         Check against original transcript for accuracy and practical value.
         """
         
-        # Create a sample of the original transcript for validation
-        original_text_sample = "\n\n".join([
-            f"Segment {s.get('id', '')} ({s.get('start_min', 0)}-{s.get('end_min', 0)} min): {s.get('text', '')[:500]}..."
-            for s in segments[:3]  # Just first 3 segments to avoid token limits
+        # Use all segments for comprehensive validation
+        original_text_full = "\n\n".join([
+            f"Segment {s.get('id', '')} ({s.get('start_min', 0)}-{s.get('end_min', 0)} min): {s.get('text', '')}"
+            for s in segments
         ])
         
         payload = {
-            "original_transcript_sample": original_text_sample,
+            "original_transcript_full": original_text_full[:15000],  # Increased limit for full transcript
             "context_output": context_md[:2000],
-            "business_reality_output": business_reality_md[:3000],
-            "organizational_dynamics_output": organizational_dynamics_md[:2500],
-            "strategic_implications_output": strategic_implications_md[:2500],
-            "next_actions_output": next_actions_md[:2000]
+            "business_reality_output": business_reality_md[:4000],  # Increased since it now includes next actions
+            "organizational_dynamics_output": organizational_dynamics_md[:3000],
+            "strategic_implications_output": strategic_implications_md[:3000]
         }
         
         try:

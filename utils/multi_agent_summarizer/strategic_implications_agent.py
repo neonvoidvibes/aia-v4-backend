@@ -13,13 +13,20 @@ logger = logging.getLogger(__name__)
 class StrategicImplicationsAgent(Agent):
     name = "strategic_implications"
 
-    def run(self, business_reality_md: str, organizational_dynamics_md: str, context_md: str | None = None) -> str:
-        """Assess strategic implications of business reality and organizational dynamics.
+    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, context_md: str | None = None) -> str:
+        """Assess strategic implications from segments, business reality and organizational dynamics.
         Focus on business impact, alignment, risks, and opportunities.
         """
         
+        # Combine segments for analysis
+        combined_text = "\n\n".join([
+            f"Segment {s.get('id', '')} ({s.get('start_min', 0)}-{s.get('end_min', 0)} min): {s.get('text', '')}"
+            for s in segments
+        ])
+        
         payload = {
-            "business_reality_content": business_reality_md[:6000],
+            "segments_content": combined_text[:8000],
+            "business_reality_content": business_reality_md[:5000],
             "organizational_dynamics_content": organizational_dynamics_md[:4000],
             "business_context": (context_md or "")[:2000]
         }

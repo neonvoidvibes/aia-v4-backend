@@ -7,7 +7,6 @@ from .context_agent import ContextAgent
 from .business_reality_agent import BusinessRealityAgent
 from .organizational_dynamics_agent import OrganizationalDynamicsAgent
 from .strategic_implications_agent import StrategicImplicationsAgent
-from .next_actions_agent import NextActionsAgent
 from .reality_check_agent import RealityCheckAgent
 from .integration_agent import IntegrationAgent
 from .feedback_parser import parse_reality_check_feedback
@@ -16,7 +15,7 @@ from .feedback_parser import parse_reality_check_feedback
 def summarize_transcript(agent_name: str, event_id: str, transcript_text: str, source_identifier: str) -> Dict:
     """
     Two-pass business-first pipeline:
-    Pass 1: Initial analysis (Segmentation → Context → Business Reality → Org Dynamics → Strategic → Next Actions → Reality Check)
+    Pass 1: Initial analysis (Segmentation → Context → Business Reality → Org Dynamics → Strategic → Reality Check)
     Pass 2: Refinement based on Reality Check feedback → Final Integration
     """
     # Use the two-pass pipeline implementation
@@ -42,18 +41,15 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
     # Step 3: Business Reality
     business_reality_md = BusinessRealityAgent().run(segments=segs, context_md=context_md)
     
-    # Step 4: Organizational Dynamics
-    org_dynamics_md = OrganizationalDynamicsAgent().run(business_reality_md, context_md)
+    # Step 4: Organizational Dynamics (now has direct segment access)
+    org_dynamics_md = OrganizationalDynamicsAgent().run(segs, business_reality_md, context_md)
     
-    # Step 5: Strategic Implications  
-    strategic_md = StrategicImplicationsAgent().run(business_reality_md, org_dynamics_md, context_md)
+    # Step 5: Strategic Implications (now has direct segment access)
+    strategic_md = StrategicImplicationsAgent().run(segs, business_reality_md, org_dynamics_md, context_md)
     
-    # Step 6: Next Actions
-    next_actions_md = NextActionsAgent().run(business_reality_md, org_dynamics_md, strategic_md, context_md)
-    
-    # Step 7: Reality Check
+    # Step 6: Reality Check
     reality_check_md = RealityCheckAgent().run(segs, context_md, business_reality_md, 
-                                              org_dynamics_md, strategic_md, next_actions_md)
+                                              org_dynamics_md, strategic_md)
     
     # PASS 2: Refinement based on Reality Check feedback
     feedback = parse_reality_check_feedback(reality_check_md)
@@ -72,22 +68,16 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
                                                              context_md)
     
     if feedback.get("strategic_implications"):
-        strategic_md = StrategicImplicationsAgent().refine(business_reality_md, org_dynamics_md, 
+        strategic_md = StrategicImplicationsAgent().refine(segs, business_reality_md, org_dynamics_md, 
                                                          strategic_md, feedback["strategic_implications"], 
                                                          context_md)
     
-    if feedback.get("next_actions"):
-        next_actions_md = NextActionsAgent().refine(business_reality_md, org_dynamics_md, 
-                                                  strategic_md, next_actions_md, 
-                                                  feedback["next_actions"], context_md)
-    
-    # Step 8: Final Integration (using refined outputs)
+    # Step 7: Final Integration
     final_md = IntegrationAgent().run_md(
         context_md=context_md,
         business_reality_md=business_reality_md,
         organizational_dynamics_md=org_dynamics_md,
         strategic_implications_md=strategic_md,
-        next_actions_md=next_actions_md,
         reality_check_md=reality_check_md
     )
     
@@ -97,7 +87,6 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
         "business_reality_md": business_reality_md,
         "org_dynamics_md": org_dynamics_md,
         "strategic_md": strategic_md,
-        "next_actions_md": next_actions_md,
         "reality_check_md": reality_check_md,
         "full_md": final_md,
     }

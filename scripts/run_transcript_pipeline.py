@@ -78,13 +78,12 @@ def main():
         with open(seg_path, "w", encoding="utf-8") as f:
             json.dump(steps["segments"], f, ensure_ascii=False, indent=2)
         written_files.append(seg_path)
-        # Write individual agent outputs (no executive summaries)
+        # Write individual agent outputs (no executive summaries, next actions now in business reality)
         agent_outputs = [
             ("context_md", "context"),
             ("business_reality_md", "business_reality"), 
             ("org_dynamics_md", "org_dynamics"),
             ("strategic_md", "strategic_implications"),
-            ("next_actions_md", "next_actions"),
             ("reality_check_md", "reality_check")
         ]
         
@@ -95,14 +94,13 @@ def main():
                     f.write(steps[md_key])
                 written_files.append(out_path)
         
-        # Create concatenated full.md with all agent outputs (skip reality check)
+        # Create concatenated full.md with all agent outputs (skip reality check, next actions now in business reality)
         full_content_parts = []
         full_agent_outputs = [
             ("context_md", "context"),
             ("business_reality_md", "business_reality"), 
             ("org_dynamics_md", "org_dynamics"),
-            ("strategic_md", "strategic_implications"),
-            ("next_actions_md", "next_actions")
+            ("strategic_md", "strategic_implications")
         ]
         
         for md_key, file_name in full_agent_outputs:
@@ -128,14 +126,13 @@ def main():
         written_files.append(steps_json_path)
 
     if not args.no_upsert:
-        # Create full content for upserting (all agent outputs except reality check)
+        # Create full content for upserting (all agent outputs except reality check, next actions now in business reality)
         full_content_parts = []
         upsert_agent_outputs = [
             ("context_md", "context"),
             ("business_reality_md", "business_reality"), 
             ("org_dynamics_md", "org_dynamics"),
-            ("strategic_md", "strategic_implications"),
-            ("next_actions_md", "next_actions")
+            ("strategic_md", "strategic_implications")
         ]
         
         for md_key, file_name in upsert_agent_outputs:
