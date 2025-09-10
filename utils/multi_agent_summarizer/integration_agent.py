@@ -70,9 +70,13 @@ class IntegrationAgent(Agent):
                 out.append(it)
             return out
 
-        lens_level["hidden_patterns"] = _filter_lens_items(lens_level.get("hidden_patterns", []))
-        lens_level["unspoken_tensions"] = _filter_lens_items(lens_level.get("unspoken_tensions", []))
-        lens_level["paradoxes_contradictions"] = _filter_lens_items(lens_level.get("paradoxes_contradictions", []))
+        for key in ["hidden_patterns", "unspoken_tensions", "paradoxes_contradictions"]:
+            before = len(lens_level.get(key, []) or [])
+            lens_level[key] = _filter_lens_items(lens_level.get(key, []))
+            after = len(lens_level.get(key, []) or [])
+            dropped = max(0, before - after)
+            if dropped:
+                logger.info(f"tx.integrate.prune layer=lens key={key} dropped={dropped} kept={after}")
 
         # Filter portal items without lens evidence
         def _filter_portal_items(items: List[Dict[str, Any]]):
@@ -86,9 +90,13 @@ class IntegrationAgent(Agent):
                 out.append(it)
             return out
 
-        portal_level["emergent_possibilities"] = _filter_portal_items(portal_level.get("emergent_possibilities", []))
-        portal_level["intervention_opportunities"] = _filter_portal_items(portal_level.get("intervention_opportunities", []))
-        portal_level["paradigm_shifts"] = _filter_portal_items(portal_level.get("paradigm_shifts", []))
+        for key in ["emergent_possibilities", "intervention_opportunities", "paradigm_shifts"]:
+            before = len(portal_level.get(key, []) or [])
+            portal_level[key] = _filter_portal_items(portal_level.get(key, []))
+            after = len(portal_level.get(key, []) or [])
+            dropped = max(0, before - after)
+            if dropped:
+                logger.info(f"tx.integrate.prune layer=portal key={key} dropped={dropped} kept={after}")
 
         # Confidence heuristic
         conf = {
@@ -97,6 +105,10 @@ class IntegrationAgent(Agent):
             "layer3": 0.6 if layer3 else 0.3,
             "layer4": 0.6 if layer4 else 0.3,
         }
+        logger.info(
+            "tx.integrate.done conf=" + 
+            ",".join([f"{k}={v:.2f}" for k,v in conf.items()])
+        )
 
         return _normalize_full({
             "layer1": layer1,
