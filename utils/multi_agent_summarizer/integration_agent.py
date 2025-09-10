@@ -42,7 +42,7 @@ class IntegrationAgent(Agent):
             resp = chat(integ_model(), messages, max_tokens=3200, temperature=0.1)
             data = safe_json_parse(resp)
             if isinstance(data, dict) and all(k in data for k in ["layer1", "layer2", "layer3", "layer4", "confidence"]):
-                return data
+                return _normalize_full(data)
         except Exception as e:
             logger.error(f"IntegrationAgent LLM error: {e}")
 
@@ -94,11 +94,101 @@ class IntegrationAgent(Agent):
             "layer4": 0.6 if layer4 else 0.3,
         }
 
-        return {
+        return _normalize_full({
             "layer1": layer1,
             "layer2": {"mirror_level": mirror_level, "lens_level": lens_level, "portal_level": portal_level},
             "layer3": layer3,
             "layer4": layer4,
             "confidence": conf,
-        }
+        })
 
+
+def _ensure_path(d: Dict[str, Any], path: List[str], default: Any) -> Any:
+    cur = d
+    for key in path[:-1]:
+        if key not in cur or not isinstance(cur[key], dict):
+            cur[key] = {}
+        cur = cur[key]
+    leaf = path[-1]
+    if leaf not in cur or cur[leaf] is None:
+        cur[leaf] = default
+    return cur[leaf]
+
+
+def _normalize_full(full: Dict[str, Any]) -> Dict[str, Any]:
+    # Layer1 meeting_metadata defaults
+    mm = _ensure_path(full, ["layer1"], {})
+    mm = _ensure_path(full, ["layer1", "meeting_metadata"], {})
+    if not isinstance(mm, dict):
+        full["layer1"]["meeting_metadata"] = {}
+        mm = full["layer1"]["meeting_metadata"]
+    if not isinstance(full["layer1"].get("actionable_outputs"), dict):
+        full["layer1"]["actionable_outputs"] = {"decisions": [], "tasks": [], "next_meetings": []}
+
+    # Required strings
+    for key, default in [
+        ("timestamp", "unknown"),
+        ("meeting_type", "unspecified"),
+        ("primary_purpose", "unspecified"),
+    ]:
+        val = mm.get(key)
+        if not isinstance(val, str):
+            mm[key] = default
+    # Required numeric bounds
+    dm = mm.get("duration_minutes")
+    if not isinstance(dm, int) or dm < 0:
+        mm["duration_minutes"] = 0
+    pc = mm.get("participants_count")
+    if not isinstance(pc, int) or pc < 1:
+        mm["participants_count"] = 1
+
+    # Layer2 mirror_level participation_patterns
+    mirror_level = full.get("layer2", {}).get("mirror_level")
+    if not isinstance(mirror_level, dict):
+        full.setdefault("layer2", {})["mirror_level"] = {}
+        mirror_level = full["layer2"]["mirror_level"]
+    pp = mirror_level.get("participation_patterns")
+    if not isinstance(pp, dict):
+        mirror_level["participation_patterns"] = {"energy_shifts": [], "engagement_distribution": "unknown"}
+    else:
+        if not isinstance(pp.get("energy_shifts"), list):
+            pp["energy_shifts"] = []
+        if not isinstance(pp.get("engagement_distribution"), str):
+            pp["engagement_distribution"] = "unknown"
+
+    # Layer2 lens_level group_dynamics
+    lens_level = full.get("layer2", {}).get("lens_level")
+    if not isinstance(lens_level, dict):
+        full.setdefault("layer2", {})["lens_level"] = {}
+        lens_level = full["layer2"]["lens_level"]
+    gd = lens_level.get("group_dynamics")
+    if not isinstance(gd, dict):
+        lens_level["group_dynamics"] = {"emotional_undercurrents": "", "power_dynamics": ""}
+    else:
+        if not isinstance(gd.get("emotional_undercurrents"), str):
+            gd["emotional_undercurrents"] = ""
+        if not isinstance(gd.get("power_dynamics"), str):
+            gd["power_dynamics"] = ""
+
+    # Layer3 transcendental_alignment coherence_quality
+    ta = full.get("layer3", {}).get("transcendental_alignment")
+    if not isinstance(ta, dict):
+        full.setdefault("layer3", {})["transcendental_alignment"] = {"beauty_moments": [], "truth_emergence": [], "goodness_orientation": [], "coherence_quality": ""}
+    else:
+        if not isinstance(ta.get("coherence_quality"), str):
+            ta["coherence_quality"] = ""
+
+    # Ensure lists exist where models expect lists
+    def ensure_list(path: List[str]):
+        cur = full
+        for k in path[:-1]:
+            cur = cur.setdefault(k, {}) if isinstance(cur, dict) else {}
+        leaf = path[-1]
+        if not isinstance(cur.get(leaf), list):
+            cur[leaf] = []
+
+    # Layer1 actionable outputs lists
+    for p in [["layer1", "actionable_outputs", "decisions"], ["layer1", "actionable_outputs", "tasks"], ["layer1", "actionable_outputs", "next_meetings"]]:
+        ensure_list(p)
+
+    return full
