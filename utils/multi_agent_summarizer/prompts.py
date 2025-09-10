@@ -637,6 +637,7 @@ OUTPUT in the SAME LANGUAGE as the input transcript.
 - Ensure outputs reflect actual discussion content
 - SPECIFICALLY CHECK: Language consistency with transcript language
 - SPECIFICALLY CHECK: Claims about "repetitive" patterns vs actual evidence
+- SPECIFICALLY CHECK: Cross-reference any pattern claims with repetition_analysis.repeated_phrases to identify artifact-based analysis
 - SPECIFICALLY CHECK: Quality and usefulness of organizational dynamics analysis
 
 ## CRITICAL FORMATTING VALIDATION:
@@ -647,16 +648,28 @@ SCAN each layer output for these VIOLATIONS:
 - Direct quotes with quotation marks - FLAG as INAPPROPRIATE
 - All violations must be listed with specific examples and layer references
 
-## ARTIFACT AWARENESS:
-- Account for repetitive transcription errors in original transcript
-- Don't penalize agents for filtering transcription artifacts
-- Focus validation on substantive business content
+## ARTIFACT VALIDATION:
+- Use repetition_analysis.repeated_phrases to identify known Whisper transcription artifacts
+- CHECK that agents properly ignored these repeated phrases when analyzing patterns
+- PENALIZE agents who treated repeated artifacts as genuine communication patterns
+- VALIDATE that organizational dynamics are based on varied evidence, not repeated identical phrases
+- Focus validation on ensuring artifacts were filtered while substantive patterns were preserved
 
 INPUT: All layer outputs (Context + Business Reality + Org Dynamics + Strategic Implications) + ALL original transcript segments + repetition analysis
 OUTPUT (Markdown in source language):
 
-## REPETITION EXCLUSION AWARENESS:
-The repetition_analysis.exclusion_instructions identifies specific phrases that are Whisper AI transcription artifacts. When validating agent outputs, do not penalize agents for ignoring these repeated phrases as they are not real conversation patterns.
+## REPETITION ARTIFACT VALIDATION:
+CRITICAL: The repetition_analysis.exclusion_instructions identifies specific phrases that are Whisper AI transcription artifacts. Your job is to VALIDATE that other agents properly ignored these repetitions when analyzing patterns. 
+
+**Check for violations:**
+- If agents treated repetitive phrases as genuine communication patterns, FLAG this as "Hallucinated patterns"
+- If agents based organizational dynamics on repeated identical phrases, FLAG this as "Artifact-based analysis"  
+- If agents referenced the same repeated phrase multiple times as evidence, FLAG this as "Repetition over-weighting"
+
+**Use the repetition analysis to:**
+1. Identify which specific phrases appear multiple times across segments
+2. Check if agents incorrectly analyzed these as meaningful patterns
+3. Flag any cases where agents should have ignored repetitive artifacts but didn't
 # Reality Check Assessment
 
 ### CRITICAL FORMATTING VIOLATIONS
@@ -667,13 +680,15 @@ The repetition_analysis.exclusion_instructions identifies specific phrases that 
 - **Language violations**: [list any layers using wrong language - must match transcript language]
 
 ### CONTENT QUALITY VIOLATIONS
-- **Hallucinated patterns**: [claims about "repetitive clarification" or patterns not evident in transcript]
+- **Repetition artifact violations**: [agents treating repeated Whisper artifacts as real patterns - cross-reference with repetition_analysis.repeated_phrases]
+- **Artifact-based analysis**: [organizational dynamics based on repeated identical phrases rather than varied expressions]
+- **Repetition over-weighting**: [agents referencing the same repeated phrase multiple times as separate evidence]
 - **Generic observations**: [vague patterns that could apply to any meeting]
 - **Unsupported claims**: [assertions without clear evidence in Business Reality layer]
 
 ### Accuracy Check
 - **Business Reality accuracy**: [does Layer 1 reflect what was actually discussed?]
-- **Pattern validity**: [are Layer 2 patterns supported by evidence?] 
+- **Pattern validity**: [are Layer 2 patterns supported by varied evidence, not just repeated identical phrases from repetition_analysis?] 
 - **Strategic relevance**: [do Layer 3 insights connect to real discussion?]
 - **Action feasibility**: [are Layer 4 actions realistic for this team?]
 
