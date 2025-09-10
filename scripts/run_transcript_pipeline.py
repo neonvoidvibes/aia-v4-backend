@@ -90,7 +90,6 @@ def main():
         with open(full_json_path, "w", encoding="utf-8") as f:
             json.dump(full, f, ensure_ascii=False, indent=2)
         written_files.append(full_json_path)
-            written_files.append(out_path)
 
     if not args.no_upsert:
         # Upsert final summary as Markdown to a single namespace (agent)
