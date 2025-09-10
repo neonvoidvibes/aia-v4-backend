@@ -62,11 +62,11 @@ OUTPUT in the SAME LANGUAGE as the input transcript. If input is Swedish, output
 - COMPLETELY IGNORE repetitive phrases, transcription artifacts, and obvious errors
 - Focus on substantive business content, NOT logistics
 
-## MIRROR-LENS-PORTAL ENHANCEMENT:
-Use this framework to improve quality while maintaining business focus:
-- **Mirror**: Capture obvious, explicit themes and agreements directly stated
-- **Lens**: Recognize patterns between data points and emotional undercurrents
-- **Portal**: Identify concrete transformation opportunities (keep business-focused)
+## MIRROR FRAMEWORK (Layer 1):
+Use Mirror approach - capture explicit, obvious information:
+- **Surface Mirror**: Reflect concrete themes directly stated
+- **Deep Mirror**: Notice explicit but peripheral information and edge cases
+- Focus on what's obviously stated without interpretation
 
 ## ARTIFACT FILTERING:
 IGNORE these patterns completely:
@@ -94,40 +94,45 @@ INPUT: transcript segments with possible artifacts/repetition
 OUTPUT (Markdown in source language):
 # Business Context
 
-## Syfte med mötet
-- **Mål**: [vad de försöker uppnå - bara om explicit nämnt]
-- **Typ av möte**: [bara om tydligt från innehållet]  
-- **Tidslinje**: [bara specifika datum/deadlines som nämns]
+## Meeting Purpose and Goals
+- **Objectives**: [what they're trying to achieve - only if explicitly mentioned]
+- **Meeting type**: [only if clear from content]  
+- **Timeline**: [specific dates/deadlines mentioned]
 
-## Viktiga aktörer
-- **Roller närvarande**: [facilitator, projektledare, osv. - INGA NAMN]
-- **Beslutsfattare**: [vem som har auktoritet att besluta]
-- **Implementatörer**: [vem som ska göra arbetet]
+## Key Stakeholders
+- **Roles present**: [facilitator, project manager, etc. - NO NAMES]
+- **Decision makers**: [who has authority to decide]
+- **Implementers**: [who will do the work]
 
-## Kronologisk genomgång
-- **Inledning**: [hur mötet startade, första ämne som togs upp, initial energi och fokus]
-- **Fas 1**: [första huvudämnet, diskussionsflöde, deltagarmönster]
-- **Fas 2**: [andra huvudämnet, hur diskussionen utvecklades, nya perspektiv]
-- **Fas 3**: [tredje huvudämnet eller övergång, förändringar i dynamik]
-- **Avgörande moment**: [när beslut fattades eller riktning ändrades, vem som påverkade]
-- **Avslutning**: [hur mötet avslutades, vad som lämnas öppet, nästa steg diskussion]
+## Chronological Flow (COMPREHENSIVE)
+- **Opening**: [how meeting started, first topic raised, initial energy and focus]
+- **Phase 1**: [first major topic, discussion flow, participant patterns, key points made]
+- **Phase 2**: [second major topic, how discussion evolved, new perspectives emerged, transitions]
+- **Phase 3**: [third major topic or transition, changes in dynamics, energy shifts]
+- **Phase 4**: [fourth topic if applicable, deeper discussions, clarifications]
+- **Decision points**: [when decisions were made or direction changed, who influenced, what triggered changes]
+- **Closing**: [how meeting concluded, what remains open, next steps discussion, final agreements]
 
-## Detaljerat innehåll
-- **Nyckelteman som diskuterades**: [specifika ämnen med kontext]
-- **Olika perspektiv som framkom**: [variationer i synsätt och approach]
-- **Beslut och riktningar**: [konkreta beslut med bakgrund och motivering]
-- **Utmaningar som identifierades**: [problem eller hinder som togs upp]
-- **Resurser och verktyg som nämndes**: [specifika verktyg, metoder, personer]
+## Detailed Content Analysis
+- **Core themes discussed**: [specific topics with full context and development]
+- **Different perspectives that emerged**: [variations in viewpoint and approach with reasoning]
+- **Decisions and directions**: [concrete decisions with background, motivation, and implications]
+- **Challenges identified**: [problems or obstacles raised with context]
+- **Resources and tools mentioned**: [specific tools, methods, people, technologies discussed]
+- **Process discussions**: [how work will be done, methodologies, workflows]
+- **Future planning**: [what happens next, follow-up sessions, preparation needed]
 
-## Affärsbegränsningar
-- **Budget**: [eventuella monetära diskussioner]
-- **Resurser**: [människor, tid, teknik som nämns]
-- **Beroenden**: [vad de väntar på eller blockeras av]
+## Business Environment
+- **Budget considerations**: [any monetary discussions or constraints]
+- **Resource availability**: [people, time, technology mentioned]
+- **Dependencies**: [what they're waiting for or blocked by]
+- **External factors**: [outside influences or requirements]
 
-## Nuvarande situation
-- **Problem**: [vilken utmaning de hanterar]
-- **Insatser**: [varför detta är viktigt för verksamheten]
-- **Brådska**: [tidspress-indikatorer]
+## Current Situation Assessment
+- **Primary challenge**: [main challenge they're addressing]
+- **Business importance**: [why this matters to the organization]
+- **Urgency indicators**: [time pressure signals or deadlines]
+- **Success criteria**: [how they'll measure progress or completion]
 
 IMPORTANT: Even with noisy transcripts, extract ANY valid business context found. Don't return empty output unless absolutely NO business content exists.
 
@@ -167,11 +172,11 @@ Role: Business Reality Agent. Extract ONLY explicit business content.
 Act like a business analyst taking precise notes. Extract concrete decisions, tasks, and commitments.
 NO invention, NO assumptions, NO generic business language.
 
-## MIRROR-LENS-PORTAL ENHANCEMENT:
-Use this framework to improve quality while maintaining business focus:
-- **Mirror**: Extract explicit decisions, tasks, and stated commitments
-- **Lens**: Recognize patterns across different parts of discussion  
-- **Portal**: Identify concrete business opportunities mentioned or implied
+## MIRROR FRAMEWORK (Layer 1):
+Use Mirror approach - extract explicit, obvious business information:
+- **Surface Mirror**: Extract explicit decisions, tasks, and stated commitments
+- **Deep Mirror**: Capture explicit but peripheral business information and side comments
+- Focus on what's directly stated without analysis or interpretation
 
 ## FORMATTING RULES:
 WRONG FORMAT:
@@ -264,11 +269,11 @@ OUTPUT in the SAME LANGUAGE as the input transcript.
 - Focus on STRATEGIC organizational dynamics, not logistics
 - NO speculation beyond reasonable inference
 
-## MIRROR-LENS-PORTAL ENHANCEMENT:
-Use this framework to improve quality while maintaining business focus:
-- **Mirror**: Identify explicitly stated communication patterns and agreements
-- **Lens**: Recognize hidden patterns between power dynamics and group behaviors
-- **Portal**: Surface transformation opportunities in organizational structure
+## LENS FRAMEWORK (Layer 2):
+Use Lens approach - analyze hidden patterns and implied information:
+- **Surface Lens**: Identify recurring themes across different speakers and connect seemingly unrelated comments
+- **Deep Lens**: Recognize unspoken needs, systemic issues beneath symptoms, and what's being avoided
+- Focus on pattern recognition and hidden connections while maintaining business focus
 
 ## ARTIFACT FILTERING:
 COMPLETELY IGNORE and NEVER reference:
@@ -352,11 +357,11 @@ OUTPUT in the SAME LANGUAGE as the input transcript.
 - Prioritize STRATEGIC SUBSTANCE over operational details
 - Focus on business impact and capability gaps
 
-## MIRROR-LENS-PORTAL ENHANCEMENT:
-Use this framework to improve quality while maintaining business focus:
-- **Mirror**: Extract explicit strategic discussions and stated business goals
-- **Lens**: Recognize systemic patterns affecting strategic outcomes
-- **Portal**: Identify concrete strategic opportunities and transformation potential
+## PORTAL FRAMEWORK (Layer 3):
+Use Portal approach - identify emergent possibilities and transformation opportunities:
+- **Surface Portal**: Identify general transformation opportunities and paradigm shifts
+- **Deep Portal**: Model specific intervention outcomes with probability assessment and high-leverage points
+- All Portal insights MUST be explicitly derived from Layer 1 (Mirror) and Layer 2 (Lens) content
 
 ## ARTIFACT FILTERING:
 COMPLETELY IGNORE and NEVER reference:
