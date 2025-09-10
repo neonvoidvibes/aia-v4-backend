@@ -3,10 +3,9 @@ from openai import OpenAI
 
 
 def groq_openai_client() -> OpenAI:
-    return OpenAI(
-        base_url=os.getenv("GROQ_OPENAI_BASE_URL", "https://api.groq.com/openai"),
-        api_key=os.getenv("GROQ_API_KEY"),
-    )
+    # Groq's OpenAI-compatible endpoint requires the /v1 suffix for OpenAI SDKs
+    base = os.getenv("GROQ_OPENAI_BASE_URL", "https://api.groq.com/openai/v1")
+    return OpenAI(base_url=base, api_key=os.getenv("GROQ_API_KEY"))
 
 
 def std_model() -> str:
@@ -15,4 +14,3 @@ def std_model() -> str:
 
 def integ_model() -> str:
     return os.getenv("GROQ_MODEL_INTEGRATION", "openai/gpt-oss-120b")
-
