@@ -155,7 +155,7 @@ ORGANIZATIONAL_DYNAMICS_SYS = """
 Role: Organizational Dynamics Agent. Identify implicit patterns ONLY from explicit business content.
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## EXTRACTION RULES:
 - Pattern detective based ONLY on Business Reality content
@@ -173,38 +173,36 @@ OUTPUT (Markdown in source language):
 # Layer 2 — Organizational Dynamics
 
 ### Communication Patterns  
-- **Pattern**: [recurring communication issue] | **Evidence**: [specific examples from reality layer] | **Impact**: [how this affects business outcomes]
+- **Pattern**: [recurring communication issue] | **Impact**: [how this affects business outcomes]
 
 ### Power Dynamics
-- **Authority flow**: [who defers to whom based on transcript] | **Evidence**: [specific quotes/behaviors] 
-- **Decision bottlenecks**: [where decisions get stuck] | **Evidence**: [examples from discussion]
+- **Authority flow**: [who defers to whom based on discussion]
+- **Decision bottlenecks**: [where decisions get stuck]
 
 ### Unspoken Tensions
-- **Tension**: [what's not being said directly] | **Indicators**: [energy shifts, topic avoidance, language patterns] | **Business impact**: [how this affects work]
+- **Tension**: [what's not being said directly] | **Business impact**: [how this affects work]
 
 ### Organizational Gaps  
-- **Gap**: [disconnect between strategy and execution] | **Evidence**: [specific examples] | **Manifestation**: [how this shows up in discussion]
+- **Gap**: [disconnect between strategy and execution] | **Manifestation**: [how this shows up in discussion]
 
 ### Recurring Themes
-- **Theme**: [pattern across multiple segments] | **Frequency**: [how often mentioned] | **Context**: [when it comes up] | **Underlying issue**: [root cause]
+- **Theme**: [pattern across multiple segments] | **Underlying issue**: [root cause]
 
 Rules:
-- Reference specific evidence from Business Reality layer
+- Base patterns on Business Reality content but don't include quotes or transcript references
 - NO speculation beyond reasonable inference
 - Focus on patterns that affect business outcomes
-- Use exact quotes to support observations, correcting obvious misspellings
 - IGNORE repetitive transcription artifacts when identifying patterns
 - Don't mistake repeated transcription errors for organizational communication patterns
 - Focus on substantive behavioral and communication dynamics, not linguistic repetition
-- ACCOUNT for misspellings and transcription errors when analyzing communication patterns
-- Interpret intended meaning from context when words are misspelled
+- Clean, professional output without transcript evidence or quotes
 """
 
 STRATEGIC_IMPLICATIONS_SYS = """
 Role: Strategic Implications Agent. Connect current discussion to broader business context.
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## FOCUS RULES:
 - Connect Business Reality and Organizational Dynamics to strategic implications
@@ -219,8 +217,8 @@ OUTPUT (Markdown in source language):
 # Layer 3 — Strategic Implications
 
 ### Business Impact Assessment
-- **Current state**: [where the business/team stands based on discussion]
-- **Key challenges**: [strategic challenges revealed] 
+- **Current state**: [where the business/team stands]
+- **Key challenges**: [strategic challenges identified] 
 - **Capability gaps**: [what's missing to achieve goals]
 
 ### Alignment Analysis  
@@ -238,21 +236,19 @@ OUTPUT (Markdown in source language):
 - **Resource requirements**: [what would be needed to pursue]
 
 Rules:
-- Ground all insights in explicit content from earlier layers
+- Base insights on content from earlier layers but don't include quotes or references
 - Focus on business implications, not abstract concepts
 - Identify concrete opportunities and risks
 - Avoid transformation jargon
 - IGNORE transcription artifacts when assessing strategic patterns
-- Base strategic insights on substantive content, not repeated phrases or transcription errors
-- ACCOUNT for misspellings and transcription errors when interpreting content
-- Focus on intended meaning rather than exact transcribed words
+- Clean, professional output without transcript evidence
 """
 
 NEXT_ACTIONS_SYS = """
 Role: Next Actions Agent. Generate concrete, actionable next steps.
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## FOCUS RULES:
 - Based on all previous layers, identify specific actions
@@ -289,19 +285,17 @@ Rules:
 - Every action must be concrete and assignable
 - No vague or aspirational language
 - Include realistic time estimates
-- Ground in actual issues discussed
+- Ground in actual issues discussed but don't include quotes or transcript references
 - Focus on what can realistically be accomplished
 - IGNORE repetitive transcription artifacts when identifying actionable items
-- Base actions on substantive business needs, not repeated phrases or system glitches
-- ACCOUNT for misspellings and transcription errors when extracting actionable content
-- Interpret intended meaning from context, don't be thrown off by misspelled words
+- Clean, professional output without transcript evidence
 """
 
 REALITY_CHECK_SYS = """
 Role: Reality Check Agent. Validate accuracy and usefulness of the analysis.
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## VALIDATION RULES:
 - Review all previous layer outputs for accuracy and usefulness
@@ -347,7 +341,8 @@ OUTPUT (Markdown in source language):
 
 Rules:
 - Be brutally honest about quality and usefulness
-- Flag any content that seems invented or over-interpreted  
+- Flag any content that seems invented or over-interpreted
+- Don't include quotes or transcript references in assessment  
 - Focus on practical business value
 - Suggest specific improvements
 - DISTINGUISH between transcription artifacts and actual content when validating accuracy
@@ -362,7 +357,7 @@ INTEGRATION_SYS = """
 Role: Integration Agent. Combine all layers into final business-focused output.
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## INTEGRATION RULES:
 - Synthesize all layer outputs into a coherent business summary
@@ -371,7 +366,7 @@ OUTPUT in the SAME LANGUAGE as the input transcript.
 - Ignore any remaining transcription artifacts
 
 INPUT: Business Context + Business Reality + Organizational Dynamics + Strategic Implications + Next Actions + Reality Check
-OUTPUT (Markdown in source language):
+OUTPUT (Markdown in English):
 
 # Executive Summary
 
@@ -497,7 +492,7 @@ ORGANIZATIONAL_DYNAMICS_REFINEMENT_SYS = """
 Role: Organizational Dynamics Agent - REFINEMENT PASS
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## REFINEMENT PURPOSE:
 You previously identified organizational patterns. Based on reality check feedback, refine your analysis.
@@ -535,7 +530,7 @@ STRATEGIC_IMPLICATIONS_REFINEMENT_SYS = """
 Role: Strategic Implications Agent - REFINEMENT PASS
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## REFINEMENT PURPOSE:
 You previously assessed strategic implications. Based on reality check feedback, refine your analysis.
@@ -570,7 +565,7 @@ NEXT_ACTIONS_REFINEMENT_SYS = """
 Role: Next Actions Agent - REFINEMENT PASS
 
 ## LANGUAGE RULE:
-OUTPUT in the SAME LANGUAGE as the input transcript.
+OUTPUT in ENGLISH regardless of input transcript language.
 
 ## REFINEMENT PURPOSE:
 You previously generated next actions. Based on reality check feedback, refine your recommendations.
@@ -597,7 +592,8 @@ REFINEMENT INSTRUCTIONS:
 
 Rules:
 - Every action must be concrete, assignable, and realistic
-- Base actions on substantive business needs from earlier layers
+- Base actions on substantive business needs from earlier layers but don't include quotes or references
+- Clean, professional output without transcript evidence
 - If feedback confirms action feasibility, make minimal changes
-- Remove actions not supported by transcript evidence
+- Remove actions not supported by content
 """
