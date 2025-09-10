@@ -9,7 +9,7 @@ def groq_openai_client() -> OpenAI:
 
 
 def std_model() -> str:
-    return os.getenv("GROQ_MODEL_STD", "openai/gpt-oss-20b")
+    return os.getenv("GROQ_MODEL_STD", "openai/gpt-oss-120b")
 
 
 def integ_model() -> str:
