@@ -71,7 +71,7 @@ class BusinessRealityAgent(Agent):
             logger.error(f"BusinessRealityAgent error: {e}")
             return "# Layer 1 — Business Reality\n(Error extracting business content)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Refine previous business reality analysis based on reality check feedback."""
         
         # Combine segments for reference
@@ -99,8 +99,22 @@ class BusinessRealityAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2800,
-                temperature=0.3,
+                temperature=0.1,  # Lower temperature for better instruction following
             )
+            
+            # Apply datetime prepending if available and refined_reality has content
+            if meeting_datetime and refined_reality:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if refined_reality.startswith("# Layer 1 — Business Reality"):
+                    # Insert after the header
+                    lines = refined_reality.split('\n', 1)
+                    if len(lines) == 2:
+                        refined_reality = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        refined_reality = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    refined_reality = f"{datetime_header}{refined_reality}"
+            
             return refined_reality or previous_output
         except Exception as e:
             logger.error(f"BusinessRealityAgent refinement error: {e}")

@@ -155,6 +155,14 @@ def main():
         
         full_content = "\n\n=======\n\n".join(full_content_parts) or "# No Summary Generated\n"
         
+        # Generate summary filename by replacing 'transcript_' with 'summary_'
+        summary_filename = "full.md"  # default fallback
+        if filename and filename.startswith("transcript_"):
+            summary_filename = filename.replace("transcript_", "summary_", 1)
+        elif filename:
+            # If filename doesn't start with transcript_, prepend summary_
+            summary_filename = f"summary_{filename}"
+        
         EmbeddingHandler(index_name="river", namespace=f"{args.agent}").embed_and_upsert(
             content=full_content,
             metadata={
@@ -162,10 +170,10 @@ def main():
                 "event_id": args.event,
                 "transcript": args.event,
                 "source": "transcript_full",
-                "source_type": "transcript",
+                "source_type": "summary",  # Changed from "transcript" to "summary"
                 "source_identifier": source_id,
-                "file_name": "full.md",
-                "doc_id": f"{source_id}:full",
+                "file_name": summary_filename,
+                "doc_id": f"{source_id}:summary",  # Changed from ":full" to ":summary"
                 "pipeline_version": "business_first_v2",
             },
         )
