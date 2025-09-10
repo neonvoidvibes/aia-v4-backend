@@ -80,6 +80,12 @@ OUTPUT (Markdown in source language):
 - **Beslutsfattare**: [vem som har auktoritet att besluta]
 - **Implementatörer**: [vem som ska göra arbetet]
 
+## Kronologisk genomgång
+- **Inledning**: [hur mötet startade, första ämne som togs upp]
+- **Huvuddiskussioner**: [viktiga ämnen i den ordning de diskuterades]
+- **Avgörande moment**: [när beslut fattades eller riktning ändrades]
+- **Avslutning**: [hur mötet avslutades, vad som lämnas öppet]
+
 ## Affärsbegränsningar
 - **Budget**: [eventuella monetära diskussioner]
 - **Resurser**: [människor, tid, teknik som nämns]
@@ -93,6 +99,9 @@ OUTPUT (Markdown in source language):
 IMPORTANT: Even with noisy transcripts, extract ANY valid business context found. Don't return empty output unless absolutely NO business content exists.
 
 Rules:
+- Use the chronological flow to show how topics and decisions evolved during the meeting
+- Focus on substantive content transitions, not every minor detail
+- Highlight when the discussion direction changed or when key decisions were made
 - EXTRACT only what's explicitly discussed
 - NO creative interpretation
 - Use roles/functions, never personal names
