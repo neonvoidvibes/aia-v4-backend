@@ -42,7 +42,7 @@ class RealityCheckAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2500,
-                temperature=0.1,
+                temperature=0.3,
             )
             return reality_check or "# Reality Check Assessment\n(No assessment generated)\n"
         except Exception as e:

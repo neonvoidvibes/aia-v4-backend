@@ -31,7 +31,7 @@ class OrganizationalDynamicsAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2000,
-                temperature=0.1,
+                temperature=0.3,
             )
             return dynamics or "# Layer 2 — Organizational Dynamics\n(No patterns identified)\n"
         except Exception as e:
@@ -65,7 +65,7 @@ class OrganizationalDynamicsAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2200,
-                temperature=0.1,
+                temperature=0.3,
             )
             return refined_dynamics or previous_output
         except Exception as e:

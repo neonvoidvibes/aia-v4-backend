@@ -33,7 +33,7 @@ class NextActionsAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2000,
-                temperature=0.1,
+                temperature=0.3,
             )
             return actions or "# Layer 4 — Next Actions\n(No actions identified)\n"
         except Exception as e:
@@ -62,7 +62,7 @@ class NextActionsAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2200,
-                temperature=0.1,
+                temperature=0.3,
             )
             return refined_actions or previous_output
         except Exception as e:

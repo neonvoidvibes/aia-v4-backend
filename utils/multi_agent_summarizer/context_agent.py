@@ -38,7 +38,7 @@ class ContextAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=1200,
-                temperature=0.1,
+                temperature=0.3,
             )
             return context or "# Business Context\n(No context extracted)\n"
         except Exception as e:
@@ -70,7 +70,7 @@ class ContextAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=1400,
-                temperature=0.1,
+                temperature=0.3,
             )
             return refined_context or previous_output  # Fallback to previous if refinement fails
         except Exception as e:

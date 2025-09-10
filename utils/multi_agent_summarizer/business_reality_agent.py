@@ -44,7 +44,7 @@ class BusinessRealityAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2500,
-                temperature=0.1,
+                temperature=0.3,
             )
             return business_reality or "# Layer 1 — Business Reality\n(No business content extracted)\n"
         except Exception as e:
@@ -78,7 +78,7 @@ class BusinessRealityAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2800,
-                temperature=0.1,
+                temperature=0.3,
             )
             return refined_reality or previous_output
         except Exception as e:

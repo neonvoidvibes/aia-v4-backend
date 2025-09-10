@@ -32,7 +32,7 @@ class StrategicImplicationsAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2200,
-                temperature=0.1,
+                temperature=0.3,
             )
             return implications or "# Layer 3 — Strategic Implications\n(No strategic insights identified)\n"
         except Exception as e:
@@ -60,7 +60,7 @@ class StrategicImplicationsAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2500,
-                temperature=0.1,
+                temperature=0.3,
             )
             return refined_implications or previous_output
         except Exception as e:
