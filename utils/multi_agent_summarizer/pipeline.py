@@ -14,28 +14,30 @@ from .integration_agent import IntegrationAgent
 def summarize_transcript(agent_name: str, event_id: str, transcript_text: str, source_identifier: str) -> Dict:
     segs = SegmentationAgent().run(text=transcript_text)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        mirror_f = pool.submit(MirrorAgent().run, segments=segs)
-        # For token efficiency, Lens uses mirror artifacts, not raw text; pass segments meta only
-        lens_f = pool.submit(lambda: LensAgent().run(segments=[{"id": s.get("id"), "start_min": s.get("start_min"), "end_min": s.get("end_min")} for s in segs], mirror=mirror_f.result()))
-        portal_f = pool.submit(lambda: PortalAgent().run(mirror=mirror_f.result(), lens=lens_f.result()))
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        mirror_md_f = pool.submit(MirrorAgent().run, segments=segs)
+        mirror_md = mirror_md_f.result()
+        # Lens depends on mirror_md
+        lens_md = LensAgent().run(segments=[{"id": s.get("id"), "start_min": s.get("start_min"), "end_min": s.get("end_min")} for s in segs], mirror_markdown=mirror_md)
+        # Portal depends on mirror_md + lens_md
+        portal_md = PortalAgent().run(mirror_markdown=mirror_md, lens_markdown=lens_md)
 
-    mirror_out = mirror_f.result()
-    layer1 = mirror_out.get("layer1", {})
-    mirror_level = mirror_out.get("mirror_level", {})
+    # Wisdom and Learning
+    wisdom_md = WisdomAgent().run(layer1_md=mirror_md, layer2_md="\n\n".join([mirror_md, lens_md, portal_md]))
+    learning_md = LearningAgent().run(layer1_md=mirror_md, layer2_md="\n\n".join([mirror_md, lens_md, portal_md]), layer3_md=wisdom_md)
 
-    layer2 = {
-        "mirror_level": mirror_level,
-        "lens_level": lens_f.result().get("lens_level", {}),
-        "portal_level": portal_f.result().get("portal_level", {}),
-    }
+    # Integrate -> parse to dict + combined markdown
+    integ = IntegrationAgent().run_md(
+        layer1_md=mirror_md,
+        layer2_mirror_md=mirror_md,
+        layer2_lens_md=lens_md,
+        layer2_portal_md=portal_md,
+        layer3_md=wisdom_md,
+        layer4_md=learning_md,
+    )
 
-    wisdom = WisdomAgent().run(layer1=layer1, layer2=layer2)
-    learn = LearningAgent().run(layer1=layer1, layer2=layer2, layer3=wisdom)
-
-    integ = IntegrationAgent().run(layer1=layer1, layer2=layer2, layer3=wisdom, layer4=learn)
-
-    full = FullSummary(**integ).dict()
+    full = FullSummary(**{k: v for k, v in integ.items() if k in ['layer1','layer2','layer3','layer4','confidence']}).dict()
+    full['__markdown__'] = integ.get('__markdown__', '')
     return full
 
 
@@ -44,27 +46,28 @@ def run_pipeline_steps(transcript_text: str) -> Dict[str, Any]:
     Returns keys: segments, mirror, lens, portal, layer3, layer4, full
     """
     segs = SegmentationAgent().run(text=transcript_text)
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        mirror_f = pool.submit(MirrorAgent().run, segments=segs)
-        lens_f = pool.submit(lambda: LensAgent().run(segments=[{"id": s.get("id"), "start_min": s.get("start_min"), "end_min": s.get("end_min")} for s in segs], mirror=mirror_f.result()))
-        portal_f = pool.submit(lambda: PortalAgent().run(mirror=mirror_f.result(), lens=lens_f.result()))
-    mirror_out = mirror_f.result()
-    layer1 = mirror_out.get("layer1", {})
-    layer2 = {
-        "mirror_level": mirror_out.get("mirror_level", {}),
-        "lens_level": lens_f.result().get("lens_level", {}),
-        "portal_level": portal_f.result().get("portal_level", {}),
-    }
-    layer3 = WisdomAgent().run(layer1=layer1, layer2=layer2)
-    layer4 = LearningAgent().run(layer1=layer1, layer2=layer2, layer3=layer3)
-    integ = IntegrationAgent().run(layer1=layer1, layer2=layer2, layer3=layer3, layer4=layer4)
-    full = FullSummary(**integ).dict()
+    mirror_md = MirrorAgent().run(segments=segs)
+    lens_md = LensAgent().run(segments=[{"id": s.get("id"), "start_min": s.get("start_min"), "end_min": s.get("end_min")} for s in segs], mirror_markdown=mirror_md)
+    portal_md = PortalAgent().run(mirror_markdown=mirror_md, lens_markdown=lens_md)
+    layer3_md = WisdomAgent().run(layer1_md=mirror_md, layer2_md="\n\n".join([mirror_md, lens_md, portal_md]))
+    layer4_md = LearningAgent().run(layer1_md=mirror_md, layer2_md="\n\n".join([mirror_md, lens_md, portal_md]), layer3_md=layer3_md)
+    integ = IntegrationAgent().run_md(
+        layer1_md=mirror_md,
+        layer2_mirror_md=mirror_md,
+        layer2_lens_md=lens_md,
+        layer2_portal_md=portal_md,
+        layer3_md=layer3_md,
+        layer4_md=layer4_md,
+    )
+    full = FullSummary(**{k: v for k, v in integ.items() if k in ['layer1','layer2','layer3','layer4','confidence']}).dict()
+    full['__markdown__'] = integ.get('__markdown__', '')
     return {
         "segments": segs,
-        "mirror": mirror_out,
-        "lens": layer2.get("lens_level", {}),
-        "portal": layer2.get("portal_level", {}),
-        "layer3": layer3,
-        "layer4": layer4,
+        "mirror_md": mirror_md,
+        "lens_md": lens_md,
+        "portal_md": portal_md,
+        "layer3_md": layer3_md,
+        "layer4_md": layer4_md,
         "full": full,
+        "full_md": integ.get('__markdown__', ''),
     }

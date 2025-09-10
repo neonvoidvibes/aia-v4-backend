@@ -1255,7 +1255,7 @@ def save_transcript(user: SupabaseUser):
     full = steps.get("full", {})
 
     if not dry:
-        md = _full_to_md(full)
+        md = steps.get("full_md") or _full_to_md(full)
         EmbeddingHandler(index_name="river", namespace=f"{agent}").embed_and_upsert(
             content=md,
             metadata={
@@ -1275,11 +1275,12 @@ def save_transcript(user: SupabaseUser):
         # Include compact intermediates for debugging
         payload["steps"] = {
             "segments": steps.get("segments"),
-            "mirror": steps.get("mirror"),
-            "lens": steps.get("lens"),
-            "portal": steps.get("portal"),
-            "layer3": steps.get("layer3"),
-            "layer4": steps.get("layer4"),
+            "mirror_md": steps.get("mirror_md"),
+            "lens_md": steps.get("lens_md"),
+            "portal_md": steps.get("portal_md"),
+            "layer3_md": steps.get("layer3_md"),
+            "layer4_md": steps.get("layer4_md"),
+            "full_md": steps.get("full_md"),
             "full": full,
         }
     return jsonify(payload), 200

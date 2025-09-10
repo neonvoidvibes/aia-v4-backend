@@ -73,16 +73,28 @@ def main():
     if dump_dir:
         os.makedirs(dump_dir, exist_ok=True)
         base = os.path.splitext(os.path.basename(args.text_path or "transcript"))[0]
-        # Write all intermediate JSONs
-        for k in ["segments", "mirror", "lens", "portal", "layer3", "layer4", "full"]:
-            out_path = os.path.join(dump_dir, f"{base}__{k}.json")
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(steps[k], f, ensure_ascii=False, indent=2)
+        # segments json
+        seg_path = os.path.join(dump_dir, f"{base}__segments.json")
+        with open(seg_path, "w", encoding="utf-8") as f:
+            json.dump(steps["segments"], f, ensure_ascii=False, indent=2)
+        written_files.append(seg_path)
+        # Write markdown artifacts
+        for k in ["mirror_md","lens_md","portal_md","layer3_md","layer4_md","full_md"]:
+            if steps.get(k):
+                out_path = os.path.join(dump_dir, f"{base}__{k.replace('_md','')}.md")
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(steps[k])
+                written_files.append(out_path)
+        # Full JSON
+        full_json_path = os.path.join(dump_dir, f"{base}__full.json")
+        with open(full_json_path, "w", encoding="utf-8") as f:
+            json.dump(full, f, ensure_ascii=False, indent=2)
+        written_files.append(full_json_path)
             written_files.append(out_path)
 
     if not args.no_upsert:
         # Upsert final summary as Markdown to a single namespace (agent)
-        md = full_summary_to_markdown(full)
+        md = steps.get("full_md") or full_summary_to_markdown(full)
         # Save local markdown alongside source if possible
         if dump_dir:
             md_path = os.path.join(dump_dir, f"{base}__transcript_summary.md")

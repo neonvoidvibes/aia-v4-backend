@@ -3,6 +3,8 @@ import logging
 from typing import Dict, Any, List
 from .base import Agent
 from ._llm import chat, safe_json_parse
+from .md_parser import parse_full_markdown
+from .md_templates import make_confidence_md
 from .prompts import INTEGRATION_SYS
 from utils.groq_client import integ_model
 
@@ -117,6 +119,23 @@ class IntegrationAgent(Agent):
             "layer4": layer4,
             "confidence": conf,
         })
+
+    def run_md(self, *, layer1_md: str, layer2_mirror_md: str, layer2_lens_md: str, layer2_portal_md: str, layer3_md: str, layer4_md: str) -> Dict[str, Any]:
+        parts = [
+            layer1_md.strip(), layer2_mirror_md.strip(), layer2_lens_md.strip(), layer2_portal_md.strip(), layer3_md.strip(), layer4_md.strip()
+        ]
+        combined_md = "\n\n".join([p for p in parts if p])
+        parsed = parse_full_markdown(combined_md)
+        conf = {
+            'layer1': 0.2 + 0.2*bool(parsed.get('layer1', {}).get('meeting_metadata')) + 0.2*bool(parsed.get('layer1', {}).get('actionable_outputs', {}).get('decisions')),
+            'layer2': 0.2 + 0.2*bool(parsed.get('layer2', {}).get('mirror_level', {}).get('explicit_themes')) + 0.2*bool(parsed.get('layer2', {}).get('lens_level', {}).get('hidden_patterns')) + 0.2*bool(parsed.get('layer2', {}).get('portal_level', {}).get('emergent_possibilities')),
+            'layer3': 0.2 + 0.2*bool(parsed.get('layer3', {}).get('connectedness_patterns', {}).get('self_awareness')),
+            'layer4': 0.2 + 0.2*bool(parsed.get('layer4', {}).get('triple_loop_learning', {}).get('single_loop')),
+        }
+        parsed['confidence'] = conf
+        parsed['__markdown__'] = combined_md + "\n\n" + make_confidence_md(conf)
+        logger.info("tx.integrate.done conf=" + ",".join([f"{k}={v:.2f}" for k,v in conf.items()]))
+        return parsed
 
 
 def _ensure_path(d: Dict[str, Any], path: List[str], default: Any) -> Any:

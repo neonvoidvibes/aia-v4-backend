@@ -13,26 +13,33 @@ logger = logging.getLogger(__name__)
 class LearningAgent(Agent):
     name = "learning"
 
-    def run(self, layer1: Dict[str, Any], layer2: Dict[str, Any], layer3: Dict[str, Any]) -> Dict[str, Any]:
-        payload = {"layer1": layer1, "layer2": layer2, "layer3": layer3}
+    def run(self, layer1_md: str, layer2_md: str, layer3_md: str) -> str:
+        payload = {"layer1_markdown": layer1_md, "layer2_markdown": layer2_md, "layer3_markdown": layer3_md, "template": """
+# Layer 4 — Learning & Development
+### Triple Loop Learning
+- error_correction: <text> | process_improvement: <text>
+- assumption_questioning: <text> | mental_model_shift: <text>
+- context_examination: <text> | paradigm_transformation: <text>
+### Warm Data Patterns
+- relationship_between: a, b | pattern: <text> | systemic_impact: <text>
+- contexts: a, b | emergent_property: <text>
+- system_characteristic: <text> | health_indicator: <text>
+### Knowledge Evolution
+- insight: <text> | application_potential: <text> | integration_path: <text>
+- wisdom_expression: <text> | depth_indicator: <text> | collective_impact: <text>
+- capacity: <text> | development_trajectory: <text>
+"""}
         messages = [
-            {"role": "system", "content": LEARNING_SYS},
+            {"role": "system", "content": "Generate Layer 4 as Markdown from prior layers. Keys in English; content in original language."},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         try:
             import time
             t0 = time.perf_counter()
-            resp = chat(std_model(), messages, max_tokens=1400, temperature=0.1, response_format={"type": "json_object"})
-            data = safe_json_parse(resp)
-            if isinstance(data, dict) and "layer4" in data:
-                dt = (time.perf_counter() - t0) * 1000
-                logger.info(f"tx.agent.done name=LearningAgent ms={dt:.1f} out_chars={len(resp or '')}")
-                return data["layer4"] if "triple_loop_learning" in data["layer4"] else data
+            resp = chat(std_model(), messages, max_tokens=1200, temperature=0.1)
+            dt = (time.perf_counter() - t0) * 1000
+            logger.info(f"tx.agent.done name=LearningAgent ms={dt:.1f} out_chars={len(resp or '')}")
+            return resp or ""
         except Exception as e:
             logger.error(f"LearningAgent LLM error: {e}")
-
-        return {
-            "triple_loop_learning": {"single_loop": [], "double_loop": [], "triple_loop": []},
-            "warm_data_patterns": {"relational_insights": [], "transcontextual_connections": [], "living_systems_recognition": []},
-            "knowledge_evolution": {"insights_captured": [], "wisdom_moments": [], "capacity_building": []},
-        }
+            return "# Layer 4 — Learning & Development\n"
