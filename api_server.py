@@ -1233,6 +1233,9 @@ def stop_recording_route(user: SupabaseUser):
         "recording_status": {"is_recording": False, "is_backend_processing_paused": False} 
     })
 
+from utils.multi_agent_summarizer.pipeline import run_pipeline_steps as _run_pipeline_steps
+from utils.multi_agent_summarizer.markdown import full_summary_to_markdown as _full_to_md
+
 # New: Multi-Agent Transcript Save Endpoint
 @app.post("/api/transcripts/save")
 @supabase_auth_required(agent_required=False)
@@ -1241,17 +1244,20 @@ def save_transcript(user: SupabaseUser):
     agent = data.get("agentName")
     event = data.get("eventId") or "0000"
     s3_key = data.get("s3Key")
+    dry = bool(data.get("dryRun"))
+    return_steps = bool(data.get("returnSteps"))
     if not agent or not s3_key:
         return jsonify({"error": "agentName and s3Key required"}), 400
 
     logger.info(f"tx.save.start {{agent:{agent}, event:{event}, s3Key:{s3_key}}}")
     text = _read_transcript_text_for_ma(s3_key)
-    full = ma_summarize_transcript(agent_name=agent, event_id=event, transcript_text=text, source_identifier=s3_key)
+    steps = _run_pipeline_steps(text)
+    full = steps.get("full", {})
 
-    for layer in ["layer1", "layer2", "layer3", "layer4"]:
-        content = json.dumps(full[layer], ensure_ascii=False)
-        EmbeddingHandler(index_name="river", namespace=f"{agent}.{layer}").embed_and_upsert(
-            content=content,
+    if not dry:
+        md = _full_to_md(full)
+        EmbeddingHandler(index_name="river", namespace=f"{agent}").embed_and_upsert(
+            content=md,
             metadata={
                 "agent_name": agent,
                 "event_id": event,
@@ -1259,12 +1265,24 @@ def save_transcript(user: SupabaseUser):
                 "source": "transcript_summary",
                 "source_type": "transcript",
                 "source_identifier": s3_key,
-                "file_name": f"{layer}.json",
-                "doc_id": f"{s3_key}:{layer}",
+                "file_name": "transcript_summary.md",
+                "doc_id": f"{s3_key}:summary",
             },
         )
 
-    return jsonify({"ok": True, "layers": ["layer1", "layer2", "layer3", "layer4"]}), 200
+    payload = {"ok": True, "upserted": (not dry)}
+    if return_steps:
+        # Include compact intermediates for debugging
+        payload["steps"] = {
+            "segments": steps.get("segments"),
+            "mirror": steps.get("mirror"),
+            "lens": steps.get("lens"),
+            "portal": steps.get("portal"),
+            "layer3": steps.get("layer3"),
+            "layer4": steps.get("layer4"),
+            "full": full,
+        }
+    return jsonify(payload), 200
 
 @app.route('/api/audio-recording/stop', methods=['POST'])
 @supabase_auth_required(agent_required=False)

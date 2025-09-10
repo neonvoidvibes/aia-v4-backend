@@ -19,7 +19,8 @@ except Exception:
 
 sys.path.append('.')
 
-from utils.multi_agent_summarizer.pipeline import summarize_transcript
+from utils.multi_agent_summarizer.pipeline import summarize_transcript, run_pipeline_steps
+from utils.multi_agent_summarizer.markdown import full_summary_to_markdown
 from utils.embedding_handler import EmbeddingHandler
 
 
@@ -41,6 +42,8 @@ def main():
     p.add_argument("--event", default="0000")
     p.add_argument("--s3-key", required=True)
     p.add_argument("--text-path", help="optional local file override")
+    p.add_argument("--dump-dir", help="optional directory to dump intermediate JSON outputs")
+    p.add_argument("--no-upsert", action="store_true", help="do not upsert to Pinecone")
     args = p.parse_args()
 
     _preflight()
@@ -55,11 +58,21 @@ def main():
         text = _read_transcript_text_for_ma(args.s3_key)
         source_id = args.s3_key
 
-    full = summarize_transcript(args.agent, args.event, text, source_id)
+    steps = run_pipeline_steps(text)
+    full = steps["full"]
 
-    for layer in ["layer1", "layer2", "layer3", "layer4"]:
-        EmbeddingHandler(index_name="river", namespace=f"{args.agent}.{layer}").embed_and_upsert(
-            content=json.dumps(full[layer], ensure_ascii=False),
+    # Optional dump of intermediates
+    if args.dump_dir:
+        os.makedirs(args.dump_dir, exist_ok=True)
+        for k in ["segments", "mirror", "lens", "portal", "layer3", "layer4", "full"]:
+            with open(os.path.join(args.dump_dir, f"{k}.json"), "w", encoding="utf-8") as f:
+                json.dump(steps[k], f, ensure_ascii=False, indent=2)
+
+    if not args.no_upsert:
+        # Upsert final summary as Markdown to a single namespace (agent)
+        md = full_summary_to_markdown(full)
+        EmbeddingHandler(index_name="river", namespace=f"{args.agent}").embed_and_upsert(
+            content=md,
             metadata={
                 "agent_name": args.agent,
                 "event_id": args.event,
@@ -67,12 +80,12 @@ def main():
                 "source": "transcript_summary",
                 "source_type": "transcript",
                 "source_identifier": source_id,
-                "file_name": f"{layer}.json",
-                "doc_id": f"{source_id}:{layer}",
+                "file_name": "transcript_summary.md",
+                "doc_id": f"{source_id}:summary",
             },
         )
 
-    print(json.dumps({"ok": True, "layers": ["layer1", "layer2", "layer3", "layer4"]}))
+    print(json.dumps({"ok": True, "upserted": (not args.no_upsert), "dump_dir": args.dump_dir or None}))
 
 
 if __name__ == "__main__":
