@@ -120,7 +120,52 @@ class IntegrationAgent(Agent):
             "confidence": conf,
         })
 
-    def run_md(self, *, layer1_md: str, layer2_mirror_md: str, layer2_lens_md: str, layer2_portal_md: str, layer3_md: str, layer4_md: str) -> Dict[str, Any]:
+    def run_md(self, *, context_md: str, business_reality_md: str, organizational_dynamics_md: str, 
+               strategic_implications_md: str, next_actions_md: str, reality_check_md: str) -> str:
+        """New business-first integration that combines all layers into executive summary.
+        Returns final markdown output focused on business value.
+        """
+        
+        payload = {
+            "context_content": context_md[:2000],
+            "business_reality_content": business_reality_md[:4000],
+            "organizational_dynamics_content": organizational_dynamics_md[:3000],
+            "strategic_implications_content": strategic_implications_md[:3000], 
+            "next_actions_content": next_actions_md[:2500],
+            "reality_check_content": reality_check_md[:2000]
+        }
+        
+        try:
+            from ._llm import chat
+            from utils.groq_client import std_model
+            
+            integration = chat(
+                std_model(),
+                [
+                    {"role": "system", "content": INTEGRATION_SYS},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                max_tokens=3000,
+                temperature=0.1,
+            )
+            
+            return integration or "# Executive Summary\n(Integration failed)\n"
+            
+        except Exception as e:
+            logger.error(f"IntegrationAgent run_md error: {e}")
+            # Fallback: simple concatenation
+            parts = [
+                context_md.strip(),
+                business_reality_md.strip(), 
+                organizational_dynamics_md.strip(),
+                strategic_implications_md.strip(),
+                next_actions_md.strip(),
+                reality_check_md.strip()
+            ]
+            return "\n\n".join([p for p in parts if p])
+
+    # Legacy method for backward compatibility
+    def run_md_legacy(self, *, layer1_md: str, layer2_mirror_md: str, layer2_lens_md: str, layer2_portal_md: str, layer3_md: str, layer4_md: str) -> Dict[str, Any]:
         parts = [
             layer1_md.strip(), layer2_mirror_md.strip(), layer2_lens_md.strip(), layer2_portal_md.strip(), layer3_md.strip(), layer4_md.strip()
         ]
