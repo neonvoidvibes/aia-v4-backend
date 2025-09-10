@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class ContextAgent(Agent):
     name = "context"
 
-    def run(self, segments: List[Dict[str, Any]], repetition_analysis: Dict[str, Any] = None) -> str:
+    def run(self, segments: List[Dict[str, Any]], repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Extract business context to set clear context for other agents.
         Returns markdown only. Focus on business purpose, stakeholders, constraints.
         """
@@ -50,7 +50,7 @@ class ContextAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=1200,
-                temperature=0.3,
+                temperature=0.1,  # Lower temperature for better instruction following
             )
             
             if not context or context.strip() == "":
@@ -61,12 +61,25 @@ class ContextAgent(Agent):
                 else:
                     return "# Business Context\n(No context extracted - empty or invalid segments)\n"
             
+            # Prepend datetime if available
+            if meeting_datetime and context:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if context.startswith("# Business Context"):
+                    # Insert after the header
+                    lines = context.split('\n', 1)
+                    if len(lines) == 2:
+                        context = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        context = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    context = f"{datetime_header}{context}"
+            
             return context
         except Exception as e:
             logger.error(f"ContextAgent error: {e}")
             return "# Business Context\n(Error extracting context)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str, repetition_analysis: Dict[str, Any] = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], previous_output: str, feedback: str, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Refine previous context analysis based on reality check feedback."""
         
         # Combine segments for reference
@@ -94,7 +107,22 @@ class ContextAgent(Agent):
                 max_tokens=1400,
                 temperature=0.3,
             )
-            return refined_context or previous_output  # Fallback to previous if refinement fails
+            output_content = refined_context or previous_output  # Fallback to previous if refinement fails
+            
+            # Prepend datetime if available
+            if meeting_datetime and output_content:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if output_content.startswith("# Business Context"):
+                    # Insert after the header
+                    lines = output_content.split('\n', 1)
+                    if len(lines) == 2:
+                        output_content = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        output_content = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    output_content = f"{datetime_header}{output_content}"
+            
+            return output_content
         except Exception as e:
             logger.error(f"ContextAgent refinement error: {e}")
             return previous_output

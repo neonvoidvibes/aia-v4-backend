@@ -14,7 +14,7 @@ class WisdomLearningAgent(Agent):
     name = "wisdom_learning"
 
     def run(self, segments: List[Dict[str, Any]], context_md: str, business_reality_md: str, 
-            organizational_dynamics_md: str, strategic_implications_md: str, repetition_analysis: Dict[str, Any] = None) -> str:
+            organizational_dynamics_md: str, strategic_implications_md: str, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Extract wisdom and learning insights using analytical frameworks from previous layers."""
         
         # Combine segments for reference
@@ -42,14 +42,29 @@ class WisdomLearningAgent(Agent):
                 max_tokens=2500,
                 temperature=0.3,
             )
-            return wisdom_learning or "# Layer 5 — Wisdom and Learning\n(No wisdom insights generated)\n"
+            output_content = wisdom_learning or "# Layer 5 — Wisdom and Learning\n(No wisdom insights generated)\n"
+            
+            # Prepend datetime if available
+            if meeting_datetime and output_content:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if output_content.startswith("# Layer 5 — "):
+                    # Insert after the header
+                    lines = output_content.split('\n', 1)
+                    if len(lines) == 2:
+                        output_content = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        output_content = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    output_content = f"{datetime_header}{output_content}"
+            
+            return output_content
         except Exception as e:
             logger.error(f"WisdomLearningAgent error: {e}")
             return "# Layer 5 — Wisdom and Learning\n(Error generating wisdom insights)\n"
 
     def refine(self, segments: List[Dict[str, Any]], context_md: str, business_reality_md: str,
                organizational_dynamics_md: str, strategic_implications_md: str, previous_output: str, 
-               feedback: str, repetition_analysis: Dict[str, Any] = None) -> str:
+               feedback: str, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Refine previous wisdom and learning analysis based on reality check feedback."""
         
         # Combine segments for reference  
@@ -80,7 +95,22 @@ class WisdomLearningAgent(Agent):
                 max_tokens=2500,
                 temperature=0.3,
             )
-            return refined_wisdom or previous_output
+            output_content = refined_wisdom or previous_output
+            
+            # Prepend datetime if available
+            if meeting_datetime and output_content:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if output_content.startswith("# Layer 5 — "):
+                    # Insert after the header
+                    lines = output_content.split('\n', 1)
+                    if len(lines) == 2:
+                        output_content = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        output_content = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    output_content = f"{datetime_header}{output_content}"
+            
+            return output_content
         except Exception as e:
             logger.error(f"WisdomLearningAgent refinement error: {e}")
             return previous_output

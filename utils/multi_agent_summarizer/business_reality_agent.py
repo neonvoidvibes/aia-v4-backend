@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class BusinessRealityAgent(Agent):
     name = "business_reality"
 
-    def run(self, segments: List[Dict[str, Any]], context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
+    def run(self, segments: List[Dict[str, Any]], context_md: str | None = None, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Extract explicit business content: decisions, tasks, commitments, constraints.
         Returns markdown focusing on concrete business realities discussed.
         """
@@ -38,6 +38,7 @@ class BusinessRealityAgent(Agent):
         }
         
         try:
+            logger.debug(f"BusinessRealityAgent requesting analysis for {len(segments)} segments, combined_text length: {len(combined_text)}")
             business_reality = chat(
                 std_model(),
                 [
@@ -45,9 +46,27 @@ class BusinessRealityAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2500,
-                temperature=0.3,
+                temperature=0.1,  # Lower temperature for better instruction following
             )
-            return business_reality or "# Layer 1 — Business Reality\n(No business content extracted)\n"
+            
+            if not business_reality or business_reality.strip() == "":
+                logger.warning(f"BusinessRealityAgent received empty response. Payload keys: {list(payload.keys())}, segments count: {len(segments)}")
+                return "# Layer 1 — Business Reality\n(No business content extracted - empty API response)\n"
+            
+            # Prepend datetime if available
+            if meeting_datetime and business_reality:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if business_reality.startswith("# Layer 1 — Business Reality"):
+                    # Insert after the header
+                    lines = business_reality.split('\n', 1)
+                    if len(lines) == 2:
+                        business_reality = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        business_reality = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    business_reality = f"{datetime_header}{business_reality}"
+            
+            return business_reality
         except Exception as e:
             logger.error(f"BusinessRealityAgent error: {e}")
             return "# Layer 1 — Business Reality\n(Error extracting business content)\n"

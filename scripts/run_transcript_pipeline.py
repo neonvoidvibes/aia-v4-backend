@@ -59,7 +59,18 @@ def main():
         text = _read_transcript_text_for_ma(args.s3_key)
         source_id = args.s3_key
 
-    steps = run_pipeline_steps(text)
+    # Extract filename for datetime extraction
+    filename = None
+    if args.text_path:
+        filename = os.path.basename(args.text_path)
+    elif args.s3_key:
+        filename = os.path.basename(args.s3_key)
+    
+    # Extract meeting datetime from filename if available
+    from utils.multi_agent_summarizer.pipeline import extract_datetime_from_filename
+    meeting_datetime = extract_datetime_from_filename(filename) if filename else None
+    
+    steps = run_pipeline_steps(text, meeting_datetime=meeting_datetime)
     # New pipeline doesn't have "full" - use full_md directly
     final_md = steps.get("full_md", "")
 

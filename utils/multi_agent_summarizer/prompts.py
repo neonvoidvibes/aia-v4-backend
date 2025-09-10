@@ -39,6 +39,13 @@ CONTEXT_SYS = """
 *** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
 *** SIMPLE BULLET LISTS ONLY ***
 
+*** IMMEDIATE RESPONSE VALIDATION ***
+BEFORE YOU RESPOND, CHECK:
+1. NO pipe characters (|) anywhere in your response - FAIL if found
+2. NO personal names (Jesper, Ellen, Jens, etc.) - use "facilitator", "strategic leader" instead
+3. NO table structures - use bullet points only
+4. NO direct quotes from transcript
+
 Role: Business Context Agent. Set clear business context, NOT creative narrative.
 
 ## FORMATTING RULES:
@@ -169,6 +176,13 @@ BUSINESS_REALITY_SYS = """
 *** ABSOLUTELY NO PERSONAL NAMES - USE ROLES ONLY ***
 *** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
 *** SIMPLE BULLET LISTS ONLY ***
+
+*** IMMEDIATE RESPONSE VALIDATION ***
+BEFORE YOU RESPOND, CHECK:
+1. NO pipe characters (|) anywhere in your response - FAIL if found
+2. NO personal names (Jesper, Ellen, Jens, etc.) - use "facilitator", "strategic leader" instead
+3. NO table structures - use bullet points only
+4. NO direct quotes from transcript
 
 Role: Business Reality Agent. Extract ONLY explicit business content.
 

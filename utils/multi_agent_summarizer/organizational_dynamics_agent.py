@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class OrganizationalDynamicsAgent(Agent):
     name = "organizational_dynamics"
 
-    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
+    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Identify organizational patterns from segments, business reality content.
         Focus on communication patterns, power dynamics, tensions.
         """
@@ -41,12 +41,27 @@ class OrganizationalDynamicsAgent(Agent):
                 max_tokens=2000,
                 temperature=0.3,
             )
-            return dynamics or "# Layer 2 — Organizational Dynamics\n(No patterns identified)\n"
+            output_content = dynamics or "# Layer 2 — Organizational Dynamics\n(No patterns identified)\n"
+            
+            # Prepend datetime if available
+            if meeting_datetime and output_content:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if output_content.startswith("# Layer 2 — "):
+                    # Insert after the header
+                    lines = output_content.split('\n', 1)
+                    if len(lines) == 2:
+                        output_content = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        output_content = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    output_content = f"{datetime_header}{output_content}"
+            
+            return output_content
         except Exception as e:
             logger.error(f"OrganizationalDynamicsAgent error: {e}")
             return "# Layer 2 — Organizational Dynamics\n(Error analyzing dynamics)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Refine previous organizational dynamics analysis based on reality check feedback."""
         
         # Combine segments for reference
@@ -76,7 +91,22 @@ class OrganizationalDynamicsAgent(Agent):
                 max_tokens=2200,
                 temperature=0.3,
             )
-            return refined_dynamics or previous_output
+            output_content = refined_dynamics or previous_output
+            
+            # Prepend datetime if available
+            if meeting_datetime and output_content:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if output_content.startswith("# Layer 2 — "):
+                    # Insert after the header
+                    lines = output_content.split('\n', 1)
+                    if len(lines) == 2:
+                        output_content = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        output_content = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    output_content = f"{datetime_header}{output_content}"
+            
+            return output_content
         except Exception as e:
             logger.error(f"OrganizationalDynamicsAgent refinement error: {e}")
             return previous_output

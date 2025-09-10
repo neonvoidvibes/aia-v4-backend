@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class StrategicImplicationsAgent(Agent):
     name = "strategic_implications"
 
-    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
+    def run(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Assess strategic implications from segments, business reality and organizational dynamics.
         Focus on business impact, alignment, risks, and opportunities.
         """
@@ -42,12 +42,27 @@ class StrategicImplicationsAgent(Agent):
                 max_tokens=2200,
                 temperature=0.3,
             )
-            return implications or "# Layer 3 — Strategic Implications\n(No strategic insights identified)\n"
+            output_content = implications or "# Layer 3 — Strategic Implications\n(No strategic insights identified)\n"
+            
+            # Prepend datetime if available
+            if meeting_datetime and output_content:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if output_content.startswith("# Layer 3 — "):
+                    # Insert after the header
+                    lines = output_content.split('\n', 1)
+                    if len(lines) == 2:
+                        output_content = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        output_content = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    output_content = f"{datetime_header}{output_content}"
+            
+            return output_content
         except Exception as e:
             logger.error(f"StrategicImplicationsAgent error: {e}")
             return "# Layer 3 — Strategic Implications\n(Error analyzing implications)\n"
 
-    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None) -> str:
+    def refine(self, segments: List[Dict[str, Any]], business_reality_md: str, organizational_dynamics_md: str, previous_output: str, feedback: str, context_md: str | None = None, repetition_analysis: Dict[str, Any] = None, meeting_datetime: str = None) -> str:
         """Refine previous strategic implications analysis based on reality check feedback."""
         
         payload = {
@@ -71,7 +86,22 @@ class StrategicImplicationsAgent(Agent):
                 max_tokens=2500,
                 temperature=0.3,
             )
-            return refined_implications or previous_output
+            output_content = refined_implications or previous_output
+            
+            # Prepend datetime if available
+            if meeting_datetime and output_content:
+                datetime_header = f"**Meeting Date/Time:** {meeting_datetime}\n\n"
+                if output_content.startswith("# Layer 3 — "):
+                    # Insert after the header
+                    lines = output_content.split('\n', 1)
+                    if len(lines) == 2:
+                        output_content = f"{lines[0]}\n\n{datetime_header}{lines[1]}"
+                    else:
+                        output_content = f"{lines[0]}\n\n{datetime_header}"
+                else:
+                    output_content = f"{datetime_header}{output_content}"
+            
+            return output_content
         except Exception as e:
             logger.error(f"StrategicImplicationsAgent refinement error: {e}")
             return previous_output
