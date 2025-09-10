@@ -18,11 +18,21 @@ class ContextAgent(Agent):
         """Extract business context to set clear context for other agents.
         Returns markdown only. Focus on business purpose, stakeholders, constraints.
         """
+        # Validate segments have content
+        if not segments or not any(s.get('text', '').strip() for s in segments):
+            logger.warning(f"ContextAgent received empty or invalid segments: {len(segments) if segments else 0} segments")
+            return "# Business Context\n(No content in segments to analyze)\n"
+        
         # Combine all segments for context analysis
         combined_text = "\n\n".join([
             f"Segment {s.get('id', '')} ({s.get('start_min', 0)}-{s.get('end_min', 0)} min): {s.get('text', '')}"
-            for s in segments
+            for s in segments if s.get('text', '').strip()  # Only include segments with actual text
         ])
+        
+        # Additional validation after combining
+        if not combined_text.strip():
+            logger.warning("ContextAgent: combined_text is empty after filtering segments")
+            return "# Business Context\n(No valid text content found in segments after filtering)\n"
         
         payload = {
             "segments": segments,
@@ -32,6 +42,7 @@ class ContextAgent(Agent):
         }
         
         try:
+            logger.debug(f"ContextAgent requesting analysis for {len(segments)} segments with combined_text length: {len(combined_text)}")
             context = chat(
                 std_model(),
                 [
@@ -41,7 +52,16 @@ class ContextAgent(Agent):
                 max_tokens=1200,
                 temperature=0.3,
             )
-            return context or "# Business Context\n(No context extracted)\n"
+            
+            if not context or context.strip() == "":
+                logger.warning(f"ContextAgent received empty response. Payload keys: {list(payload.keys())}, segments count: {len(segments)}")
+                # Try to extract any business content manually as fallback
+                if any(seg.get('text', '').strip() for seg in segments):
+                    return "# Business Context\n\n- **Meeting content**: Business discussion detected but context extraction failed - manual review recommended\n"
+                else:
+                    return "# Business Context\n(No context extracted - empty or invalid segments)\n"
+            
+            return context
         except Exception as e:
             logger.error(f"ContextAgent error: {e}")
             return "# Business Context\n(Error extracting context)\n"

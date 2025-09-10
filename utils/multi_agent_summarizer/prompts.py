@@ -97,45 +97,45 @@ Reference the provided repetition_analysis.exclusion_instructions to identify sp
 
 # Business Context
 
-## Meeting Purpose and Goals
-- **Objectives**: [what they're trying to achieve - only if explicitly mentioned]
-- **Meeting type**: [only if clear from content]  
-- **Timeline**: [specific dates/deadlines mentioned]
+- **Meeting purpose**
+  - [What they're trying to achieve - only if explicitly mentioned]
+  - [Meeting type or format if clear from content]
+  - [Specific timeline: dates, deadlines, milestones mentioned]
 
-## Key Stakeholders
-- **Roles present**: [facilitator, project manager, etc. - NO NAMES]
-- **Decision makers**: [who has authority to decide]
-- **Implementers**: [who will do the work]
+- **Key participants**
+  - [Roles present: facilitator, project manager, etc. - NO NAMES]
+  - [Decision makers: who has authority to decide]
+  - [Implementers: who will do the work]
 
-## Chronological Flow (COMPREHENSIVE)
-- **Opening**: [how meeting started, first topic raised, initial energy and focus]
-- **Phase 1**: [first major topic, discussion flow, participant patterns, key points made]
-- **Phase 2**: [second major topic, how discussion evolved, new perspectives emerged, transitions]
-- **Phase 3**: [third major topic or transition, changes in dynamics, energy shifts]
-- **Phase 4**: [fourth topic if applicable, deeper discussions, clarifications]
-- **Decision points**: [when decisions were made or direction changed, who influenced, what triggered changes]
-- **Closing**: [how meeting concluded, what remains open, next steps discussion, final agreements]
+- **Meeting flow**
+  - [Opening: how meeting started, first topic raised, initial energy and focus]
+  - [Main discussion: first major topic, discussion flow, participant patterns, key points made]
+  - [Evolution: how discussion evolved, new perspectives emerged, transitions]
+  - [Decision points: when decisions were made or direction changed, who influenced]
+  - [Closing: how meeting concluded, what remains open, next steps discussion]
 
-## Detailed Content Analysis
-- **Core themes discussed**: [specific topics with full context and development]
-- **Different perspectives that emerged**: [variations in viewpoint and approach with reasoning]
-- **Decisions and directions**: [concrete decisions with background, motivation, and implications]
-- **Challenges identified**: [problems or obstacles raised with context]
-- **Resources and tools mentioned**: [specific tools, methods, people, technologies discussed]
-- **Process discussions**: [how work will be done, methodologies, workflows]
-- **Future planning**: [what happens next, follow-up sessions, preparation needed]
+- **Core themes discussed**
+  - [Specific topics with full context and development]
+  - [Different perspectives that emerged: variations in viewpoint with reasoning]
+  - [Concrete decisions with background, motivation, and implications]
 
-## Business Environment
-- **Budget considerations**: [any monetary discussions or constraints]
-- **Resource availability**: [people, time, technology mentioned]
-- **Dependencies**: [what they're waiting for or blocked by]
-- **External factors**: [outside influences or requirements]
+- **Challenges and resources**
+  - [Problems or obstacles raised with context]
+  - [Specific tools, methods, technologies discussed]
+  - [Process discussions: how work will be done, methodologies, workflows]
+  - [Future planning: what happens next, follow-up sessions, preparation needed]
 
-## Current Situation Assessment
-- **Primary challenge**: [main challenge they're addressing]
-- **Business importance**: [why this matters to the organization]
-- **Urgency indicators**: [time pressure signals or deadlines]
-- **Success criteria**: [how they'll measure progress or completion]
+- **Business constraints**
+  - [Budget considerations: any monetary discussions or constraints]
+  - [Resource availability: people, time, technology mentioned]
+  - [Dependencies: what they're waiting for or blocked by]
+  - [External factors: outside influences or requirements]
+
+- **Current situation**
+  - [Primary challenge: main challenge they're addressing]
+  - [Business importance: why this matters to the organization]
+  - [Urgency indicators: time pressure signals or deadlines]
+  - [Success criteria: how they'll measure progress or completion]
 
 IMPORTANT: Even with noisy transcripts, extract ANY valid business context found. Don't return empty output unless absolutely NO business content exists.
 
@@ -198,35 +198,42 @@ OUTPUT (Markdown only):
 
 ## REPETITION EXCLUSION:
 Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when extracting business decisions and tasks - they are not real conversation patterns.
-# Layer 1 — Business Reality
+# Layer 1 — Business Reality (Refined)
 
-### Meeting Facts
-- **Purpose**: [exact purpose stated]
-- **Duration**: [actual meeting length]  
-- **Type**: [planning/review/decision/etc.]
-- **Participants**: [number only, no names]
+- **Meeting facts**
+  - [Exact purpose stated]
+  - [Actual meeting length and type: planning/review/decision/etc.]
+  - [Number of participants - no names]
 
-### Concrete Decisions
-- [exact decision made, why/how discussed, urgency level]
+- **Concrete decisions**
+  - [Exact decision made, why/how discussed, urgency level]
+  - [Authority level: who has decision power, approval needed]
+  - [Implementation scope: what this affects, timeline mentioned]
 
-### Specific Tasks
-- [exact task stated, role owner, deadline, dependencies]
+- **Specific tasks**
+  - [Exact task stated, role owner, deadline, dependencies]
+  - [Resource requirements: what's needed to complete]
+  - [Priority level: urgency or sequence mentioned]
 
-### Commitments
-- [follow-up meetings with purpose and timing]
-- [deliverables to be produced]
-- [resource needs: budget, people, tools mentioned]
+- **Commitments made**
+  - [Follow-up meetings: purpose and timing]
+  - [Deliverables to be produced with specific expectations]
+  - [Resource allocation: budget, people, tools mentioned]
 
-### Key Topics Discussed
-- [subject matter, how discussed, outcome or next step]
+- **Key topics discussed**
+  - [Subject matter, how discussed, outcome or next step]
+  - [Different viewpoints presented and resolutions reached]
+  - [Areas requiring further discussion or clarification]
 
-### Constraints Mentioned
-- [budget: specific amounts or concerns]
-- [timeline: specific dates or time pressures]  
-- [resources: people, technology, other limitations]
+- **Constraints mentioned**
+  - [Budget: specific amounts or financial concerns]
+  - [Timeline: specific dates or time pressures]  
+  - [Resources: people, technology, other limitations]
 
-### Immediate Next Actions
-- [concrete actionable steps with role owners and timeframes]
+- **Immediate next actions**
+  - [Concrete actionable steps with role owners and timeframes]
+  - [Prerequisites or dependencies that must be resolved first]
+  - [Follow-up coordination required between parties]
 
 Rules:
 - Extract ONLY what was explicitly said
@@ -299,23 +306,32 @@ OUTPUT (Markdown in source language):
 
 ## REPETITION EXCLUSION:
 Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when analyzing organizational patterns - they are not real communication dynamics.
-# Layer 2 — Organizational Dynamics
+# Layer 2 — Organizational Dynamics (Refined)
 
-### Communication Patterns  
-- [recurring communication issue and how it affects business outcomes]
+- **Communication patterns**
+  - [Recurring communication issue and how it affects business outcomes]
+  - [Information flow: how decisions and updates are shared]
+  - [Clarity levels: areas where understanding was clear vs. confused]
 
-### Power Dynamics
-- [who defers to whom based on discussion]
-- [where decisions get stuck]
+- **Power dynamics**
+  - [Who defers to whom based on discussion]
+  - [Where decisions get stuck or need approval]
+  - [Authority patterns: who drives direction vs. who follows]
 
-### Unspoken Tensions
-- [what's not being said directly and how it affects work]
+- **Unspoken tensions**
+  - [What's not being said directly and how it affects work]
+  - [Frustrations or concerns expressed indirectly]
+  - [Competing priorities or approaches not openly discussed]
 
-### Organizational Gaps  
-- [disconnect between strategy and execution and how it shows up]
+- **Organizational gaps**
+  - [Disconnect between strategy and execution and how it shows up]
+  - [Missing processes or unclear responsibilities]
+  - [Coordination challenges between different groups or levels]
 
-### Recurring Themes
-- [pattern across multiple segments and underlying issue]
+- **Recurring themes**
+  - [Pattern across multiple segments and underlying issue]
+  - [Consistent challenges that keep surfacing]
+  - [Organizational strengths that repeatedly enable progress]
 
 Rules:
 - Base patterns on Business Reality content but don't include quotes or transcript references
@@ -386,26 +402,27 @@ OUTPUT (Markdown in source language):
 
 ## REPETITION EXCLUSION:
 Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when developing strategic implications - they are not real business patterns.
-# Layer 3 — Strategic Implications
+# Layer 3 — Strategic Implications (Refined)
 
-### Business Impact Assessment
-- **Current state**: [where the business/team stands]
-- **Key challenges**: [strategic challenges identified] 
-- **Capability gaps**: [what's missing to achieve goals]
+- **Business impact assessment**
+  - [Current state: where the business/team stands]
+  - [Key challenges: strategic challenges identified] 
+  - [Capability gaps: what's missing to achieve goals]
 
-### Alignment Analysis  
-- **Strategic alignment**: [how discussed items connect to broader goals]
-- **Resource alignment**: [whether resources match priorities]
-- **Timeline alignment**: [realistic assessment of timing]
+- **Alignment analysis**
+  - [Strategic alignment: how discussed items connect to broader goals]
+  - [Resource alignment: whether resources match priorities]
+  - [Timeline alignment: how timing affects strategic execution]
 
-### Risk Assessment
-- [operational risks to day-to-day operations and potential solutions discussed]
-- [strategic risks to long-term goals and how to address]
+- **Risk assessment**
+  - [Operational risks to day-to-day operations and potential solutions discussed]
+  - [Strategic risks to long-term goals and how to address]
+  - [Communication risks: what could go wrong with coordination]
 
-### Opportunity Identification
-- **Immediate opportunities**: [quick wins mentioned or implied]
-- **Strategic opportunities**: [longer-term potential]
-- **Resource requirements**: [what would be needed to pursue]
+- **Opportunity identification**
+  - [Immediate opportunities: quick wins mentioned or implied]
+  - [Strategic opportunities: longer-term potential]
+  - [Resource requirements: what would be needed to pursue]
 
 Rules:
 - Base insights on content from earlier layers but don't include quotes or references
@@ -547,33 +564,43 @@ OUTPUT (Markdown in source language):
 
 ## REPETITION EXCLUSION:
 Reference the provided repetition_analysis.exclusion_instructions to identify specific phrases that are Whisper AI transcription artifacts. These repeated phrases must be completely ignored when applying analytical frameworks - they are not real wisdom patterns.
-# Layer 5 — Wisdom and Learning
+# Layer 4 — Wisdom and Learning (Refined)
 
-## Relational Patterns (Warm Data Labs)
-- [Cross-context patterns and living system dynamics]
+- **Relational patterns** (Warm Data Labs)
+  - [Cross-context patterns observed in participant interactions]
+  - [How existing relationships between participants enabled or constrained today's outcomes]
+  - [Emergent qualities that arose from group interaction during this discussion]
 
-## Attention and Meaning-Making (Relevance Realization)
-- [How cognitive resources are allocated and meaning emerges]
+- **Attention and meaning-making** (Relevance Realization)
+  - [How participants actually allocated cognitive resources and where meaning emerged in this conversation]
+  - [What participants focused on vs. what they overlooked during the discussion]
+  - [Observed patterns of sense-making and interpretation that occurred]
 
-## Learning Levels (Triple Loop Learning)
-- **Single Loop**: [what corrections are being made]
-- **Double Loop**: [what assumptions are questioned]
-- **Triple Loop**: [what contexts create assumptions]
+- **Learning levels** (Triple Loop Learning)
+  - [Single Loop: what corrections were made to current approaches during this discussion]
+  - [Double Loop: what assumptions were questioned or challenged in the conversation]
+  - [Triple Loop: what contexts that create assumptions were examined or revealed]
 
-## Perspective Integration (Integral Theory)
-- **Individual Interior**: [beliefs, values expressed]
-- **Individual Exterior**: [behaviors, actions taken]
-- **Collective Interior**: [shared culture, meaning]
-- **Collective Exterior**: [systems, structures discussed]
+- **Perspective integration** (Integral Theory)
+  - [Individual Interior: beliefs and values that were expressed in this conversation]
+  - [Individual Exterior: behaviors and actions that were taken or observed]
+  - [Collective Interior: shared culture and meaning that emerged from the group]
+  - [Collective Exterior: systems and structures that were discussed or referenced]
 
-## Adaptive Purpose Evolution (Flexible Purposing)
-- [How goals and purposes are evolving through discussion]
+- **Adaptive purpose evolution** (Flexible Purposing)
+  - [How goals and purposes evolved during this specific discussion]
+  - [Priorities and value shifts that emerged in this conversation]
+  - [Current purpose alignment observed across different stakeholders]
 
-## Developmental Insights (Complexity Levels)
-- [Different meaning-making systems and integration opportunities]
+- **Developmental insights** (Complexity Levels)
+  - [Different meaning-making systems that were evident in participant contributions]
+  - [Levels of organizational and individual development observed in this discussion]
+  - [Demonstrated capacity for handling complexity and ambiguity during the conversation]
 
-## Agency and Ethics (Sovereignty)
-- [Opportunities for ethical choice and responsible action]
+- **Agency and ethics** (Sovereignty)
+  - [Opportunities for ethical choice and responsible action that were discussed or became apparent]
+  - [Areas where participants demonstrated or could exercise meaningful agency in this context]
+  - [Ethical considerations and stewardship opportunities that emerged from the conversation]
 
 Rules:
 - Base insights on content from all previous layers 
@@ -600,7 +627,7 @@ INPUT:
 - Reality check feedback relevant to wisdom and learning
 
 OUTPUT (Markdown in source language):
-# Layer 5 — Wisdom and Learning (Refined)
+# Layer 4 — Wisdom and Learning (Refined)
 
 [Same structure as original wisdom and learning prompt]
 
