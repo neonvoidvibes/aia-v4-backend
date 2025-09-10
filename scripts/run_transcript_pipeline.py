@@ -4,6 +4,7 @@ import json
 import sys
 import os
 from pathlib import Path
+import logging
 
 # Load env early from backend .env (and project root .env as fallback)
 try:
@@ -37,6 +38,7 @@ def _preflight():
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
     p = argparse.ArgumentParser()
     p.add_argument("--agent", required=True)
     p.add_argument("--event", default="0000")

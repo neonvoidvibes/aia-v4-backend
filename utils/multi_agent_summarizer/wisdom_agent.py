@@ -20,9 +20,13 @@ class WisdomAgent(Agent):
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         try:
+            import time
+            t0 = time.perf_counter()
             resp = chat(std_model(), messages, max_tokens=1400, temperature=0.1)
             data = safe_json_parse(resp)
             if isinstance(data, dict) and "layer3" in data:
+                dt = (time.perf_counter() - t0) * 1000
+                logger.info(f"tx.agent.done name=WisdomAgent ms={dt:.1f} out_chars={len(resp or '')}")
                 return data["layer3"] if "connectedness_patterns" in data["layer3"] else data
         except Exception as e:
             logger.error(f"WisdomAgent LLM error: {e}")
@@ -45,4 +49,3 @@ class WisdomAgent(Agent):
                 "agency_manifestation": [],
             },
         }
-

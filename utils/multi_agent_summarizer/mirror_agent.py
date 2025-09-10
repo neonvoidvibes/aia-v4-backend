@@ -20,9 +20,13 @@ class MirrorAgent(Agent):
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         try:
+            import time
+            t0 = time.perf_counter()
             resp = chat(std_model(), messages, max_tokens=1600, temperature=0.1)
             data = safe_json_parse(resp)
             if isinstance(data, dict) and "layer1" in data and "mirror_level" in data:
+                dt = (time.perf_counter() - t0) * 1000
+                logger.info(f"tx.agent.done name=MirrorAgent ms={dt:.1f} out_chars={len(resp or '')}")
                 return data
         except Exception as e:
             logger.error(f"MirrorAgent LLM error: {e}")
@@ -46,4 +50,3 @@ class MirrorAgent(Agent):
                 "participation_patterns": {"energy_shifts": [], "engagement_distribution": "unknown"},
             },
         }
-

@@ -20,9 +20,13 @@ class LearningAgent(Agent):
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         try:
+            import time
+            t0 = time.perf_counter()
             resp = chat(std_model(), messages, max_tokens=1400, temperature=0.1)
             data = safe_json_parse(resp)
             if isinstance(data, dict) and "layer4" in data:
+                dt = (time.perf_counter() - t0) * 1000
+                logger.info(f"tx.agent.done name=LearningAgent ms={dt:.1f} out_chars={len(resp or '')}")
                 return data["layer4"] if "triple_loop_learning" in data["layer4"] else data
         except Exception as e:
             logger.error(f"LearningAgent LLM error: {e}")
@@ -32,4 +36,3 @@ class LearningAgent(Agent):
             "warm_data_patterns": {"relational_insights": [], "transcontextual_connections": [], "living_systems_recognition": []},
             "knowledge_evolution": {"insights_captured": [], "wisdom_moments": [], "capacity_building": []},
         }
-

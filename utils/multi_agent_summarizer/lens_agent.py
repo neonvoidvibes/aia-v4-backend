@@ -20,12 +20,15 @@ class LensAgent(Agent):
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         try:
+            import time
+            t0 = time.perf_counter()
             resp = chat(std_model(), messages, max_tokens=1600, temperature=0.1)
             data = safe_json_parse(resp)
             if isinstance(data, dict) and "lens_level" in data:
+                dt = (time.perf_counter() - t0) * 1000
+                logger.info(f"tx.agent.done name=LensAgent ms={dt:.1f} out_chars={len(resp or '')}")
                 return data
         except Exception as e:
             logger.error(f"LensAgent LLM error: {e}")
 
         return {"lens_level": {"hidden_patterns": [], "unspoken_tensions": [], "group_dynamics": {"emotional_undercurrents": "", "power_dynamics": ""}, "paradoxes_contradictions": []}}
-
