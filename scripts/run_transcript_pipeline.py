@@ -2,11 +2,37 @@
 import argparse
 import json
 import sys
+import os
+from pathlib import Path
+
+# Load env early from backend .env (and project root .env as fallback)
+try:
+    from dotenv import load_dotenv
+    here = Path(__file__).resolve()
+    backend_env = here.parents[1] / ".env"
+    root_env = here.parents[2] / ".env"
+    for envp in [backend_env, root_env]:
+        if envp.exists():
+            load_dotenv(dotenv_path=str(envp), override=False)
+except Exception:
+    pass
 
 sys.path.append('.')
 
 from utils.multi_agent_summarizer.pipeline import summarize_transcript
 from utils.embedding_handler import EmbeddingHandler
+
+
+def _preflight():
+    # LLM (Groq) for agents
+    if not os.getenv("GROQ_API_KEY"):
+        print("[warn] GROQ_API_KEY not set. Agents will fallback to minimal outputs.", file=sys.stderr)
+    # Embeddings (OpenAI) for Pinecone upsert
+    if not os.getenv("OPENAI_API_KEY"):
+        print("[error] OPENAI_API_KEY not set. Embedding upserts will fail.", file=sys.stderr)
+    # Pinecone
+    if not os.getenv("PINECONE_API_KEY"):
+        print("[warn] PINECONE_API_KEY not set. Upserts will be skipped.", file=sys.stderr)
 
 
 def main():
@@ -17,12 +43,14 @@ def main():
     p.add_argument("--text-path", help="optional local file override")
     args = p.parse_args()
 
+    _preflight()
+
     if args.text_path:
         with open(args.text_path, "r", encoding="utf-8") as f:
             text = f.read()
         source_id = args.text_path
     else:
-        # Reuse backend helper
+        # Reuse backend helper (supports s3:// and local paths)
         from api_server import _read_transcript_text_for_ma
         text = _read_transcript_text_for_ma(args.s3_key)
         source_id = args.s3_key
@@ -49,4 +77,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
