@@ -431,14 +431,12 @@ class RetrievalHandler:
                     if term in filename or term in doc_id:
                         boost += 0.1  # Add 0.1 boost per matching term
             
-            # Apply boost to score (create new match object with boosted score)
+            # Apply boost to score by modifying the match in-place
             if boost > 0:
-                # Create a copy of the match with boosted score
-                import copy
-                boosted_match = copy.copy(match)
-                boosted_match.score = match.score + boost
-                boosted.append(boosted_match)
-                logger.debug(f"Boosted {filename or doc_id} by {boost:.2f} (new score: {boosted_match.score:.4f})")
+                original_score = match.score
+                match.score = match.score + boost
+                boosted.append(match)
+                logger.info(f"Boosted {filename or doc_id} by {boost:.2f} (new score: {match.score:.4f})")
             else:
                 boosted.append(match)
                 
@@ -518,7 +516,9 @@ class RetrievalHandler:
             return []
 
         # Apply filename matching boost before MMR
+        logger.info(f"About to boost {len(all_matches)} matches for query: '{query}'")
         boosted_matches = self._boost_filename_matches(all_matches, query)
+        logger.info(f"Boost completed, returning {len(boosted_matches)} matches")
         
         # Build embeddings for MMR diversity calculation
         # We'll use metadata-based diversity as a proxy for content diversity
