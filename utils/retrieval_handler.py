@@ -42,21 +42,28 @@ DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more 
 1.  **Preserve Core Keywords:** The most important keywords from the original query MUST be present in the rewritten query.
 2.  **Simple is Better:** If the query is already specific and clear (e.g., asking about "tvättbjörn"), do not change it much. You might add synonyms if appropriate, but the original term is vital.
 3.  **Extract Entities:** Identify and retain key entities (people, projects, dates).
-4.  **No Hallucinations:** Do NOT add new topics or subjects that are not in the original query.
+4.  **Foundational Documents:** For queries about constitutions, principles, foundations, or governance, include formal terms like "constitutional principles", "foundation", "governance", "organizational structure".
+5.  **No Hallucinations:** Do NOT add new topics or subjects that are not in the original query.
 
 **Example 1:**
 User Query: 'kan du se något om en tvättbjörn'
-Rewritten Query: 'information about tvättbjörn raccoon'
+Rewritten Query: information about tvättbjörn raccoon
 
 **Example 2:**
 User Query: 'what were the key decisions in the mobius project meeting on May 1st'
-Rewritten Query: 'key decisions summary mobius project meeting May 1st'
+Rewritten Query: key decisions summary mobius project meeting May 1st
 
-Output only the rewritten query, no preamble.
+**Example 3:**
+User Query: 'river's constitution'
+Rewritten Query: river constitution constitutional principles foundation governance organizational structure
 
-User Query: '{user_query}'
+**Example 4:**
+User Query: 'look for river Foundation Source constitutional principles'
+Rewritten Query: river Foundation Source constitutional principles governance foundation
 
-Rewritten Query:"""
+Output only the rewritten query, no preamble or formatting.
+
+User Query: '{user_query}'"""
 
 
 class RetrievalHandler:
@@ -119,8 +126,24 @@ class RetrievalHandler:
                  max_tokens=100, # Should be short
                  messages=[{"role": "user", "content": prompt}]
             )
-            transformed_query = message.content[0].text.strip()
-            logger.debug(f"Transformed query: '{transformed_query}'")
+            raw_output = message.content[0].text.strip()
+            
+            # Clean up the output - remove any formatting artifacts from the LLM response
+            transformed_query = raw_output
+            # Remove common prefixes the LLM might add
+            for prefix in ["Rewritten Query:", "Rewritten query:", "Query:", "Transformed query:", "Transformed Query:"]:
+                if transformed_query.startswith(prefix):
+                    transformed_query = transformed_query[len(prefix):].strip()
+            
+            # Remove quotes if the entire query is wrapped in quotes
+            if transformed_query.startswith('"') and transformed_query.endswith('"'):
+                transformed_query = transformed_query[1:-1].strip()
+            if transformed_query.startswith("'") and transformed_query.endswith("'"):
+                transformed_query = transformed_query[1:-1].strip()
+                
+            logger.debug(f"Raw LLM output: '{raw_output[:100]}...'")
+            logger.debug(f"Cleaned transformed query: '{transformed_query}'")
+            
             # Basic validation: if empty or just punctuation, return original
             if not transformed_query or transformed_query in ['.', '?', '!']:
                  logger.warning("Query transformation resulted in empty/trivial output. Using original.")
