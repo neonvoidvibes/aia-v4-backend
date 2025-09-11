@@ -19,7 +19,7 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
-def embed_file(file_path: str, agent_name: str, index_name: str, metadata: dict = None):
+def embed_file(file_path: str, agent_name: str, index_name: str, metadata: dict = None, is_core_memory: bool = True):
     """Embed contents of a file into Pinecone using agent namespace."""
     try:
         # Initialize embedding handler (handles Pinecone connection and embedding logic)
@@ -37,6 +37,7 @@ def embed_file(file_path: str, agent_name: str, index_name: str, metadata: dict 
             'file_name': base_file_name,
             'source': 'manual_upload',
             'agent_name': agent_name, # Explicitly add agent_name for filtering
+            'is_core_memory': is_core_memory, # Mark as foundational content by default
             **(metadata or {}) # Include other CLI metadata like event_id if provided
         }
         logging.info(f"Base metadata for file '{base_file_name}': {base_metadata}")
@@ -106,6 +107,7 @@ def main():
     parser.add_argument('--agent', required=True, help='Agent name (e.g., "yggdrasil") used for namespace and metadata')
     parser.add_argument('--index', default='river', help='Pinecone index name (default: river)')
     parser.add_argument('--event', help='Optional event ID for metadata filtering')
+    parser.add_argument('--no-core-memory', action='store_true', help='Do not mark document as core memory (default: mark as core memory)')
 
     args = parser.parse_args()
     setup_logging()
@@ -114,17 +116,20 @@ def main():
     additional_metadata = {}
     if args.event:
         additional_metadata['event_id'] = args.event
+    
+    # Determine core memory setting (default True, override with --no-core-memory)
+    is_core_memory = not args.no_core_memory
 
     target_path = Path(args.file)
 
     if target_path.is_file():
-        embed_file(str(target_path), args.agent, args.index, additional_metadata)
+        embed_file(str(target_path), args.agent, args.index, additional_metadata, is_core_memory)
     elif target_path.is_dir():
         logging.info(f"Processing all files in directory: {target_path}")
         for item in target_path.iterdir():
             if item.is_file():
                 logging.info(f"Processing file: {item.name}")
-                embed_file(str(item), args.agent, args.index, additional_metadata)
+                embed_file(str(item), args.agent, args.index, additional_metadata, is_core_memory)
             else:
                 logging.warning(f"Skipping non-file item: {item.name}")
     else:

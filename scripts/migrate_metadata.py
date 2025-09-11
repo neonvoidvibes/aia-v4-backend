@@ -105,14 +105,29 @@ class MetadataMigrator:
             return 'other', enhanced_metadata
     
     def _is_meeting_summary(self, file_name: str, metadata: Dict[str, Any]) -> bool:
-        """Detect if content is a meeting summary."""
-        summary_indicators = [
-            'transcript_', 'summary_', '_full.md', '_business_reality.md',
-            '_context.md', 'meeting', 'workshop'
+        """Detect if content is a meeting summary from our multi-agent pipeline."""
+        # Only match specific patterns from our transcript pipeline
+        pipeline_indicators = [
+            'transcript_D', 'summary_D',  # Our date pattern: D20250812-T080755
+            '_full.md', '_business_reality.md', '_context.md'  # Our layer files
         ]
         
+        # Check for pipeline-generated files
         file_name_lower = file_name.lower()
-        return any(indicator in file_name_lower for indicator in summary_indicators)
+        pipeline_match = any(indicator in file_name_lower for indicator in pipeline_indicators)
+        
+        # Also check metadata for pipeline markers
+        source = metadata.get('source', '')
+        source_type = metadata.get('source_type', '')
+        pipeline_version = metadata.get('pipeline_version', '')
+        
+        metadata_match = (
+            source in ['transcript_full', 'meeting_summary'] or
+            source_type in ['summary', 'transcript'] or
+            'business_first' in pipeline_version
+        )
+        
+        return pipeline_match or metadata_match
     
     def _is_chat_message(self, metadata: Dict[str, Any], vector_id: str) -> bool:
         """Detect if content is a chat message."""
@@ -126,13 +141,39 @@ class MetadataMigrator:
     
     def _is_foundational_doc(self, file_name: str, metadata: Dict[str, Any]) -> bool:
         """Detect if content is a foundational document."""
+        # File-based indicators
         foundational_indicators = [
             'systemprompt', 'context', 'instructions', 'guidelines',
-            'framework', 'template', 'config', 'strategy'
+            'framework', 'template', 'config', 'strategy', 'definitions',
+            'whitepaper', 'white_paper', 'manual', 'handbook', 'reference'
         ]
         
         file_name_lower = file_name.lower()
-        return any(indicator in file_name_lower for indicator in foundational_indicators)
+        filename_match = any(indicator in file_name_lower for indicator in foundational_indicators)
+        
+        # Metadata-based indicators for foundational content
+        source = metadata.get('source', '')
+        source_type = metadata.get('source_type', '')
+        is_core_memory = metadata.get('is_core_memory', False)
+        
+        # Core logic: Manual uploads are foundational content (permanent knowledge for the agent)
+        # EXCEPT for chat_memory files which are conversational, not foundational documents
+        is_manual_upload = source == 'manual_upload'
+        is_chat_file = 'chat_memory' in file_name_lower
+        
+        # Foundational content patterns:
+        # 1. Explicitly marked as core memory
+        # 2. Documents with foundational source types  
+        # 3. Manual uploads that aren't chat files (these are curated permanent knowledge)
+        # 4. Files with foundational keywords in filename
+        metadata_match = (
+            is_core_memory or
+            source_type in ['doc', 'reference', 'manual'] or
+            source in ['knowledge_base', 'reference_material'] or
+            (is_manual_upload and not is_chat_file)
+        )
+        
+        return filename_match or metadata_match
     
     def _detect_analysis_type(self, file_name: str, metadata: Dict[str, Any]) -> str:
         """Detect the type of analysis (multi_agent, single_layer, etc.)."""
