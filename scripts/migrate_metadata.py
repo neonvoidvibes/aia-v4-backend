@@ -433,9 +433,14 @@ class MetadataMigrator:
                         logger.error(f"Error processing vector {vector_id} in namespace {namespace}: {e}")
                         self.stats['errors'] += 1
                 
-                # Perform batch update for this namespace
+                # Perform individual updates for this namespace
                 if updates and not dry_run:
-                    self.index.update(updates=updates, namespace=namespace)
+                    for update in updates:
+                        self.index.update(
+                            id=update['id'],
+                            set_metadata=update['metadata'],
+                            namespace=namespace
+                        )
                     logger.info(f"Updated {len(updates)} vectors in namespace '{namespace}'")
                 
             except Exception as e:
