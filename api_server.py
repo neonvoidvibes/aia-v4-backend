@@ -3021,17 +3021,69 @@ When you identify information that should be permanently stored in your agent do
                                     summaries_to_add.append(s)
                     
                     # Add ANALYZED MEETING SUMMARIES (new multi-agent summaries from vector DB)
-                    # This will be implemented when the meeting summaries are added to retrieval
-                    # For now, placeholder section that will be populated when RAG includes meeting summaries
                     analyzed_summaries_context = ""
-                    # TODO: Implement vector-based meeting summary retrieval here
-                    # analyzed_summaries = retrieve_meeting_summaries(agent_name, event_id, content_category="meeting_summary")
-                    # if analyzed_summaries:
-                    #     analyzed_summaries_context = "=== ANALYZED MEETING SUMMARIES ===\n"
-                    #     for summary in analyzed_summaries:
-                    #         analyzed_summaries_context += f"**[Meeting Analysis - {event_id} - {summary.get('date')}]**\n{summary.get('content')}\n\n"
-                    #     analyzed_summaries_context += "=== END ANALYZED MEETING SUMMARIES ==="
-                    #     historical_context_parts.append(analyzed_summaries_context)
+                    try:
+                        # Multi-pass retrieval: Phase 1 - Metadata filtering + Phase 2 - Semantic search
+                        meeting_retriever = RetrievalHandler(
+                            index_name="river", 
+                            agent_name=agent_name,
+                            event_id=event_id,
+                            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                            openai_api_key=get_api_key(agent_name, 'openai')
+                        )
+                        
+                        # Build metadata filter for meeting summaries from this event
+                        metadata_filter = {
+                            "content_category": "meeting_summary",
+                            "event_id": event_id,
+                            "analysis_type": "multi_agent"
+                        }
+                        
+                        # Retrieve meeting summaries with contextual ranking (recent first)
+                        meeting_docs = meeting_retriever.get_relevant_context_tiered(
+                            query="recent meeting summaries and decisions", 
+                            tier_caps=[5, 0, 0],  # Focus on event-specific content only
+                            mmr_lambda=0.3,  # Lower diversity, higher relevance for meetings
+                            mmr_k=8,         # Get up to 8 meeting summary chunks
+                            include_t3=False,  # No cross-event contamination
+                            metadata_filter=metadata_filter  # Apply our content category filter
+                        )
+                        
+                        if meeting_docs:
+                            analyzed_summaries_context = "=== ANALYZED MEETING SUMMARIES ===\n"
+                            
+                            # Group and sort by meeting date (recent first)
+                            meeting_summaries = {}
+                            for doc in meeting_docs:
+                                meeting_date = doc.metadata.get('meeting_date', 'unknown')
+                                file_name = doc.metadata.get('file_name', 'unknown')
+                                
+                                if meeting_date not in meeting_summaries:
+                                    meeting_summaries[meeting_date] = {
+                                        'date': meeting_date,
+                                        'file_name': file_name,
+                                        'content_chunks': []
+                                    }
+                                meeting_summaries[meeting_date]['content_chunks'].append(doc.page_content)
+                            
+                            # Sort by date (recent first) and format
+                            for meeting_date in sorted(meeting_summaries.keys(), reverse=True):
+                                summary_data = meeting_summaries[meeting_date]
+                                analyzed_summaries_context += f"**[Meeting Analysis - {event_id} - {summary_data['date']}]**\n"
+                                analyzed_summaries_context += f"**Source:** {summary_data['file_name']}\n\n"
+                                
+                                # Combine content chunks
+                                combined_content = "\n\n---\n\n".join(summary_data['content_chunks'])
+                                analyzed_summaries_context += f"{combined_content}\n\n"
+                            
+                            analyzed_summaries_context += "=== END ANALYZED MEETING SUMMARIES ==="
+                            historical_context_parts.append(analyzed_summaries_context)
+                            
+                            logger.info(f"Retrieved {len(meeting_docs)} meeting summary chunks for {event_id}")
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to retrieve meeting summaries for {event_id}: {e}")
+                        # Fallback to empty - don't break the flow
                     
                     if summaries_to_add:
                         summaries_context_str = "=== SAVED TRANSCRIPT SUMMARIES ===\n"
