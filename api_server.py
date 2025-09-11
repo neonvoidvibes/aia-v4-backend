@@ -1234,7 +1234,6 @@ def stop_recording_route(user: SupabaseUser):
     })
 
 from utils.multi_agent_summarizer.pipeline import run_pipeline_steps as _run_pipeline_steps
-from utils.multi_agent_summarizer.markdown import full_summary_to_markdown as _full_to_md
 
 # New: Multi-Agent Transcript Save Endpoint
 @app.post("/api/transcripts/save")
@@ -1255,7 +1254,7 @@ def save_transcript(user: SupabaseUser):
     full = steps.get("full", {})
 
     if not dry:
-        md = steps.get("full_md") or _full_to_md(full)
+        md = steps.get("full_md") or "# No Summary Generated\n"
         EmbeddingHandler(index_name="river", namespace=f"{agent}").embed_and_upsert(
             content=md,
             metadata={

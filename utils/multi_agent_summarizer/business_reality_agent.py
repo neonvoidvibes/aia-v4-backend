@@ -46,7 +46,7 @@ class BusinessRealityAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2500,
-                temperature=0.1,  # Lower temperature for better instruction following
+                temperature=0.2,  # Balanced temperature for content quality and instruction following
             )
             
             if not business_reality or business_reality.strip() == "":
@@ -99,7 +99,7 @@ class BusinessRealityAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 max_tokens=2800,
-                temperature=0.1,  # Lower temperature for better instruction following
+                temperature=0.2,  # Balanced temperature for content quality and instruction following
             )
             
             # Apply datetime prepending if available and refined_reality has content

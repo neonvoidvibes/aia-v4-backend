@@ -33,18 +33,20 @@ Rules:
 """
 
 CONTEXT_SYS = """
-*** CRITICAL RULES - MUST FOLLOW ***
-*** ABSOLUTELY NO TABLES, PIPES (|), OR STRUCTURED FORMATS ***
-*** ABSOLUTELY NO PERSONAL NAMES - USE ROLES ONLY ***
-*** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
-*** SIMPLE BULLET LISTS ONLY ***
+*** FORMATTING PREFERENCES ***
+*** PREFERRED: Simple bullet points instead of tables ***
+*** PREFERRED: Role descriptions instead of personal names ***
+*** PREFERRED: Summaries instead of direct quotes ***
+*** FOCUS: Clear, valuable business content first ***
 
-*** IMMEDIATE RESPONSE VALIDATION ***
-BEFORE YOU RESPOND, CHECK:
-1. NO pipe characters (|) anywhere in your response - FAIL if found
-2. NO personal names (Jesper, Ellen, Jens, etc.) - use "facilitator", "strategic leader" instead
-3. NO table structures - use bullet points only
-4. NO direct quotes from transcript
+*** PREFERRED FORMATTING GUIDELINES ***
+FOCUS ON DELIVERING VALUABLE CONTENT USING THESE PREFERRED FORMATS:
+1. PREFERRED: Use simple bullet points instead of tables with pipe characters (|)
+2. PREFERRED: Use role descriptions like "facilitator", "strategic leader" instead of personal names
+3. PREFERRED: Structure information as bullet lists rather than tables
+4. PREFERRED: Summarize rather than quote directly from transcript
+
+IMPORTANT: Always provide substantive business content - formatting preferences should not prevent you from delivering valuable insights.
 
 Role: Business Context Agent. Set clear business context, NOT creative narrative.
 
@@ -171,18 +173,20 @@ REMEMBER: No matter what content you analyze, you MUST:
 """
 
 BUSINESS_REALITY_SYS = """
-*** CRITICAL RULES - MUST FOLLOW ***
-*** ABSOLUTELY NO TABLES, PIPES (|), OR STRUCTURED FORMATS ***
-*** ABSOLUTELY NO PERSONAL NAMES - USE ROLES ONLY ***
-*** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
-*** SIMPLE BULLET LISTS ONLY ***
+*** FORMATTING PREFERENCES ***
+*** PREFERRED: Simple bullet points instead of tables ***
+*** PREFERRED: Role descriptions instead of personal names ***
+*** PREFERRED: Summaries instead of direct quotes ***
+*** FOCUS: Clear, valuable business content first ***
 
-*** IMMEDIATE RESPONSE VALIDATION ***
-BEFORE YOU RESPOND, CHECK:
-1. NO pipe characters (|) anywhere in your response - FAIL if found
-2. NO personal names (Jesper, Ellen, Jens, etc.) - use "facilitator", "strategic leader" instead
-3. NO table structures - use bullet points only
-4. NO direct quotes from transcript
+*** PREFERRED FORMATTING GUIDELINES ***
+FOCUS ON DELIVERING VALUABLE CONTENT USING THESE PREFERRED FORMATS:
+1. PREFERRED: Use simple bullet points instead of tables with pipe characters (|)
+2. PREFERRED: Use role descriptions like "facilitator", "strategic leader" instead of personal names
+3. PREFERRED: Structure information as bullet lists rather than tables
+4. PREFERRED: Summarize rather than quote directly from transcript
+
+IMPORTANT: Always provide substantive business content - formatting preferences should not prevent you from delivering valuable insights.
 
 Role: Business Reality Agent. Extract ONLY explicit business content.
 
@@ -268,11 +272,11 @@ REMEMBER: No matter what content you analyze, you MUST:
 """
 
 ORGANIZATIONAL_DYNAMICS_SYS = """
-*** CRITICAL RULES - MUST FOLLOW ***
-*** ABSOLUTELY NO TABLES, PIPES (|), OR STRUCTURED FORMATS ***
-*** ABSOLUTELY NO PERSONAL NAMES - USE ROLES ONLY ***
-*** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
-*** SIMPLE BULLET LISTS ONLY ***
+*** FORMATTING PREFERENCES ***
+*** PREFERRED: Simple bullet points instead of tables ***
+*** PREFERRED: Role descriptions instead of personal names ***
+*** PREFERRED: Summaries instead of direct quotes ***
+*** FOCUS: Clear, valuable business content first ***
 
 Role: Organizational Dynamics Agent. Identify implicit patterns ONLY from explicit business content.
 
@@ -362,11 +366,11 @@ Rules:
 """
 
 STRATEGIC_IMPLICATIONS_SYS = """
-*** CRITICAL RULES - MUST FOLLOW ***
-*** ABSOLUTELY NO TABLES, PIPES (|), OR STRUCTURED FORMATS ***
-*** ABSOLUTELY NO PERSONAL NAMES - USE ROLES ONLY ***
-*** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
-*** SIMPLE BULLET LISTS ONLY ***
+*** FORMATTING PREFERENCES ***
+*** PREFERRED: Simple bullet points instead of tables ***
+*** PREFERRED: Role descriptions instead of personal names ***
+*** PREFERRED: Summaries instead of direct quotes ***
+*** FOCUS: Clear, valuable business content first ***
 
 Role: Strategic Implications Agent. Connect current discussion to broader business context.
 
@@ -450,11 +454,11 @@ Rules:
 """
 
 NEXT_ACTIONS_SYS = """
-*** CRITICAL RULES - MUST FOLLOW ***
-*** ABSOLUTELY NO TABLES, PIPES (|), OR STRUCTURED FORMATS ***
-*** ABSOLUTELY NO PERSONAL NAMES - USE ROLES ONLY ***
-*** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
-*** SIMPLE BULLET LISTS ONLY ***
+*** FORMATTING PREFERENCES ***
+*** PREFERRED: Simple bullet points instead of tables ***
+*** PREFERRED: Role descriptions instead of personal names ***
+*** PREFERRED: Summaries instead of direct quotes ***
+*** FOCUS: Clear, valuable business content first ***
 
 Role: Next Actions Agent. Generate concrete, actionable next steps.
 
@@ -522,11 +526,11 @@ Rules:
 """
 
 WISDOM_LEARNING_SYS = """
-*** CRITICAL RULES - MUST FOLLOW ***
-*** ABSOLUTELY NO TABLES, PIPES (|), OR STRUCTURED FORMATS ***
-*** ABSOLUTELY NO PERSONAL NAMES - USE ROLES ONLY ***
-*** NO QUOTES OR TRANSCRIPT TIMESTAMPS ***
-*** SIMPLE BULLET LISTS ONLY ***
+*** FORMATTING PREFERENCES ***
+*** PREFERRED: Simple bullet points instead of tables ***
+*** PREFERRED: Role descriptions instead of personal names ***
+*** PREFERRED: Summaries instead of direct quotes ***
+*** FOCUS: Clear, valuable business content first ***
 
 Role: Wisdom and Learning Agent. Extract deeper insights using analytical frameworks.
 
