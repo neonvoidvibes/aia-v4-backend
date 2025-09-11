@@ -19,7 +19,7 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
-def embed_file(file_path: str, agent_name: str, index_name: str, metadata: dict = None, is_core_memory: bool = True):
+def embed_file(file_path: str, agent_name: str, index_name: str, metadata: dict = None, is_core_memory: bool = True, temp_doc_mode: bool = False, session_id: str = None):
     """Embed contents of a file into Pinecone using agent namespace."""
     try:
         # Initialize embedding handler (handles Pinecone connection and embedding logic)
@@ -40,6 +40,21 @@ def embed_file(file_path: str, agent_name: str, index_name: str, metadata: dict 
             'is_core_memory': is_core_memory, # Mark as foundational content by default
             **(metadata or {}) # Include other CLI metadata like event_id if provided
         }
+        
+        # Add temp document metadata if enabled
+        if temp_doc_mode:
+            base_metadata.update({
+                'temp_doc_mode': True,
+                'access_scope': 'session_only',
+                'temporal_relevance': 'session_scoped'
+            })
+            if session_id:
+                base_metadata['session_id'] = session_id
+                
+            # Auto-calculate expiry (24 hours from now)
+            from datetime import datetime, timedelta
+            expiry = datetime.utcnow() + timedelta(hours=24)
+            base_metadata['expires_at'] = expiry.isoformat() + 'Z'
         logging.info(f"Base metadata for file '{base_file_name}': {base_metadata}")
 
 
@@ -108,6 +123,8 @@ def main():
     parser.add_argument('--index', default='river', help='Pinecone index name (default: river)')
     parser.add_argument('--event', help='Optional event ID for metadata filtering')
     parser.add_argument('--no-core-memory', action='store_true', help='Do not mark document as core memory (default: mark as core memory)')
+    parser.add_argument('--temp-doc', action='store_true', help='Mark as temporary document for chat sessions (implies --no-core-memory)')
+    parser.add_argument('--session-id', help='Session ID for temporary documents (used with --temp-doc)')
 
     args = parser.parse_args()
     setup_logging()
@@ -117,19 +134,27 @@ def main():
     if args.event:
         additional_metadata['event_id'] = args.event
     
-    # Determine core memory setting (default True, override with --no-core-memory)
-    is_core_memory = not args.no_core_memory
+    # Determine document type and metadata settings
+    temp_doc_mode = args.temp_doc
+    is_core_memory = not (args.no_core_memory or temp_doc_mode)  # temp docs are never core memory
+    session_id = args.session_id
+    
+    if temp_doc_mode and not session_id:
+        # Generate a default session ID if not provided
+        import uuid
+        session_id = f"temp_session_{uuid.uuid4().hex[:8]}"
+        logging.info(f"Generated session ID for temp doc: {session_id}")
 
     target_path = Path(args.file)
 
     if target_path.is_file():
-        embed_file(str(target_path), args.agent, args.index, additional_metadata, is_core_memory)
+        embed_file(str(target_path), args.agent, args.index, additional_metadata, is_core_memory, temp_doc_mode, session_id)
     elif target_path.is_dir():
         logging.info(f"Processing all files in directory: {target_path}")
         for item in target_path.iterdir():
             if item.is_file():
                 logging.info(f"Processing file: {item.name}")
-                embed_file(str(item), args.agent, args.index, additional_metadata, is_core_memory)
+                embed_file(str(item), args.agent, args.index, additional_metadata, is_core_memory, temp_doc_mode, session_id)
             else:
                 logging.warning(f"Skipping non-file item: {item.name}")
     else:

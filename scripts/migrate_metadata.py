@@ -42,6 +42,7 @@ class MetadataMigrator:
             'meeting_summaries': 0,
             'chat_messages': 0,
             'foundational_docs': 0,
+            'temp_documents': 0,
             'other_content': 0,
             'updated': 0,
             'errors': 0,
@@ -92,10 +93,28 @@ class MetadataMigrator:
                 'doc_type': self._detect_doc_type(file_name, metadata),
                 'scope': self._detect_scope(event_id, metadata)
             })
+            
+            # Set is_core_memory=True for foundational docs (override existing False values)
+            # This corrects the historical mis-classification of foundational content
+            enhanced_metadata['is_core_memory'] = True
+                
             self.stats['foundational_docs'] += 1
             return 'foundational_document', enhanced_metadata
         
-        # 4. OTHER CONTENT
+        # 4. TEMP DOCUMENTS
+        elif self._is_temp_document(file_name, metadata):
+            enhanced_metadata.update({
+                'content_category': 'temp_document',
+                'temporal_relevance': 'session_scoped',
+                'access_scope': 'session_only',
+                'temp_doc_mode': True,
+                'session_id': self._extract_session_id(metadata),
+                'expires_at': self._calculate_expiry(metadata)
+            })
+            self.stats['temp_documents'] = self.stats.get('temp_documents', 0) + 1
+            return 'temp_document', enhanced_metadata
+        
+        # 5. OTHER CONTENT
         else:
             enhanced_metadata.update({
                 'content_category': 'other',
@@ -174,6 +193,59 @@ class MetadataMigrator:
         )
         
         return filename_match or metadata_match
+    
+    def _is_temp_document(self, file_name: str, metadata: Dict[str, Any]) -> bool:
+        """Detect if content is a temporary document for chat sessions."""
+        # Check metadata flags for temp documents
+        is_core_memory = metadata.get('is_core_memory', True)  # Default True for existing content
+        temp_doc_mode = metadata.get('temp_doc_mode', False)
+        access_scope = metadata.get('access_scope', '')
+        
+        # Explicit temp document markers
+        explicit_temp = (
+            not is_core_memory and temp_doc_mode or
+            access_scope == 'session_only'
+        )
+        
+        # File pattern indicators for temporary documents
+        temp_patterns = [
+            'temp_', 'temporary_', 'session_', 'chat_upload_',
+            '_temp.', '_temporary.', '_session.'
+        ]
+        
+        file_name_lower = file_name.lower()
+        pattern_match = any(pattern in file_name_lower for pattern in temp_patterns)
+        
+        return explicit_temp or pattern_match
+    
+    def _extract_session_id(self, metadata: Dict[str, Any]) -> Optional[str]:
+        """Extract session ID from metadata for temp documents."""
+        # Check for existing session identifiers
+        session_indicators = [
+            'session_id', 'chat_session_id', 'conversation_id', 
+            'thread_id', 'chat_id'
+        ]
+        
+        for indicator in session_indicators:
+            if indicator in metadata:
+                return str(metadata[indicator])
+        
+        # Try to extract from event_id if it looks like a session ID
+        event_id = metadata.get('event_id')
+        if event_id and (event_id.startswith('chat_') or event_id.startswith('session_')):
+            return event_id
+            
+        return None
+    
+    def _calculate_expiry(self, metadata: Dict[str, Any]) -> Optional[str]:
+        """Calculate expiry timestamp for temp documents."""
+        # Check if expiry is already set
+        if 'expires_at' in metadata:
+            return metadata['expires_at']
+        
+        # For now, don't auto-calculate expiry from migration
+        # This will be handled when creating new temp docs
+        return None
     
     def _detect_analysis_type(self, file_name: str, metadata: Dict[str, Any]) -> str:
         """Detect the type of analysis (multi_agent, single_layer, etc.)."""
@@ -403,6 +475,7 @@ class MetadataMigrator:
         logger.info(f"Meeting summaries: {self.stats['meeting_summaries']}")
         logger.info(f"Chat messages: {self.stats['chat_messages']}")
         logger.info(f"Foundational docs: {self.stats['foundational_docs']}")
+        logger.info(f"Temp documents: {self.stats['temp_documents']}")
         logger.info(f"Other content: {self.stats['other_content']}")
         logger.info(f"Updated: {self.stats['updated']}")
         logger.info(f"Skipped (already migrated): {self.stats['skipped']}")
