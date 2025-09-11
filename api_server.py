@@ -2982,15 +2982,25 @@ When you identify information that should be permanently stored in your agent do
                 if agent_docs:
                     historical_context_parts.append(f"=== AGENT DOCUMENTATION ===\n{agent_docs}\n=== END AGENT DOCUMENTATION ===")
             
-                transcript_handling_instructions = (
-                    "\n\n=== INSTRUCTIONS FOR USING MEETING TRANSCRIPTS ===\n"
-                    "You will be provided with meeting transcripts in one or two distinct blocks:\n\n"
-                    "1.  `=== HISTORICAL MEETING TRANSCRIPT ===`: This block, if present in your system instructions, contains the full transcript of the meeting *before* the most recent updates. It is organized chronologically and provides foundational context.\n\n"
-                    "2.  `=== LATEST MEETING TRANSCRIPT ===`: This block, provided in the user's message, contains the most recent, real-time additions to the transcript.\n\n"
-                    "**CRITICAL RULE:** To understand the full context of the meeting, you MUST synthesize information from BOTH the historical and latest transcript blocks. When asked a question about the meeting, your answer must be based on the complete chronological story from all available transcript content. Treat the historical block and the latest block as a single, continuous document.\n"
-                    "=== END INSTRUCTIONS FOR USING MEETING TRANSCRIPTS ==="
+                meeting_content_instructions = (
+                    "\n\n=== INSTRUCTIONS FOR USING MEETING CONTENT ===\n"
+                    "You have access to meeting information in multiple formats, prioritize as follows:\n\n"
+                    "**1. ANALYZED MEETING SUMMARIES** (Highest Priority):\n"
+                    "- Multi-layered analysis with Business Context, Organizational Dynamics, Strategic Implications, and Wisdom Learning\n"
+                    "- Marked with **[Meeting Analysis - {event} - {date}]** headers\n"
+                    "- Include meeting date/time for temporal context\n"
+                    "- These provide the richest insights and should be your primary source\n\n"
+                    "**2. SAVED TRANSCRIPT SUMMARIES** (Secondary):\n"
+                    "- Legacy flat summaries for validation or when analyzed summaries unavailable\n"
+                    "- Use to cross-reference or fill gaps in analyzed summaries\n\n"
+                    "**3. RAW MEETING TRANSCRIPTS** (Detailed Reference):\n"
+                    "- `=== HISTORICAL MEETING TRANSCRIPT ===`: Full transcript before most recent updates\n"
+                    "- `=== LATEST MEETING TRANSCRIPT ===`: Most recent, real-time additions\n"
+                    "- Use for specific quotes or when summaries lack detail\n\n"
+                    "**SYNTHESIS RULE:** When multiple formats exist for the same meeting, use analyzed summaries as primary source, validate with other formats, and note any significant discrepancies.\n"
+                    "=== END INSTRUCTIONS FOR USING MEETING CONTENT ==="
                 )
-                historical_context_parts.append(transcript_handling_instructions)
+                historical_context_parts.append(meeting_content_instructions)
 
                 # Add summaries to historical context
                 if saved_transcript_memory_mode == 'all' or (saved_transcript_memory_mode == 'some' and individual_memory_toggle_states):
@@ -3010,6 +3020,19 @@ When you identify information that should be permanently stored in your agent do
                                 logger.info(f"Summary check: filename='{summary_filename}', constructed_key='{summary_s3_key}', selected={is_selected}")
                                 if is_selected:
                                     summaries_to_add.append(s)
+                    
+                    # Add ANALYZED MEETING SUMMARIES (new multi-agent summaries from vector DB)
+                    # This will be implemented when the meeting summaries are added to retrieval
+                    # For now, placeholder section that will be populated when RAG includes meeting summaries
+                    analyzed_summaries_context = ""
+                    # TODO: Implement vector-based meeting summary retrieval here
+                    # analyzed_summaries = retrieve_meeting_summaries(agent_name, event_id, content_category="meeting_summary")
+                    # if analyzed_summaries:
+                    #     analyzed_summaries_context = "=== ANALYZED MEETING SUMMARIES ===\n"
+                    #     for summary in analyzed_summaries:
+                    #         analyzed_summaries_context += f"**[Meeting Analysis - {event_id} - {summary.get('date')}]**\n{summary.get('content')}\n\n"
+                    #     analyzed_summaries_context += "=== END ANALYZED MEETING SUMMARIES ==="
+                    #     historical_context_parts.append(analyzed_summaries_context)
                     
                     if summaries_to_add:
                         summaries_context_str = "=== SAVED TRANSCRIPT SUMMARIES ===\n"

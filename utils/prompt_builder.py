@@ -68,15 +68,14 @@ def prompt_builder(
     # 1) Identity
     parts.append("=== IDENTITY HEADER ===\n" + _identity_header(agent, event) + "\n=== END IDENTITY HEADER ===")
 
-    # 2) Base + Frameworks
+    # 2) Core Directive (if needed for wizard mode)
+    # This will be handled in api_server.py for wizard mode
+    
+    # 3) Base System Prompt
     base_system_prompt = get_latest_system_prompt(None) or "You are a helpful assistant."
-    base_frameworks = get_latest_frameworks(None) or ""
-    base_block = ["=== BASE SYSTEM PROMPT ===", base_system_prompt, "=== END BASE SYSTEM PROMPT ==="]
-    if base_frameworks:
-        base_block += ["", "=== BASE FRAMEWORKS ===", base_frameworks, "=== END BASE FRAMEWORKS ==="]
-    parts.append("\n".join(base_block))
+    parts.append("=== BASE SYSTEM PROMPT ===\n" + base_system_prompt + "\n=== END BASE SYSTEM PROMPT ===")
 
-    # 3) Agent layer
+    # 4) Agent layer
     agent_system_prompt = get_latest_system_prompt(agent) or ""
     agent_context = get_latest_context(agent, None) or ""
     if agent_system_prompt or agent_context:
@@ -88,7 +87,7 @@ def prompt_builder(
         block += ["=== END AGENT LAYER ==="]
         parts.append("\n".join(block))
 
-    # 4) Event layer (optional / feature-flagged)
+    # 5) Event layer (optional / feature-flagged)
     if feature_event_prompts and event and event != '0000':
         # Support both legacy and new file patterns by reusing get_latest_context
         event_context = get_latest_context(agent, event) or ""
@@ -137,17 +136,28 @@ def prompt_builder(
     if objective:
         parts.append("=== OBJECTIVE FUNCTION ===\n" + objective + "\n=== END OBJECTIVE FUNCTION ===")
 
-    # 6) Memory scope policy
+    # 7) Base Frameworks (moved after objective function per new taxonomy)
+    base_frameworks = get_latest_frameworks(None) or ""
+    if base_frameworks:
+        parts.append("=== BASE FRAMEWORKS ===\n" + base_frameworks + "\n=== END BASE FRAMEWORKS ===")
+
+    # 8) Memory scope policy
     parts.append("=== MEMORY_SCOPE_POLICY ===\n" + _memory_scope_policy(agent, event) + "\n=== END MEMORY_SCOPE_POLICY ===")
 
-    # 7) RAG routing policy
+    # 9) RAG routing policy
     parts.append("=== RAG_ROUTING_POLICY ===\n" + _rag_routing_policy(agent, event) + "\n=== END RAG_ROUTING_POLICY ===")
 
-    # Optional user context block (non-authoritative, ephemeral)
-    if user_context:
-        parts.append("=== USER CONTEXT ===\n" + user_context + "\n=== END USER CONTEXT ===")
+    # Note: Dynamic content sections (10-20) will be added by api_server.py
+    # Note: USER CONTEXT (21) and CURRENT TIME (22) will be added by api_server.py at the end
 
     final_prompt = "\n\n".join([p for p in parts if p and p.strip()])
     logger.info(f"PromptBuilder: Built prompt for agent='{agent}', event='{event}'. Length={len(final_prompt)}")
     return final_prompt
+    
+    
+def get_user_context_section(user_context: Optional[str]) -> str:
+    """Generate USER CONTEXT section for api_server.py to append at the end."""
+    if user_context:
+        return f"=== USER CONTEXT ===\n{user_context}\n=== END USER CONTEXT ==="
+    return ""
 

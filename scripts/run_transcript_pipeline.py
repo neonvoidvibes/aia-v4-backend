@@ -170,10 +170,14 @@ def main():
                 "event_id": args.event,
                 "transcript": args.event,
                 "source": "transcript_full",
-                "source_type": "summary",  # Changed from "transcript" to "summary"
+                "source_type": "summary",
+                "content_category": "meeting_summary",  # New taxonomy field
+                "analysis_type": "multi_agent",  # New taxonomy field  
+                "temporal_relevance": "time_sensitive",  # New taxonomy field
+                "meeting_date": meeting_datetime.split()[0] if meeting_datetime else None,  # Extract date only
                 "source_identifier": source_id,
                 "file_name": summary_filename,
-                "doc_id": f"{source_id}:summary",  # Changed from ":full" to ":summary"
+                "doc_id": f"{source_id}:summary",
                 "pipeline_version": "business_first_v2",
             },
         )
