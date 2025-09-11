@@ -2888,13 +2888,13 @@ I've updated the prompt to include the dragon's personality as you requested. It
                             openai_api_key=get_api_key(agent_name, 'openai')
                         )
                         # Event-scoped tiered retrieval with caps and MMR
-                        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,5,3').split(',')
+                        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,6,6,4').split(',')
                         try:
                             tier_caps = [int(x.strip()) for x in tier_caps_env]
                         except Exception:
-                            tier_caps = [7, 5, 3]
+                            tier_caps = [7, 6, 6, 4]
                         mmr_lambda = float(os.getenv('RETRIEVAL_MMR_LAMBDA', '0.6'))
-                        mmr_k = int(os.getenv('RETRIEVAL_MMR_K', '15'))
+                        mmr_k = int(os.getenv('RETRIEVAL_MMR_K', '23'))
                         allow_t3_low = os.getenv('ALLOW_T3_ON_LOW', 'false').lower() == 'true'
                         include_t3 = True
                         if (signal_bias or 'medium') == 'low' and not allow_t3_low:
@@ -3607,13 +3607,13 @@ def pinecone_query_proxy(user: SupabaseUser):
             anthropic_api_key=get_api_key(agent_name, 'anthropic'),
             openai_api_key=get_api_key(agent_name, 'openai')
         )
-        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,5,3').split(',')
+        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,6,6,4').split(',')
         try:
             tier_caps = [int(x.strip()) for x in tier_caps_env]
         except Exception:
-            tier_caps = [7, 5, 3]
+            tier_caps = [7, 6, 6, 4]
         mmr_lambda = float(os.getenv('RETRIEVAL_MMR_LAMBDA', '0.6'))
-        mmr_k = min(int(os.getenv('RETRIEVAL_MMR_K', '15')), top_k)
+        mmr_k = min(int(os.getenv('RETRIEVAL_MMR_K', '23')), top_k)
         allow_t3_low = os.getenv('ALLOW_T3_ON_LOW', 'false').lower() == 'true'
         include_t3 = not ((signal_bias or 'medium') == 'low' and not allow_t3_low)
 

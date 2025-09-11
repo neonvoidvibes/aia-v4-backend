@@ -353,18 +353,78 @@ class RetrievalHandler:
             remaining.remove(best)
         return selected
 
+    def _build_diversity_cache(self, matches) -> Dict[str, List[float]]:
+        """Build diversity vectors based on document metadata for MMR calculation.
+        Creates pseudo-embeddings that represent document characteristics for diversity."""
+        try:
+            import numpy as np
+        except ImportError:
+            logger.warning("NumPy not available, MMR will use score-only fallback")
+            return {}
+        
+        diversity_cache = {}
+        
+        for match in matches:
+            if not match.metadata:
+                continue
+                
+            # Create diversity vector based on document characteristics
+            diversity_vector = []
+            
+            # Content type diversity (foundational vs chat vs other)
+            content_cat = match.metadata.get('content_category', 'unknown')
+            if content_cat == 'foundational_document':
+                diversity_vector.extend([1.0, 0.0, 0.0])
+            elif content_cat == 'chat_message':
+                diversity_vector.extend([0.0, 1.0, 0.0])
+            else:
+                diversity_vector.extend([0.0, 0.0, 1.0])
+                
+            # Event diversity
+            event_id = str(match.metadata.get('event_id', '0000'))
+            if event_id == '0000':
+                diversity_vector.extend([1.0, 0.0])
+            else:
+                diversity_vector.extend([0.0, 1.0])
+                
+            # Source diversity (filename similarity)
+            filename = match.metadata.get('filename', 'unknown')
+            filename_hash = hash(filename) % 100  # Simple filename fingerprint
+            diversity_vector.append(filename_hash / 100.0)
+            
+            # Temporal diversity (recent vs old)
+            access_count = match.metadata.get('access_count', 0)
+            is_core = match.metadata.get('is_core_memory', False)
+            if is_core:
+                diversity_vector.extend([1.0, 0.0])
+            elif access_count > 10:
+                diversity_vector.extend([0.0, 1.0]) 
+            else:
+                diversity_vector.extend([0.0, 0.0])
+                
+            # Pad to consistent length
+            while len(diversity_vector) < 8:
+                diversity_vector.append(0.0)
+                
+            diversity_cache[match.id] = diversity_vector
+            
+        logger.debug(f"Built diversity cache for {len(diversity_cache)} documents")
+        return diversity_cache
+
     def get_relevant_context_tiered(
         self,
         query: str,
-        tier_caps: List[int] = [7, 5, 3],
-        mmr_k: int = 15,
+        tier_caps: List[int] = [7, 6, 6, 4],
+        mmr_k: int = 23,
         mmr_lambda: float = 0.6,
         include_t3: bool = True,
+        metadata_filter: Optional[Dict] = None,
     ) -> List[Document]:
-        """Event-scoped retrieval across tiers with MMR over union.
-        Tier1: {agent_name, event_id=current}
-        Tier2: {agent_name, event_id='0000'}
-        Tier3: {agent_name, event_id!=current and !='0000'} (optional)
+        """Content-type tiered retrieval with foundational document priority.
+        Tier0: {content_category=foundational_document} - Guaranteed foundational docs
+        Tier1: {agent_name, event_id=current} - Current event content
+        Tier2: {agent_name, event_id='0000'} - Shared persistent content
+        Tier3: {agent_name, event_id!=current and !='0000'} - Other events (optional)
         """
         if not self.index:
             logger.info("Retriever: Skipping context retrieval as Pinecone index is not available.")
@@ -381,16 +441,25 @@ class RetrievalHandler:
         tier_results = []
         tiers = []
         current_event = self.event_id or '0000'
-        # Tier 1
-        tiers.append({"filter": {"agent_name": self.namespace, "event_id": current_event}, "cap": tier_caps[0] if len(tier_caps)>0 else 7, "label": "t1"})
-        # Tier 2
-        tiers.append({"filter": {"agent_name": self.namespace, "event_id": "0000"}, "cap": tier_caps[1] if len(tier_caps)>1 else 5, "label": "t2"})
-        # Tier 3
+        
+        # Tier 0: Foundational Documents (NEW - guaranteed constitutional/policy docs)
+        tier0_filter = {"agent_name": self.namespace, "content_category": "foundational_document"}
+        if metadata_filter:
+            tier0_filter.update(metadata_filter)
+        tiers.append({"filter": tier0_filter, "cap": tier_caps[0] if len(tier_caps)>0 else 7, "label": "t0_foundation"})
+        
+        # Tier 1: Current Event
+        tiers.append({"filter": {"agent_name": self.namespace, "event_id": current_event}, "cap": tier_caps[1] if len(tier_caps)>1 else 6, "label": "t1"})
+        
+        # Tier 2: Shared '0000' 
+        tiers.append({"filter": {"agent_name": self.namespace, "event_id": "0000"}, "cap": tier_caps[2] if len(tier_caps)>2 else 6, "label": "t2"})
+        
+        # Tier 3: Other Events
         if include_t3:
-            tiers.append({"filter": {"agent_name": self.namespace, "event_id": {"$ne": current_event}}, "cap": tier_caps[2] if len(tier_caps)>2 else 3, "label": "t3"})
+            tiers.append({"filter": {"agent_name": self.namespace, "event_id": {"$ne": current_event}}, "cap": tier_caps[3] if len(tier_caps)>3 else 4, "label": "t3"})
 
         all_matches = []
-        tier_hit_counts = {"t1": 0, "t2": 0, "t3": 0}
+        tier_hit_counts = {"t0_foundation": 0, "t1": 0, "t2": 0, "t3": 0}
         for tier in tiers:
             try:
                 resp = self.index.query(
@@ -411,9 +480,9 @@ class RetrievalHandler:
             logger.info("Retriever tiered: 0 results across tiers")
             return []
 
-        # Build id->embedding cache if index supports; otherwise, use None and fallback to scores
-        # Pinecone query does not return embeddings; skip deep diversity across text, use score-only fallback in _mmr
-        selected = self._mmr(all_matches, embeddings=None, k=mmr_k, lambda_mult=mmr_lambda)
+        # Build embeddings for MMR diversity calculation
+        # We'll use metadata-based diversity as a proxy for content diversity
+        selected = self._mmr(all_matches, embeddings=self._build_diversity_cache(all_matches), k=mmr_k, lambda_mult=mmr_lambda)
 
         # Convert to docs
         docs: List[Document] = []
@@ -433,7 +502,7 @@ class RetrievalHandler:
             meta['vector_id'] = m.id
             docs.append(Document(page_content=content, metadata=meta))
 
-        logger.info(f"Retriever tiered: hits t1={tier_hit_counts['t1']} t2={tier_hit_counts['t2']} t3={tier_hit_counts['t3']}; returning {len(docs)}")
+        logger.info(f"Retriever tiered: hits t0={tier_hit_counts['t0_foundation']} t1={tier_hit_counts['t1']} t2={tier_hit_counts['t2']} t3={tier_hit_counts['t3']}; returning {len(docs)}")
         return docs
 
     def reinforce_memories(self, docs: List[Document]):
