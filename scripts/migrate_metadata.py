@@ -218,85 +218,116 @@ class MetadataMigrator:
         
         return None
     
-    def get_vectors_to_migrate(self, event_id: Optional[str] = None) -> List[str]:
-        """Get list of vector IDs that need migration."""
-        vector_ids = []
+    def get_vectors_to_migrate(self, event_id: Optional[str] = None) -> List[Tuple[str, str]]:
+        """Get list of (vector_id, namespace) tuples that need migration."""
+        vector_tuples = []
         
         try:
-            # Query all vectors (or filtered by event_id)
-            filter_dict = {}
-            if event_id and event_id != 'all':
-                filter_dict['event_id'] = event_id
+            # Get all namespaces from index stats
+            stats = self.index.describe_index_stats()
+            namespaces = stats['namespaces']
             
-            # Use query with top_k to get vectors in batches
-            query_response = self.index.query(
-                vector=[0.0] * 1536,  # Dummy query vector
-                filter=filter_dict,
-                top_k=10000,  # Large number to get many results
-                include_metadata=True
-            )
+            logger.info(f"Found {len(namespaces)} namespaces to scan: {list(namespaces.keys())}")
             
-            for match in query_response.matches:
-                vector_ids.append(match.id)
-            
-            logger.info(f"Found {len(vector_ids)} vectors to potentially migrate")
-            
-        except Exception as e:
-            logger.error(f"Error querying vectors: {e}")
-            
-        return vector_ids
-    
-    def migrate_batch(self, vector_ids: List[str], dry_run: bool = True) -> int:
-        """Migrate a batch of vectors."""
-        updated_count = 0
-        
-        try:
-            # Fetch current vectors
-            fetch_response = self.index.fetch(ids=vector_ids)
-            
-            updates = []
-            
-            for vector_id, vector_data in fetch_response.vectors.items():
+            for namespace_name, ns_stats in namespaces.items():
+                vector_count = ns_stats['vector_count']
+                if vector_count == 0:
+                    continue
+                    
+                logger.info(f"Scanning namespace '{namespace_name}' with {vector_count} vectors...")
+                
                 try:
-                    current_metadata = vector_data.metadata or {}
+                    # Query vectors in this namespace
+                    filter_dict = {}
+                    if event_id and event_id != 'all':
+                        filter_dict['event_id'] = event_id
                     
-                    # Check if already has new metadata fields
-                    if 'content_category' in current_metadata:
-                        logger.debug(f"Vector {vector_id} already migrated, skipping")
-                        self.stats['skipped'] += 1
-                        continue
-                    
-                    # Detect content type and generate enhanced metadata
-                    content_category, enhanced_metadata = self.detect_content_type(
-                        current_metadata, vector_id
+                    # Use query with dummy vector to get all vectors in namespace
+                    query_response = self.index.query(
+                        vector=[0.0] * 1536,  # Dummy query vector
+                        filter=filter_dict,
+                        namespace=namespace_name,
+                        top_k=min(10000, vector_count * 2),  # Get all vectors with buffer
+                        include_metadata=True
                     )
                     
-                    # Merge with existing metadata
-                    new_metadata = {**current_metadata, **enhanced_metadata}
+                    namespace_vectors = []
+                    for match in query_response.matches:
+                        namespace_vectors.append((match.id, namespace_name))
                     
-                    if not dry_run:
-                        updates.append({
-                            'id': vector_id,
-                            'metadata': new_metadata
-                        })
-                    
-                    updated_count += 1
-                    self.stats['updated'] += 1
-                    
-                    logger.debug(f"Vector {vector_id}: {content_category} -> {enhanced_metadata}")
+                    vector_tuples.extend(namespace_vectors)
+                    logger.info(f"Found {len(namespace_vectors)} vectors in namespace '{namespace_name}'")
                     
                 except Exception as e:
-                    logger.error(f"Error processing vector {vector_id}: {e}")
-                    self.stats['errors'] += 1
+                    logger.error(f"Error querying namespace '{namespace_name}': {e}")
+                    continue
             
-            # Perform batch update
-            if updates and not dry_run:
-                self.index.update(updates=updates)
-                logger.info(f"Updated {len(updates)} vectors in batch")
+            logger.info(f"Total vectors found across all namespaces: {len(vector_tuples)}")
             
         except Exception as e:
-            logger.error(f"Error in batch migration: {e}")
-            self.stats['errors'] += len(vector_ids)
+            logger.error(f"Error getting namespaces: {e}")
+            
+        return vector_tuples
+    
+    def migrate_batch(self, vector_tuples: List[Tuple[str, str]], dry_run: bool = True) -> int:
+        """Migrate a batch of vectors from potentially different namespaces."""
+        updated_count = 0
+        
+        # Group vectors by namespace for efficient fetching
+        namespace_groups = {}
+        for vector_id, namespace in vector_tuples:
+            if namespace not in namespace_groups:
+                namespace_groups[namespace] = []
+            namespace_groups[namespace].append(vector_id)
+        
+        for namespace, vector_ids in namespace_groups.items():
+            try:
+                # Fetch current vectors from this namespace
+                fetch_response = self.index.fetch(ids=vector_ids, namespace=namespace)
+                
+                updates = []
+                
+                for vector_id, vector_data in fetch_response.vectors.items():
+                    try:
+                        current_metadata = vector_data.metadata or {}
+                        
+                        # Check if already has new metadata fields
+                        if 'content_category' in current_metadata:
+                            logger.debug(f"Vector {vector_id} (ns: {namespace}) already migrated, skipping")
+                            self.stats['skipped'] += 1
+                            continue
+                        
+                        # Detect content type and generate enhanced metadata
+                        content_category, enhanced_metadata = self.detect_content_type(
+                            current_metadata, vector_id
+                        )
+                        
+                        # Merge with existing metadata
+                        new_metadata = {**current_metadata, **enhanced_metadata}
+                        
+                        if not dry_run:
+                            updates.append({
+                                'id': vector_id,
+                                'metadata': new_metadata
+                            })
+                        
+                        updated_count += 1
+                        self.stats['updated'] += 1
+                        
+                        logger.debug(f"Vector {vector_id} (ns: {namespace}): {content_category} -> {enhanced_metadata}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing vector {vector_id} in namespace {namespace}: {e}")
+                        self.stats['errors'] += 1
+                
+                # Perform batch update for this namespace
+                if updates and not dry_run:
+                    self.index.update(updates=updates, namespace=namespace)
+                    logger.info(f"Updated {len(updates)} vectors in namespace '{namespace}'")
+                
+            except Exception as e:
+                logger.error(f"Error in batch migration for namespace '{namespace}': {e}")
+                self.stats['errors'] += len(vector_ids)
         
         return updated_count
     
@@ -306,18 +337,18 @@ class MetadataMigrator:
         logger.info(f"Event ID filter: {event_id or 'all events'}")
         logger.info(f"Dry run: {dry_run}")
         
-        # Get all vector IDs to migrate
-        vector_ids = self.get_vectors_to_migrate(event_id)
+        # Get all vector tuples to migrate
+        vector_tuples = self.get_vectors_to_migrate(event_id)
         
-        if not vector_ids:
+        if not vector_tuples:
             logger.warning("No vectors found to migrate")
             return self.stats
         
         # Process in batches
-        total_batches = (len(vector_ids) + self.batch_size - 1) // self.batch_size
+        total_batches = (len(vector_tuples) + self.batch_size - 1) // self.batch_size
         
-        for i in range(0, len(vector_ids), self.batch_size):
-            batch = vector_ids[i:i + self.batch_size]
+        for i in range(0, len(vector_tuples), self.batch_size):
+            batch = vector_tuples[i:i + self.batch_size]
             batch_num = (i // self.batch_size) + 1
             
             logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} vectors)")
