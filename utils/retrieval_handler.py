@@ -411,6 +411,42 @@ class RetrievalHandler:
         logger.debug(f"Built diversity cache for {len(diversity_cache)} documents")
         return diversity_cache
 
+    def _boost_filename_matches(self, matches: List, query: str) -> List:
+        """Boost scores for documents where query terms match filename/doc_id."""
+        if not matches:
+            return matches
+            
+        query_lower = query.lower()
+        query_terms = query_lower.split()
+        
+        boosted = []
+        for match in matches:
+            filename = match.metadata.get('file_name', '').lower()
+            doc_id = match.metadata.get('doc_id', '').lower()
+            
+            # Calculate boost based on term matches in filename/doc_id
+            boost = 0.0
+            for term in query_terms:
+                if len(term) > 2:  # Skip short words
+                    if term in filename or term in doc_id:
+                        boost += 0.1  # Add 0.1 boost per matching term
+            
+            # Apply boost to score (create new match object with boosted score)
+            if boost > 0:
+                # Create a copy of the match with boosted score
+                import copy
+                boosted_match = copy.copy(match)
+                boosted_match.score = match.score + boost
+                boosted.append(boosted_match)
+                logger.debug(f"Boosted {filename or doc_id} by {boost:.2f} (new score: {boosted_match.score:.4f})")
+            else:
+                boosted.append(match)
+                
+        # Re-sort by score after boosting
+        boosted.sort(key=lambda x: x.score, reverse=True)
+        return boosted
+
+
     def get_relevant_context_tiered(
         self,
         query: str,
@@ -437,6 +473,7 @@ class RetrievalHandler:
         except Exception as e:
             logger.error(f"Retriever tiered: Embedding error: {e}", exc_info=True)
             return []
+
 
         tier_results = []
         tiers = []
@@ -480,9 +517,12 @@ class RetrievalHandler:
             logger.info("Retriever tiered: 0 results across tiers")
             return []
 
+        # Apply filename matching boost before MMR
+        boosted_matches = self._boost_filename_matches(all_matches, query)
+        
         # Build embeddings for MMR diversity calculation
         # We'll use metadata-based diversity as a proxy for content diversity
-        selected = self._mmr(all_matches, embeddings=self._build_diversity_cache(all_matches), k=mmr_k, lambda_mult=mmr_lambda)
+        selected = self._mmr(boosted_matches, embeddings=self._build_diversity_cache(boosted_matches), k=mmr_k, lambda_mult=mmr_lambda)
 
         # Convert to docs
         docs: List[Document] = []
