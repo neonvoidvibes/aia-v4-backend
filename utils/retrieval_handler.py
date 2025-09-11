@@ -36,30 +36,27 @@ def get_cached_embeddings(model_name: str, api_key: Optional[str]) -> OpenAIEmbe
     return emb
 
 # Define a default transform prompt
-DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more effective for searching a vector database. Your goal is to broaden the query slightly to catch related terms, but you must preserve the original keywords and intent.
+DEFAULT_QUERY_TRANSFORM_PROMPT = """Rewrite the following user query to be more effective for searching a vector database. Your goal is to expand the query with related terms and synonyms while preserving the original keywords and intent.
 
 **Guidelines:**
 1.  **Preserve Core Keywords:** The most important keywords from the original query MUST be present in the rewritten query.
-2.  **Simple is Better:** If the query is already specific and clear (e.g., asking about "tvättbjörn"), do not change it much. You might add synonyms if appropriate, but the original term is vital.
-3.  **Extract Entities:** Identify and retain key entities (people, projects, dates).
-4.  **Foundational Documents:** For queries about constitutions, principles, foundations, or governance, include formal terms like "constitutional principles", "foundation", "governance", "organizational structure".
+2.  **Add Synonyms & Related Terms:** Include formal/informal variations, technical terms, and conceptually related words.
+3.  **Match Document Language:** Consider both colloquial user language and formal document language that might contain the same concepts.
+4.  **Extract Entities:** Identify and retain key entities (people, projects, dates, organizations).
 5.  **No Hallucinations:** Do NOT add new topics or subjects that are not in the original query.
 
-**Example 1:**
+**Examples:**
 User Query: 'kan du se något om en tvättbjörn'
 Rewritten Query: information about tvättbjörn raccoon
 
-**Example 2:**
 User Query: 'what were the key decisions in the mobius project meeting on May 1st'
 Rewritten Query: key decisions summary mobius project meeting May 1st
 
-**Example 3:**
-User Query: 'river's constitution'
-Rewritten Query: river constitution constitutional principles foundation governance organizational structure
+User Query: 'company rules'
+Rewritten Query: company rules policies guidelines regulations procedures standards
 
-**Example 4:**
-User Query: 'look for river Foundation Source constitutional principles'
-Rewritten Query: river Foundation Source constitutional principles governance foundation
+User Query: 'team structure'
+Rewritten Query: team structure organization hierarchy roles responsibilities management
 
 Output only the rewritten query, no preamble or formatting.
 
