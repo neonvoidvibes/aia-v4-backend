@@ -1,4 +1,5 @@
 """Utilities for retrieving relevant document context for chat."""
+import os
 import logging
 import threading
 import traceback
@@ -87,7 +88,8 @@ class RetrievalHandler:
         self.event_id = event_id if event_id and event_id != '0000' else None
         self.final_top_k = final_top_k
         self.initial_fetch_k = initial_fetch_k
-        self.embedding_model_name = "text-embedding-3-small"
+        # Use environment variable or default to text-embedding-3-small
+        self.embedding_model_name = os.getenv('RETRIEVAL_EMBED_MODEL', 'text-embedding-3-small')
         self.anthropic_api_key = anthropic_api_key
 
         try:

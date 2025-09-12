@@ -68,7 +68,8 @@ class EmbeddingHandler:
         """Initialize embedding handler."""
         self.index_name = index_name
         self.namespace = namespace
-        self.embedding_model_name = "text-embedding-ada-002"
+        # Use environment variable or default to text-embedding-3-small
+        self.embedding_model_name = os.getenv('EMBED_MODEL_DEFAULT', 'text-embedding-3-small')
 
         try:
             self.embeddings = OpenAIEmbeddings(model=self.embedding_model_name)
@@ -198,6 +199,10 @@ class EmbeddingHandler:
                     'source_identifier': metadata.get('source_identifier', 'unknown'),
                     'is_core_memory': is_core_memory_log or metadata.get('is_core_memory', False), # Preserve CLI flag or use log-level flag
                     'triplets': triplets, # Add the extracted triplets
+                    # Add embedding model metadata for migration tracking
+                    'embed_model': self.embedding_model_name,
+                    'embed_version': 'v1',
+                    'vector_space': os.getenv('EMBED_VECTOR_SPACE_TAG', 'te3s-2025-09'),
                 }
                 # Ensure key fields exist for retrieval policy compatibility
                 if 'agent_name' not in pinecone_metadata:

@@ -45,7 +45,7 @@ def init_pinecone() -> Optional[Pinecone]:
 
 def create_or_verify_index(
     index_name: str = "chat-docs-index",
-    dimension: int = 1536,  # OpenAI ada-002 dimension
+    dimension: int = 1536,  # OpenAI text-embedding-3-small dimension
     metric: str = "cosine"
 ) -> Optional[object]:
     """Create a new Pinecone index if it doesn't exist, or verify and return the existing index.
