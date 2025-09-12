@@ -407,6 +407,9 @@ def main():
             
             # Verify migration if not dry run
             if not args.dry_run:
+                # Add small delay for Pinecone consistency
+                logger.info("Waiting for Pinecone consistency before verification...")
+                time.sleep(3)
                 verification_passed = verify_migration(index, namespace)
                 stats['verification_passed'] = verification_passed
                 
