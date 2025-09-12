@@ -98,9 +98,13 @@ def list_ids(index, namespace: str, cursor: Optional[str] = None, limit: int = 5
         
         # For small namespaces, get all IDs at once using query
         # This is a workaround for list() API issues
+        # For larger namespaces, we need to get all vectors, not just limit
+        max_query_limit = 10000  # Pinecone's max top_k limit
+        actual_limit = min(max_query_limit, vector_count)
+        
         query_response = index.query(
             vector=[0.0] * 1536,  # Dummy vector
-            top_k=min(limit, vector_count),
+            top_k=actual_limit,
             namespace=namespace,
             include_metadata=False,
             include_values=False
@@ -407,9 +411,9 @@ def main():
             
             # Verify migration if not dry run
             if not args.dry_run:
-                # Add small delay for Pinecone consistency
+                # Add delay for Pinecone consistency (metadata updates can take 10+ seconds)
                 logger.info("Waiting for Pinecone consistency before verification...")
-                time.sleep(3)
+                time.sleep(15)
                 verification_passed = verify_migration(index, namespace)
                 stats['verification_passed'] = verification_passed
                 
