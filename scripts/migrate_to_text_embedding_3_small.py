@@ -299,11 +299,26 @@ def verify_migration(index, namespace: str, sample_size: int = 10) -> bool:
         # Fetch sample vectors
         records = fetch(index, namespace, page.ids)
         
-        migrated_count = 0
-        total_count = len(records.get('vectors', {}))
+        # Handle FetchResponse object correctly
+        if hasattr(records, 'vectors') and records.vectors:
+            vectors_dict = records.vectors
+        elif hasattr(records, 'get'):
+            vectors_dict = records.get('vectors', {})
+        else:
+            vectors_dict = records if isinstance(records, dict) else {}
         
-        for vid, vector_data in records.get('vectors', {}).items():
-            metadata = vector_data.get('metadata', {})
+        migrated_count = 0
+        total_count = len(vectors_dict)
+        
+        for vid, vector_data in vectors_dict.items():
+            # Handle different vector_data formats
+            if hasattr(vector_data, 'metadata'):
+                metadata = vector_data.metadata or {}
+            elif isinstance(vector_data, dict):
+                metadata = vector_data.get('metadata', {})
+            else:
+                metadata = {}
+                
             if metadata.get('embed_model') == NEW_MODEL:
                 migrated_count += 1
         
