@@ -10,6 +10,8 @@ import time
 import logging
 from typing import List, Dict, Any, Optional
 from tenacity import retry, wait_exponential_jitter, stop_after_attempt
+import itertools
+import threading
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -22,11 +24,39 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+class ProgressSpinner:
+    """ASCII spinner for progress indication"""
+    def __init__(self, message="Processing"):
+        self.message = message
+        self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+        self.busy = False
+        self.delay = 0.1
+        
+    def __enter__(self):
+        self.start()
+        return self
+        
+    def __exit__(self, *args):
+        self.stop()
+        
+    def start(self):
+        self.busy = True
+        threading.Thread(target=self._spin).start()
+        
+    def stop(self):
+        self.busy = False
+        print('\r', end='')  # Clear the line
+        
+    def _spin(self):
+        while self.busy:
+            print(f'\r{next(self.spinner)} {self.message}...', end='', flush=True)
+            time.sleep(self.delay)
+
 # Load environment variables
 load_dotenv()
 
-# Configuration
-INDEX_NAME = "river"
+# Configuration  
+INDEX_NAME = "river"  # Hardcoded to match API server
 BATCH_SIZE = 100
 NEW_MODEL = "text-embedding-3-small"
 VECTOR_SPACE_TAG = "te3s-2025-09"
@@ -46,10 +76,42 @@ def embed(texts: List[str]) -> List[List[float]]:
     response = client.embeddings.create(model=NEW_MODEL, input=texts)
     return [d.embedding for d in response.data]
 
-@retry(wait=wait_exponential_jitter(0.5, 10), stop=stop_after_attempt(7))
-def list_ids(index, namespace: str, cursor: Optional[str] = None, limit: int = 1000):
-    """List vector IDs in a namespace with retry logic."""
-    return index.list(namespace=namespace, limit=limit, cursor=cursor)
+class SimpleResponse:
+    def __init__(self, ids_list, cursor=None):
+        self.ids = ids_list
+        self.cursor = cursor
+
+def list_ids(index, namespace: str, cursor: Optional[str] = None, limit: int = 50):
+    """List vector IDs in a namespace - ultra simplified version."""
+    try:
+        # Use query with no filter to get basic stats first
+        stats = index.describe_index_stats()
+        ns_info = stats.get('namespaces', {}).get(namespace)
+        if not ns_info:
+            logger.warning(f"Namespace {namespace} not found in stats")
+            return SimpleResponse([], None)
+        
+        vector_count = ns_info.get('vector_count', 0)
+        if vector_count == 0:
+            logger.info(f"Namespace {namespace} is empty")
+            return SimpleResponse([], None)
+        
+        # For small namespaces, get all IDs at once using query
+        # This is a workaround for list() API issues
+        query_response = index.query(
+            vector=[0.0] * 1536,  # Dummy vector
+            top_k=min(limit, vector_count),
+            namespace=namespace,
+            include_metadata=False,
+            include_values=False
+        )
+        
+        ids = [match.id for match in query_response.matches]
+        return SimpleResponse(ids, None)
+        
+    except Exception as e:
+        logger.error(f"Failed to list IDs in namespace {namespace}: {e}")
+        return SimpleResponse([], None)
 
 @retry(wait=wait_exponential_jitter(0.5, 10), stop=stop_after_attempt(7))
 def fetch(index, namespace: str, ids: List[str]):
@@ -90,37 +152,57 @@ def migrate_namespace(index, namespace: str, dry_run: bool = False) -> Dict[str,
     while True:
         try:
             # List IDs in batches
-            page = list_ids(index, namespace, cursor=cursor, limit=1000)
-            ids = page.ids
+            with ProgressSpinner(f"Listing vector IDs in namespace {namespace}"):
+                page = list_ids(index, namespace, cursor=cursor, limit=50)
+                ids = page.ids
             
             if not ids:
                 break
                 
-            logger.info(f"Processing batch of {len(ids)} vectors...")
+            logger.info(f"✓ Found batch of {len(ids)} vectors")
             
             # Fetch vectors
-            records = fetch(index, namespace, ids)
+            with ProgressSpinner(f"Fetching vector metadata"):
+                records = fetch(index, namespace, ids)
             
             # Process each vector
             batch_to_upsert = []
             
-            for vid, vector_data in records.get('vectors', {}).items():
+            # Handle FetchResponse object correctly
+            if hasattr(records, 'vectors') and records.vectors:
+                vectors_dict = records.vectors
+            elif hasattr(records, 'get'):
+                vectors_dict = records.get('vectors', {})
+            else:
+                vectors_dict = records if isinstance(records, dict) else {}
+            
+            logger.info(f"📋 Processing {len(vectors_dict)} vectors...")
+            
+            for i, (vid, vector_data) in enumerate(vectors_dict.items()):
                 stats['total_processed'] += 1
                 
-                metadata = vector_data.get('metadata', {})
+                if i % 10 == 0 and i > 0:
+                    print(f"  📄 Processed {i}/{len(vectors_dict)}", end='\r')
+                
+                # Handle different vector_data formats
+                if hasattr(vector_data, 'metadata'):
+                    metadata = vector_data.metadata or {}
+                elif isinstance(vector_data, dict):
+                    metadata = vector_data.get('metadata', {})
+                else:
+                    metadata = {}
                 
                 # Check if already migrated
-                current_model = metadata.get('embed_model')
+                current_model = metadata.get('embed_model') if metadata else None
                 if current_model == NEW_MODEL:
                     stats['already_migrated'] += 1
-                    logger.debug(f"Vector {vid} already migrated")
                     continue
                 
                 # Get content for re-embedding
-                content = metadata.get('content') or metadata.get('text') or ''
+                content = metadata.get('content') or metadata.get('text') or '' if metadata else ''
                 if not content:
                     stats['missing_content'] += 1
-                    logger.warning(f"Vector {vid} has no content field, skipping")
+                    logger.warning(f"⚠️  Vector {vid} has no content field, skipping")
                     continue
                 
                 if dry_run:
@@ -146,6 +228,8 @@ def migrate_namespace(index, namespace: str, dry_run: bool = False) -> Dict[str,
                     if not dry_run:
                         process_batch(index, namespace, batch_to_upsert, stats)
                     batch_to_upsert = []
+            
+            print()  # New line after progress
             
             # Process remaining batch
             if batch_to_upsert and not dry_run:
@@ -177,8 +261,8 @@ def process_batch(index, namespace: str, batch: List[Dict], stats: Dict):
         texts = [item['content'] for item in batch]
         
         # Generate new embeddings
-        logger.info(f"Generating embeddings for batch of {len(texts)} texts...")
-        embeddings = embed(texts)
+        with ProgressSpinner(f"🧠 Generating embeddings for {len(texts)} texts"):
+            embeddings = embed(texts)
         
         # Prepare vectors for upsert
         vectors = []
@@ -190,14 +274,14 @@ def process_batch(index, namespace: str, batch: List[Dict], stats: Dict):
             })
         
         # Upsert vectors (this overwrites existing vectors with same IDs)
-        logger.info(f"Upserting batch of {len(vectors)} vectors...")
-        response = upsert(index, namespace, vectors)
+        with ProgressSpinner(f"💾 Upserting {len(vectors)} vectors"):
+            response = upsert(index, namespace, vectors)
         
         stats['total_updated'] += len(vectors)
-        logger.info(f"Successfully upserted batch. Response: {response}")
+        logger.info(f"✅ Successfully upserted batch of {len(vectors)} vectors")
         
     except Exception as e:
-        logger.error(f"Error processing batch: {e}")
+        logger.error(f"❌ Error processing batch: {e}")
         stats['errors'] += len(batch)
         raise
 
@@ -258,21 +342,39 @@ def main():
                 return 1
         
         # Get list of namespaces
-        all_namespaces = index.list_namespaces().namespaces
-        logger.info(f"Available namespaces: {all_namespaces}")
+        namespaces_response = index.list_namespaces()
+        
+        # Handle different response formats
+        if hasattr(namespaces_response, 'namespaces'):
+            all_namespaces = list(namespaces_response.namespaces)
+        else:
+            all_namespaces = list(namespaces_response)
+        
+        # Extract namespace names from response (handle both string and dict formats)
+        namespace_names = []
+        for ns in all_namespaces:
+            if hasattr(ns, 'name'):
+                # NamespaceDescription object
+                namespace_names.append(ns.name)
+            elif isinstance(ns, dict):
+                namespace_names.append(ns.get('name', str(ns)))
+            else:
+                namespace_names.append(str(ns))
+        
+        logger.info(f"Available namespaces: {namespace_names}")
         
         if args.namespace:
             # Migrate specific namespace
             namespaces_to_migrate = [args.namespace]
         elif args.test_only:
             # Migrate only test namespaces
-            namespaces_to_migrate = [ns for ns in all_namespaces if '_test' in ns.lower()]
+            namespaces_to_migrate = [ns for ns in namespace_names if '_test' in ns.lower()]
             if not namespaces_to_migrate:
                 logger.error("No _test namespace found")
                 return 1
         else:
             # Migrate all namespaces
-            namespaces_to_migrate = all_namespaces
+            namespaces_to_migrate = namespace_names
         
         logger.info(f"Namespaces to migrate: {namespaces_to_migrate}")
         
