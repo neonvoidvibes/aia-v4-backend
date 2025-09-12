@@ -486,14 +486,31 @@ class RetrievalHandler:
         tiers.append({"filter": tier0_filter, "cap": tier_caps[0] if len(tier_caps)>0 else 7, "label": "t0_foundation"})
         
         # Tier 1: Current Event
-        tiers.append({"filter": {"agent_name": self.namespace, "event_id": current_event}, "cap": tier_caps[1] if len(tier_caps)>1 else 6, "label": "t1"})
+        t1_filter = {"agent_name": self.namespace, "event_id": current_event}
+        # Apply non-scoping metadata filters (e.g., content_category) to T1
+        if metadata_filter:
+            for k, v in metadata_filter.items():
+                if k not in ("agent_name", "event_id"):
+                    t1_filter[k] = v
+        tiers.append({"filter": t1_filter, "cap": tier_caps[1] if len(tier_caps)>1 else 6, "label": "t1"})
         
         # Tier 2: Shared '0000' 
-        tiers.append({"filter": {"agent_name": self.namespace, "event_id": "0000"}, "cap": tier_caps[2] if len(tier_caps)>2 else 6, "label": "t2"})
+        t2_filter = {"agent_name": self.namespace, "event_id": "0000"}
+        # Apply non-scoping metadata filters to T2 as well
+        if metadata_filter:
+            for k, v in metadata_filter.items():
+                if k not in ("agent_name", "event_id"):
+                    t2_filter[k] = v
+        tiers.append({"filter": t2_filter, "cap": tier_caps[2] if len(tier_caps)>2 else 6, "label": "t2"})
         
         # Tier 3: Other Events
         if include_t3:
-            tiers.append({"filter": {"agent_name": self.namespace, "event_id": {"$ne": current_event}}, "cap": tier_caps[3] if len(tier_caps)>3 else 4, "label": "t3"})
+            t3_filter = {"agent_name": self.namespace, "event_id": {"$ne": current_event}}
+            if metadata_filter:
+                for k, v in metadata_filter.items():
+                    if k not in ("agent_name", "event_id"):
+                        t3_filter[k] = v
+            tiers.append({"filter": t3_filter, "cap": tier_caps[3] if len(tier_caps)>3 else 4, "label": "t3"})
 
         all_matches = []
         tier_hit_counts = {"t0_foundation": 0, "t1": 0, "t2": 0, "t3": 0}
