@@ -196,7 +196,7 @@ class EmbeddingHandler:
                     'total_chunks': len(documents),
                     'supabase_log_id': metadata.get('supabase_log_id', -1),
                     'source_identifier': metadata.get('source_identifier', 'unknown'),
-                    'is_core_memory': is_core_memory_log, # Apply the log-level flag to every chunk
+                    'is_core_memory': is_core_memory_log or metadata.get('is_core_memory', False), # Preserve CLI flag or use log-level flag
                     'triplets': triplets, # Add the extracted triplets
                 }
                 # Ensure key fields exist for retrieval policy compatibility
