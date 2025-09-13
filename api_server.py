@@ -40,7 +40,7 @@ from utils.supabase_client import get_supabase_client
 from langchain_core.documents import Document
 from utils.retrieval_handler import RetrievalHandler
 from utils.prompt_builder import prompt_builder
-from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder
+from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder, list_saved_transcripts
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
@@ -2874,6 +2874,21 @@ I've updated the prompt to include the dragon's personality as you requested. It
                                           "=== END INSTRUCTIONS FOR USING RETRIEVED CONTEXT ===")
                 final_system_prompt += rag_usage_instructions
 
+                # Provide a natural index of available meetings (saved/) for the LLM
+                try:
+                    saved_items = list_saved_transcripts(agent_name, event_id)
+                except Exception as _e_idx:
+                    saved_items = []
+                if saved_items:
+                    max_index_items = int(os.getenv('MEETINGS_INDEX_LIMIT', '40'))
+                    lines = []
+                    for itm in saved_items[:max_index_items]:
+                        date_str = itm.get('meeting_date') or 'unknown-date'
+                        fname = itm.get('filename') or 'unknown'
+                        summary_id = f"summary_{fname}"
+                        lines.append(f"- {date_str} — {fname} (id: {summary_id})")
+                    final_system_prompt += "\n\n=== AVAILABLE MEETINGS ===\n" + "\n".join(lines) + "\n=== END AVAILABLE MEETINGS ==="
+
                 last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
                 last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
                 
@@ -2899,12 +2914,43 @@ I've updated the prompt to include the dragon's personality as you requested. It
                         include_t3 = True
                         if (signal_bias or 'medium') == 'low' and not allow_t3_low:
                             include_t3 = False
+                        # Optional: if user references a specific meeting (by filename/id or unique date), restrict retrieval
+                        metadata_filter = None
+                        try:
+                            mf = None
+                            if saved_items and last_actual_user_message_for_rag:
+                                msg_l = last_actual_user_message_for_rag.lower()
+                                # 1) Filename/id match
+                                for itm in saved_items:
+                                    fname = (itm.get('filename') or '').lower()
+                                    summary_id = f"summary_{fname}"
+                                    if fname and (fname in msg_l or summary_id.lower() in msg_l):
+                                        mf = {"file_name": {"$eq": summary_id}}
+                                        break
+                                # 2) Unique date match (YYYY-MM-DD)
+                                if not mf:
+                                    import re
+                                    dates = re.findall(r"(\d{4}-\d{2}-\d{2})", msg_l)
+                                    for d in dates:
+                                        matches = [itm for itm in saved_items if itm.get('meeting_date') == d]
+                                        if len(matches) == 1:
+                                            fname = matches[0].get('filename')
+                                            if fname:
+                                                mf = {"file_name": {"$eq": f"summary_{fname}"}}
+                                                break
+                            metadata_filter = mf
+                            if mf:
+                                logger.info(f"Applying metadata filter for exact meeting retrieval: {mf}")
+                        except Exception as _e_mf:
+                            metadata_filter = None
+
                         retrieved_docs = retriever.get_relevant_context_tiered(
                             query=last_actual_user_message_for_rag,
                             tier_caps=tier_caps,
                             mmr_k=mmr_k,
                             mmr_lambda=mmr_lambda,
                             include_t3=include_t3,
+                            metadata_filter=metadata_filter,
                         )
                         retrieved_docs_for_reinforcement = retrieved_docs
                         if retrieved_docs:

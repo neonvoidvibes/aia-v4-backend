@@ -117,6 +117,60 @@ def read_all_transcripts_in_folder(agent_name: str, event_id: str) -> Optional[s
     if not s3: 
         logger.error("read_all_transcripts: S3 client unavailable.")
         return None
+
+
+def list_saved_transcripts(agent_name: str, event_id: str) -> List[Dict[str, Any]]:
+    """Return a list of transcript files in saved/ for the agent/event.
+
+    Each item: { 'Key': str, 'LastModified': datetime, 'Size': int, 'filename': str, 'meeting_date': Optional[str] }
+    Sorted by LastModified desc.
+    """
+    s3 = get_s3_client()
+    if not s3:
+        logger.error("list_saved_transcripts: S3 client unavailable.")
+        return []
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not aws_s3_bucket:
+        logger.error("list_saved_transcripts: AWS_S3_BUCKET not set.")
+        return []
+
+    base_prefix = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/saved/"
+    items: List[Dict[str, Any]] = []
+    try:
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_prefix):
+            for obj in page.get('Contents', []):
+                key = obj['Key']
+                if key == base_prefix:
+                    continue
+                rel = key[len(base_prefix):]
+                if '/' in rel:
+                    continue  # only immediate files
+                filename = os.path.basename(key)
+                if not filename.startswith('transcript_'):
+                    continue
+                # Parse meeting date from filename pattern transcript_DYYYYMMDD-T...
+                meeting_date = None
+                try:
+                    if '_D' in filename:
+                        seg = filename.split('_D', 1)[1]
+                        ymd = seg.split('-', 1)[0]
+                        if len(ymd) >= 8:
+                            meeting_date = f"{ymd[0:4]}-{ymd[4:6]}-{ymd[6:8]}"
+                except Exception:
+                    meeting_date = None
+                items.append({
+                    'Key': key,
+                    'LastModified': obj.get('LastModified'),
+                    'Size': obj.get('Size', 0),
+                    'filename': filename,
+                    'meeting_date': meeting_date,
+                })
+        items.sort(key=lambda x: x.get('LastModified') or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        return items
+    except Exception as e:
+        logger.error(f"list_saved_transcripts: error for prefix {base_prefix}: {e}", exc_info=True)
+        return []
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not aws_s3_bucket: 
         logger.error("read_all_transcripts: AWS_S3_BUCKET not set.")
