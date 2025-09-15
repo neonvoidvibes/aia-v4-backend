@@ -203,6 +203,9 @@ active_sessions: Dict[str, Dict[str, Any]] = {}
 session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
 logger.info("Initialized and cleared active_sessions and session_locks at startup.")
 
+# Reattach grace window for unexpected disconnects (seconds)
+REATTACH_GRACE_SECONDS = int(os.getenv("REATTACH_GRACE_SECONDS", "90"))
+
 # Job tracking system for async transcription
 transcription_jobs: Dict[str, Dict[str, Any]] = {}
 job_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
@@ -1374,6 +1377,8 @@ def resume_audio_recording_route(user: SupabaseUser):
 @sock.route('/ws/audio_stream/<session_id>')
 def audio_stream_socket(ws, session_id: str):
     token = request.args.get('token')
+    client_id = request.args.get('client_id') or "unknown"
+    resume = (request.args.get('resume') == '1')
     user = verify_user(token) 
     
     if not user:
@@ -1381,7 +1386,7 @@ def audio_stream_socket(ws, session_id: str):
         ws.close(reason='Authentication failed')
         return
 
-    logger.info(f"WebSocket connection attempt for session {session_id}, user {user.id}")
+    logger.info(f"WebSocket connection attempt for session {session_id}, user {user.id}, client_id={client_id}, resume={resume}")
 
     with session_locks[session_id]:
         if session_id not in active_sessions:
@@ -1389,15 +1394,34 @@ def audio_stream_socket(ws, session_id: str):
             ws.close(1011, "Session not found")
             return
         
-        if active_sessions[session_id].get("websocket_connection") is not None:
-            logger.warning(f"WebSocket: Session {session_id} already has a WebSocket connection. Closing new one.")
-            ws.close(1008, "Connection already exists")
-            return
-
-        active_sessions[session_id]["websocket_connection"] = ws
-        active_sessions[session_id]["last_activity_timestamp"] = time.time()
-        active_sessions[session_id]["is_active"] = True 
-        logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
+        existing_ws = active_sessions[session_id].get("websocket_connection")
+        existing_user_id = active_sessions[session_id].get("user_id")
+        if existing_ws is not None:
+            if resume and existing_user_id == user.id:
+                # Replace ownership: close old socket and accept new
+                try:
+                    try:
+                        existing_ws.send(json.dumps({"type": "info", "reason": "replaced", "by": client_id}))
+                    except Exception:
+                        pass
+                    try:
+                        existing_ws.close(1012, f"Replaced by client {client_id}")
+                    except Exception:
+                        pass
+                finally:
+                    active_sessions[session_id]["websocket_connection"] = ws
+                    active_sessions[session_id]["last_activity_timestamp"] = time.time()
+                    active_sessions[session_id]["is_active"] = True
+                    logger.info(f"WebSocket takeover: session {session_id} user {user.id} client {client_id} replaced previous connection.")
+            else:
+                logger.warning(f"WebSocket: Duplicate connection for session {session_id}. resume={resume}, same_user={existing_user_id == user.id}. Closing new one.")
+                ws.close(1008, "Connection already exists")
+                return
+        else:
+            active_sessions[session_id]["websocket_connection"] = ws
+            active_sessions[session_id]["last_activity_timestamp"] = time.time()
+            active_sessions[session_id]["is_active"] = True 
+            logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
     # Server-side keepalive using threading
     def _server_keepalive_thread(ws, session_id, interval=15, log=logger):
@@ -4457,7 +4481,7 @@ def cleanup_idle_sessions():
                 if session_data.get("is_active") and \
                    not session_data.get("is_finalizing") and \
                    session_data.get("websocket_connection") is None and \
-                   now - session_data.get("last_activity_timestamp", 0) > 45: # 45s grace period for reconnect
+                   now - session_data.get("last_activity_timestamp", 0) > REATTACH_GRACE_SECONDS: # grace period for reconnect
                     logger.warning(f"Idle session cleanup: Session {session_id} has been active without a WebSocket for >45s. Marking for finalization.")
                     sessions_to_finalize.append(session_id)
                 
