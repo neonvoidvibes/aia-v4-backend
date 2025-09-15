@@ -1460,11 +1460,14 @@ def audio_stream_socket(ws, session_id: str):
             message = ws.receive(timeout=5) # Increased timeout slightly
 
             if message is None: 
-                # This block is now less critical as the main timeout is handled in `finally`.
-                # We can keep it as a secondary check.
-                if active_sessions.get(session_id) and (time.time() - active_sessions[session_id].get("last_activity_timestamp", 0) > 70):
-                    logger.warning(f"WebSocket for session {session_id} timed out due to inactivity (loop check). Closing.")
-                    break 
+                # Secondary inactivity guard: only enforce when not paused
+                sess = active_sessions.get(session_id)
+                if sess:
+                    last_ts = sess.get("last_activity_timestamp", 0)
+                    paused = bool(sess.get("is_backend_processing_paused", False))
+                    if not paused and (time.time() - last_ts > 70):
+                        logger.warning(f"WebSocket for session {session_id} timed out due to inactivity (loop check). Closing.")
+                        break
                 continue 
 
             if session_id not in active_sessions or not active_sessions[session_id].get("is_active"):
