@@ -2628,6 +2628,7 @@ def create_agent(user: SupabaseUser):
                         "file_name": filename,
                         "agent_name": agent_name,
                         "event_id": "0000",
+                        "is_core_memory": True,  # Wizard uploads seed the agent's foundational knowledge
                     }
                     embed_handler.embed_and_upsert(content, metadata)
                     logger.info(f"Embedded Pinecone doc '{filename}' for agent '{agent_name}'.")
