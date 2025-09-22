@@ -43,9 +43,9 @@ from utils.prompt_builder import prompt_builder
 from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder, list_saved_transcripts
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
-    get_agent_docs, save_chat_to_s3, format_chat_history, get_s3_client,
+    get_agent_docs, get_event_docs, parse_event_doc_key, save_chat_to_s3, format_chat_history, get_s3_client,
     list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries, get_objective_function,
-    write_agent_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure
+    write_agent_doc, write_event_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript
@@ -308,6 +308,20 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
     if '/agents/' in s3_key and '/docs/' in s3_key:
         logger.debug(f"S3 Ownership check PASSED for user {user.id} on agent doc key {s3_key}")
         return True
+
+    # Allow access to agent event docs if user has access to the agent and the path matches the flat docs prefix.
+    event_doc_match = parse_event_doc_key(s3_key)
+    if event_doc_match:
+        agent_name, event_id, filename = event_doc_match
+        if has_user_agent_access(user.id, agent_name):
+            logger.debug(
+                f"S3 Ownership check PASSED for user {user.id} on agent {agent_name} event doc key {s3_key}"
+            )
+            return True
+        logger.warning(
+            f"SECURITY: User {user.id} tried to access {agent_name} event docs without agent access. Key: {s3_key}"
+        )
+        return False
 
     # Allow access to agent transcripts/recordings if user has access to the agent
     # Path patterns: organizations/river/agents/{agent_name}/events/{event_id}/transcripts/...
@@ -2684,6 +2698,7 @@ def warm_up_agent_cache(user: SupabaseUser):
     logger.info(f"Received cache warm-up request for agent: '{agent_name}', event: '{event_id}' from user: {user.id}")
 
     singleflight_key = f"{agent_name}:{event_id}"
+    feature_event_docs_enabled = os.getenv('FEATURE_EVENT_DOCS', 'false').lower() == 'true'
     with _WARMUP_LOCK:
         if singleflight_key in _WARMUP_INFLIGHT:
             logger.info(f"Warm-up singleflight: already in progress for {singleflight_key}; skipping duplicate.")
@@ -2700,6 +2715,8 @@ def warm_up_agent_cache(user: SupabaseUser):
                 get_latest_frameworks(agent)
                 get_latest_context(agent, event)
                 get_agent_docs(agent)
+                if feature_event_docs_enabled:
+                    get_event_docs(agent, event)
                 get_transcript_summaries(agent, event) # Also warm up summaries
                 logger.info(f"Background cache worker finished for agent: '{agent}', event: '{event}'")
             except Exception as e:
@@ -2877,6 +2894,7 @@ I've updated the prompt to include the dragon's personality as you requested. It
             else:
                 # Unified prompt builder path for regular agents (incl. event layer)
                 feature_event_prompts = os.getenv('FEATURE_EVENT_PROMPTS', 'true').lower() == 'true'
+                feature_event_docs = os.getenv('FEATURE_EVENT_DOCS', 'false').lower() == 'true'
                 try:
                     final_system_prompt = prompt_builder(
                         agent=agent_name,
@@ -2884,6 +2902,7 @@ I've updated the prompt to include the dragon's personality as you requested. It
                         user_context=None,
                         retrieval_hints=None,
                         feature_event_prompts=feature_event_prompts,
+                        feature_event_docs=feature_event_docs,
                     )
                 except Exception as e:
                     logger.error(f"PromptBuilder error; falling back: {e}", exc_info=True)
@@ -3050,10 +3069,17 @@ When you identify information that should be permanently stored in your agent do
 === END INSTRUCTIONS FOR MEMORY UPDATES ==="""
             historical_context_parts.append(memory_update_instructions)
 
+            feature_event_docs = os.getenv('FEATURE_EVENT_DOCS', 'false').lower() == 'true'
             if not is_wizard:
                 agent_docs = get_agent_docs(agent_name)
                 if agent_docs:
                     historical_context_parts.append(f"=== AGENT DOCUMENTATION ===\n{agent_docs}\n=== END AGENT DOCUMENTATION ===")
+                if feature_event_docs and event_id:
+                    event_docs = get_event_docs(agent_name, event_id)
+                    if event_docs:
+                        historical_context_parts.append(
+                            f"=== EVENT DOCUMENTATION ===\n{event_docs}\n=== END EVENT DOCUMENTATION ==="
+                        )
             
                 meeting_content_instructions = (
                     "\n\n=== INSTRUCTIONS FOR USING MEETING CONTENT ===\n"

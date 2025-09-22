@@ -7,6 +7,7 @@ from .s3_utils import (
     get_latest_frameworks,
     get_latest_context,
     get_objective_function,
+    get_event_docs,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ def prompt_builder(
     user_context: Optional[str] = None,
     retrieval_hints: Optional[Dict[str, Any]] = None,
     feature_event_prompts: bool = True,
+    feature_event_docs: bool = False,
 ) -> str:
     """
     Build a unified system prompt with layers:
@@ -117,6 +119,12 @@ def prompt_builder(
             block += ["=== END EVENT LAYER ==="]
             parts.append("\n".join(block))
 
+    # 5.5) Event docs layer (feature-flagged)
+    if feature_event_docs and event:
+        event_docs = get_event_docs(agent, event)
+        if event_docs:
+            parts.append("=== EVENT DOCS ===\n" + event_docs + "\n=== END EVENT DOCS ===")
+
     # 5) Objective (agent override -> base). Event override supported by direct read if present
     # Try event-specific objective
     event_objective = None
@@ -160,4 +168,3 @@ def get_user_context_section(user_context: Optional[str]) -> str:
     if user_context:
         return f"=== USER CONTEXT ===\n{user_context}\n=== END USER CONTEXT ==="
     return ""
-

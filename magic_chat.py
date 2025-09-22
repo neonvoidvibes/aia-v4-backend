@@ -20,7 +20,7 @@ from typing import Optional, List, Dict, Any
 # Import shared utilities
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
-    get_agent_docs, load_existing_chats_from_s3, save_chat_to_s3, format_chat_history
+    get_agent_docs, get_event_docs, load_existing_chats_from_s3, save_chat_to_s3, format_chat_history
 )
 from utils.retrieval_handler import RetrievalHandler
 from utils.transcript_utils import TranscriptState, get_latest_transcript_file, read_new_transcript_content, read_all_transcripts_in_folder
@@ -179,9 +179,13 @@ def main():
             logger.info(f"Base system prompt loaded ({len(system_prompt)} chars).")
             initial_context_for_reference = []
             frameworks=get_latest_frameworks(config.agent_name); context=get_latest_context(config.agent_name, config.event_id); docs=get_agent_docs(config.agent_name)
+            event_docs=None
+            if os.getenv('FEATURE_EVENT_DOCS', 'false').lower() == 'true':
+                event_docs=get_event_docs(config.agent_name, config.event_id)
             if frameworks: initial_context_for_reference.append({"role": "system", "content": f"## Frameworks\n{frameworks}"}); logger.info("CLI: Frameworks loaded.")
             if context: initial_context_for_reference.append({"role": "system", "content": f"## Context\n{context}"}); logger.info("CLI: Context loaded.")
             if docs: initial_context_for_reference.append({"role": "system", "content": f"## Agent Docs\n{docs}"}); logger.info("CLI: Docs loaded.")
+            if event_docs: initial_context_for_reference.append({"role": "system", "content": f"## Event Docs\n{event_docs}"}); logger.info("CLI: Event docs loaded.")
 
             if config.memory: system_prompt = reload_memory(config.agent_name, config.memory, system_prompt); logger.info("CLI: Memory loaded.")
 

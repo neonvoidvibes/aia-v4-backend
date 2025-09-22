@@ -2,6 +2,7 @@
 """Utilities for interacting with AWS S3."""
 
 import os
+import re
 import boto3
 from botocore.config import Config as BotoConfig # For S3 timeouts
 import logging
@@ -23,6 +24,18 @@ S3_FILE_CACHE: Dict[str, Dict[str, Any]] = {}
 S3_CACHE_LOCK = threading.Lock()
 S3_CACHE_TTL_DEFAULT = timedelta(minutes=120)
 S3_CACHE_TTL_NOT_FOUND = timedelta(minutes=1)
+
+EVENT_DOC_KEY_PATTERN = re.compile(r'/agents/([^/]+)/events/([^/]+)/docs/([^/]+)$')
+
+
+def parse_event_doc_key(s3_key: str) -> Optional[Tuple[str, str, str]]:
+    """Return (agent_name, event_id, filename) if key matches the event docs pattern."""
+    if not s3_key:
+        return None
+    match = EVENT_DOC_KEY_PATTERN.search(s3_key)
+    if not match:
+        return None
+    return match.group(1), match.group(2), match.group(3)
 
 def get_s3_client(config: Optional[BotoConfig] = None) -> Optional[boto3.client]:
     """
@@ -223,6 +236,7 @@ def create_agent_structure(agent_name: str) -> bool:
         "_config/",
         "docs/",
         "events/0000/_config/",
+        "events/0000/docs/",
         "events/0000/attachments/",
         "events/0000/chats/archive/",
         "events/0000/chats/saved/",
@@ -409,6 +423,85 @@ def get_latest_context(agent_name: str, event_id: Optional[str] = None) -> Optio
         
     return final_context if final_context else None
 
+def get_event_docs(agent_name: str, event_id: str) -> Optional[str]:
+    """Get event-specific documentation files for an agent/event pair, with caching."""
+
+    if not agent_name or not event_id:
+        logger.error("Agent name and event ID are required to load event docs.")
+        return None
+
+    docs_cache_key = f"event_docs_{agent_name}_{event_id}"
+
+    def fetch_docs():
+        s3 = get_s3_client()
+        aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+        if not s3 or not aws_s3_bucket:
+            logger.error("S3 unavailable for getting event docs.")
+            return None
+        try:
+            prefix = f"organizations/river/agents/{agent_name}/events/{event_id}/docs/"
+            logger.debug(f"Searching for event docs in S3 prefix '{prefix}'")
+            paginator = s3.get_paginator('list_objects_v2')
+            docs = []
+            for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=prefix):
+                if 'Contents' not in page:
+                    continue
+                for obj in page['Contents']:
+                    key = obj['Key']
+                    if key == prefix or key.endswith('/'):
+                        continue
+                    relative_path = key[len(prefix):]
+                    if '/' in relative_path:
+                        continue
+                    filename = os.path.basename(key)
+                    content = read_file_content(key, f'event doc ({filename})')
+                    if content:
+                        docs.append(
+                            f"--- START Doc: {filename} ---\n{content}\n--- END Doc: {filename} ---"
+                        )
+            if not docs:
+                logger.info(
+                    f"No documentation files found directly in '{prefix}' for event '{event_id}'."
+                )
+                return None
+            logger.info(
+                f"Loaded {len(docs)} event documentation files for agent '{agent_name}', event '{event_id}'."
+            )
+            return docs_cache_key, "\n\n".join(docs)
+        except Exception as e:
+            logger.error(
+                f"Error getting event docs for agent '{agent_name}', event '{event_id}': {e}",
+                exc_info=True,
+            )
+            return None
+
+    with S3_CACHE_LOCK:
+        cached_item = S3_FILE_CACHE.get(docs_cache_key)
+        if cached_item and cached_item['expiry'] > datetime.now(timezone.utc):
+            logger.info(f"CACHE HIT for event docs ('{docs_cache_key}')")
+            return cached_item['content']
+
+    logger.info(f"CACHE MISS for event docs ('{docs_cache_key}')")
+    fetch_result = fetch_docs()
+    content = fetch_result[1] if fetch_result else None
+
+    with S3_CACHE_LOCK:
+        if content is not None:
+            S3_FILE_CACHE[docs_cache_key] = {
+                'content': content,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_DEFAULT,
+            }
+            logger.info(f"CACHE SET for event docs ('{docs_cache_key}').")
+        else:
+            S3_FILE_CACHE[docs_cache_key] = {
+                'content': None,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_NOT_FOUND,
+            }
+            logger.info(f"CACHE SET (None) for event docs ('{docs_cache_key}').")
+
+    return content
+
+
 def get_agent_docs(agent_name: str) -> Optional[str]:
     """Get documentation files for the specified agent, with caching."""
     
@@ -544,6 +637,54 @@ def write_agent_doc(agent_name: str, doc_name: str, content: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Error writing agent doc to {file_key}: {e}", exc_info=True)
+        return False
+
+
+def write_event_doc(agent_name: str, event_id: str, doc_name: str, content: str) -> bool:
+    """Creates or updates a documentation file for an agent event and invalidates the cache."""
+
+    if not agent_name or not event_id:
+        logger.error("Agent name and event ID are required to write an event doc.")
+        return False
+
+    logger.info(
+        f"Attempting to write event doc '{doc_name}' for agent '{agent_name}', event '{event_id}'."
+    )
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error(
+            "S3 client or bucket not available for writing event doc. "
+            f"S3 Client: {'Exists' if s3 else 'None'}, Bucket: {aws_s3_bucket}"
+        )
+        return False
+
+    safe_doc_name = secure_filename(doc_name)
+    if not safe_doc_name:
+        logger.error(f"Invalid doc_name provided: '{doc_name}'")
+        return False
+
+    file_key = f"organizations/river/agents/{agent_name}/events/{event_id}/docs/{safe_doc_name}"
+
+    try:
+        logger.info(f"Executing S3 PutObject. Bucket: '{aws_s3_bucket}', Key: '{file_key}'")
+        s3.put_object(
+            Bucket=aws_s3_bucket,
+            Key=file_key,
+            Body=content.encode('utf-8'),
+            ContentType='text/plain; charset=utf-8',
+        )
+        logger.info(f"Successfully wrote event doc to S3 key: {file_key}")
+
+        docs_cache_key = f"event_docs_{agent_name}_{event_id}"
+        with S3_CACHE_LOCK:
+            if docs_cache_key in S3_FILE_CACHE:
+                del S3_FILE_CACHE[docs_cache_key]
+                logger.info(f"CACHE INVALIDATED for event docs: '{docs_cache_key}' after write.")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error writing event doc to {file_key}: {e}", exc_info=True)
         return False
 
 
