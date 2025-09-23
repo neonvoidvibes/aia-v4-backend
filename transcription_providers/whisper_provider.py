@@ -11,7 +11,7 @@ except Exception:
     pass
 
 class WhisperProvider(TranscriptionProvider):
-    def __init__(self, openai_api_key: Optional[str] = None, model: str = "gpt-4o-transcribe"):
+    def __init__(self, openai_api_key: Optional[str] = None, model: str = "whisper-1"):
         self.api_key = openai_api_key or os.getenv("OPENAI_API_KEY", "")
         self.model = model
         if not _USE_INTERNAL_HELPER:
