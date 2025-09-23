@@ -199,7 +199,7 @@ def _call_groq_stream_with_retry(model_name: str, max_tokens: int, system_instru
     return stream
 
 @retry_strategy_groq
-def _call_groq_non_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
+def _call_groq_non_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float, reasoning_effort: Optional[str] = None):
     if groq_circuit_breaker.is_open():
         raise CircuitBreakerOpen(f"Assistant ({groq_circuit_breaker.name}) is temporarily unavailable.")
     if not api_key:
@@ -209,13 +209,20 @@ def _call_groq_non_stream_with_retry(model_name: str, max_tokens: int, system_in
 
     groq_messages = [{"role": "system", "content": system_instruction}] + messages
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=groq_messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stream=False
-    )
+    # Prepare request parameters
+    request_params = {
+        "model": model_name,
+        "messages": groq_messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": False
+    }
+
+    # Add reasoning_effort if specified
+    if reasoning_effort is not None:
+        request_params["reasoning_effort"] = reasoning_effort
+
+    response = client.chat.completions.create(**request_params)
 
     logger.debug(f"Groq API response object: {response}")
     logger.debug(f"Groq choices length: {len(response.choices) if response.choices else 0}")
