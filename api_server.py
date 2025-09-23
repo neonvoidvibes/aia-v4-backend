@@ -60,6 +60,8 @@ from flask_cors import CORS
 import boto3
 
 from transcription_service import process_audio_segment_and_update_s3
+import tempfile
+import magic
 
 # ---------------------------
 # New: Multi-Agent Transcript Save Endpoint helpers/imports
@@ -76,6 +78,171 @@ def _read_transcript_text_for_ma(s3_key: str) -> str:
         return obj["Body"].read().decode("utf-8")
     with open(s3_key, "r", encoding="utf-8") as f:
         return f.read()
+
+# Mobile Recording Enhancement Functions
+def _detect_audio_codec(audio_bytes: bytes) -> str:
+    """Detect audio codec from binary data using file magic numbers."""
+    try:
+        # Check for common audio format signatures
+        if audio_bytes.startswith(b'\x1a\x45\xdf\xa3'):
+            # WebM/EBML signature
+            return "audio/webm"
+        elif audio_bytes[4:8] == b'ftyp':
+            # MP4 signature
+            if b'M4A ' in audio_bytes[:32] or b'mp41' in audio_bytes[:32]:
+                return "audio/mp4"
+            return "audio/mp4"
+        elif audio_bytes.startswith(b'RIFF') and b'WAVE' in audio_bytes[:12]:
+            # WAV signature
+            return "audio/wav"
+        elif audio_bytes.startswith(b'\xff\xfb') or audio_bytes.startswith(b'\xff\xf3') or audio_bytes.startswith(b'\xff\xf2'):
+            # MP3 signature
+            return "audio/mpeg"
+        elif len(audio_bytes) >= 2 and all(abs(int.from_bytes(audio_bytes[i:i+2], 'little', signed=True)) < 32767 for i in range(0, min(100, len(audio_bytes)-1), 2)):
+            # Heuristic for PCM: check if values are in valid 16-bit range
+            return "audio/pcm"
+        else:
+            # Default fallback
+            return "audio/webm"
+    except Exception as e:
+        logger.error(f"Codec detection failed: {e}")
+        return "audio/webm"
+
+def _normalize_audio_to_wav(audio_bytes: bytes, source_format: str, target_rate: int = 16000, target_channels: int = 1) -> bytes:
+    """
+    Normalize audio to 16kHz mono WAV format using ffmpeg.
+
+    Args:
+        audio_bytes: Raw audio data
+        source_format: Detected format (audio/webm, audio/mp4, etc.)
+        target_rate: Target sample rate (default 16kHz for STT)
+        target_channels: Target channel count (default mono)
+
+    Returns:
+        Normalized WAV audio bytes
+    """
+    try:
+        # Map content types to ffmpeg input formats
+        format_map = {
+            "audio/webm": "webm",
+            "audio/mp4": "mp4",
+            "audio/wav": "wav",
+            "audio/mpeg": "mp3",
+            "audio/pcm": "s16le"  # 16-bit signed little-endian PCM
+        }
+
+        input_format = format_map.get(source_format, "webm")
+
+        with tempfile.NamedTemporaryFile(suffix=f".{input_format}") as input_file, \
+             tempfile.NamedTemporaryFile(suffix=".wav") as output_file:
+
+            # Write input audio
+            input_file.write(audio_bytes)
+            input_file.flush()
+
+            # Build ffmpeg command
+            cmd = [
+                "ffmpeg", "-y",  # -y to overwrite output
+                "-i", input_file.name,
+                "-ar", str(target_rate),  # Sample rate
+                "-ac", str(target_channels),  # Channel count
+                "-c:a", "pcm_s16le",  # 16-bit PCM codec
+                "-f", "wav",  # WAV format
+                output_file.name
+            ]
+
+            # Special handling for raw PCM input
+            if source_format == "audio/pcm":
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "s16le",  # Input format
+                    "-ar", "16000",  # Assume 16kHz input for PCM
+                    "-ac", "1",     # Assume mono for PCM
+                    "-i", input_file.name,
+                    "-ar", str(target_rate),
+                    "-ac", str(target_channels),
+                    "-c:a", "pcm_s16le",
+                    "-f", "wav",
+                    output_file.name
+                ]
+
+            # Execute ffmpeg
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+            if result.returncode != 0:
+                logger.error(f"FFmpeg normalization failed: {result.stderr}")
+                raise Exception(f"FFmpeg error: {result.stderr}")
+
+            # Read normalized audio
+            output_file.seek(0)
+            return output_file.read()
+
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg normalization timed out")
+        raise Exception("Audio normalization timeout")
+    except Exception as e:
+        logger.error(f"Audio normalization failed: {e}")
+        raise
+
+def _handle_mobile_audio_processing(session_id: str, audio_bytes: bytes, session_data: dict):
+    """
+    Handle mobile audio processing with format normalization.
+
+    This function processes audio from mobile devices, normalizes it to a standard format,
+    and sends it for transcription.
+    """
+    try:
+        content_type = session_data.get("content_type", "audio/webm")
+        mobile_telemetry = session_data.get("mobile_telemetry", {})
+
+        # Update telemetry
+        mobile_telemetry["transcode_attempts"] = mobile_telemetry.get("transcode_attempts", 0) + 1
+
+        # Normalize audio if needed
+        if content_type in ["audio/mp4", "audio/pcm"] or content_type.startswith("audio/webm") and "opus" in content_type:
+            logger.debug(f"Session {session_id}: Normalizing {content_type} to WAV")
+            normalized_audio = _normalize_audio_to_wav(audio_bytes, content_type)
+            mobile_telemetry["transcode_successes"] = mobile_telemetry.get("transcode_successes", 0) + 1
+        else:
+            # Use original audio (WebM is supported by OpenAI)
+            normalized_audio = audio_bytes
+
+        # Process with existing transcription service
+        session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(normalized_audio)
+
+        # Estimate duration (rough approximation based on content type)
+        duration_estimate = _estimate_audio_duration(normalized_audio, content_type)
+        session_data["accumulated_audio_duration_for_current_segment_seconds"] += duration_estimate
+
+        logger.debug(f"Session {session_id}: Added {len(normalized_audio)} normalized bytes, estimated duration: {duration_estimate:.2f}s")
+
+    except Exception as e:
+        logger.error(f"Mobile audio processing failed for session {session_id}: {e}")
+        mobile_telemetry["error_count"] = mobile_telemetry.get("error_count", 0) + 1
+        # Fall back to treating as WebM
+        session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(audio_bytes)
+        session_data["accumulated_audio_duration_for_current_segment_seconds"] += 1.0  # Conservative estimate
+
+def _estimate_audio_duration(audio_bytes: bytes, content_type: str) -> float:
+    """Estimate audio duration in seconds based on format and size."""
+    try:
+        if content_type == "audio/wav":
+            # WAV has header with duration info
+            if len(audio_bytes) >= 44:
+                # Basic WAV duration calculation: data_size / (sample_rate * channels * bytes_per_sample)
+                # For 16kHz mono 16-bit: ~32KB per second
+                return max(0.1, (len(audio_bytes) - 44) / 32000)
+        elif content_type == "audio/pcm":
+            # PCM: 16kHz mono 16-bit = 32KB per second
+            return max(0.1, len(audio_bytes) / 32000)
+        elif "mp4" in content_type:
+            # AAC compression ~8:1, estimate based on size
+            return max(0.1, len(audio_bytes) / 4000)  # ~4KB per second for AAC
+        else:
+            # WebM/Opus compression ~10:1, estimate based on size
+            return max(0.1, len(audio_bytes) / 3000)  # ~3KB per second for Opus
+    except:
+        return 1.0  # Conservative fallback
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -1494,6 +1661,30 @@ def audio_stream_socket(ws, session_id: str):
                 try:
                     control_msg = json.loads(message)
                     action = control_msg.get("action")
+
+                    # Check if this is an audio header (mobile recording)
+                    if not action and all(key in control_msg for key in ['contentType', 'rate', 'channels']):
+                        # This is an audio header from mobile recording
+                        session_data = active_sessions.get(session_id, {})
+                        session_data["mobile_audio_header"] = control_msg
+                        session_data["content_type"] = control_msg.get("contentType", "audio/webm")
+                        session_data["sample_rate"] = control_msg.get("rate", 48000)
+                        session_data["channels"] = control_msg.get("channels", 1)
+                        session_data["bit_depth"] = control_msg.get("bitDepth", 16)
+
+                        logger.info(f"WebSocket session {session_id}: Received mobile audio header: {control_msg}")
+
+                        # Initialize mobile recording telemetry
+                        session_data["mobile_telemetry"] = {
+                            "codec_detected": control_msg.get("contentType", "unknown"),
+                            "header_received_at": time.time(),
+                            "transcode_attempts": 0,
+                            "transcode_successes": 0,
+                            "stt_requests": 0,
+                            "error_count": 0
+                        }
+                        continue
+
                     logger.debug(f"WebSocket session {session_id}: Received control message: {control_msg}")
 
                     if action == "ping":
@@ -1535,10 +1726,35 @@ def audio_stream_socket(ws, session_id: str):
                     if session_data.get("is_backend_processing_paused", False):
                         logger.debug(f"Session {session_id} is paused. Discarding {len(message)} audio bytes.")
                         continue
+
+                    # Detect codec if not already set by header
+                    if "content_type" not in session_data:
+                        detected_codec = _detect_audio_codec(message)
+                        session_data["content_type"] = detected_codec
+                        session_data["codec_detected_from_bytes"] = True
+                        logger.info(f"WebSocket session {session_id}: Detected codec from binary data: {detected_codec}")
+
+                        # Update telemetry
+                        if "mobile_telemetry" not in session_data:
+                            session_data["mobile_telemetry"] = {
+                                "codec_detected": detected_codec,
+                                "header_received_at": None,
+                                "transcode_attempts": 0,
+                                "transcode_successes": 0,
+                                "stt_requests": 0,
+                                "error_count": 0
+                            }
                     
+                    # Handle mobile audio processing if mobile header was received
+                    has_mobile_header = "mobile_audio_header" in session_data
+                    if has_mobile_header:
+                        _handle_mobile_audio_processing(session_id, message, session_data)
+                        # Continue with normal VAD processing using normalized audio
+                        message = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
+
                     # Check if VAD is enabled for this session
                     vad_enabled = session_data.get("vad_enabled", False)
-                    
+
                     if vad_enabled and VAD_IMPORT_SUCCESS and vad_bridge:
                         # VAD Processing Path with robust header and data accumulation
                         if not session_data.get("is_first_blob_received", False):
