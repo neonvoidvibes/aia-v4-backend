@@ -4027,7 +4027,7 @@ def generate_chat_title(first_user_message: str) -> str:
         title = _call_groq_non_stream_with_retry(
             model_name="openai/gpt-oss-20b",
             max_tokens=50,
-            system_instruction="Generate only a 3-4 word title. No explanation, no quotes, just the title.",
+            system_instruction="Generate only a 3-4 word title using short words based on the first user message. No explanation, no quotes, just the title.",
             messages=[{"role": "user", "content": f"Create a title for: {first_user_message}"}],
             api_key=os.getenv('GROQ_API_KEY'), # Use global key for this utility
             temperature=0.3,
