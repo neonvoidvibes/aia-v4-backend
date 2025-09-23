@@ -39,6 +39,28 @@ def get_current_transcription_provider() -> str:
     """Get the name of the currently active transcription provider."""
     return _PROVIDER_NAME.capitalize()
 
+def format_language_for_header(language_code: str) -> str:
+    """Format language code for display in transcript headers."""
+    language_map = {
+        "any": "Auto-detect",
+        "sv": "Swedish",
+        "en": "English",
+        "da": "Danish",
+        "no": "Norwegian",
+        "fi": "Finnish",
+        "de": "German",
+        "fr": "French",
+        "es": "Spanish",
+        "it": "Italian",
+        "pt": "Portuguese",
+        "nl": "Dutch",
+        "ru": "Russian",
+        "zh": "Chinese",
+        "ja": "Japanese",
+        "ko": "Korean"
+    }
+    return language_map.get(language_code, language_code.upper())
+
 # --- Utility Functions (adapted from magic_audio.py) ---
 
 def get_s3_client() -> Optional[boto3.client]:
@@ -1192,7 +1214,7 @@ def process_audio_segment_and_update_s3(
                     obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
                     existing_content = obj['Body'].read().decode('utf-8')
                 except s3.exceptions.NoSuchKey:
-                    header = f"# Transcript - Session {session_id_for_log}\nAgent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\nProvider: {get_current_transcription_provider()}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
+                    header = f"# Transcript - Session {session_id_for_log}\nAgent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\nLanguage: {format_language_for_header(language_setting_from_client)}\nProvider: {get_current_transcription_provider()}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
                     existing_content = header
                 
                 appended_text = "\n".join(lines_to_append_to_s3) + "\n"
