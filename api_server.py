@@ -952,6 +952,15 @@ def health_check():
         "s3_client_initialized": get_s3_client() is not None
     }), 200
 
+@app.route('/api/config/defaults', methods=['GET'])
+def get_config_defaults():
+    """Get default configuration values for the UI based on current provider settings."""
+    return jsonify({
+        "transcriptionProvider": get_current_transcription_provider(),
+        "defaultVadAggressiveness": get_default_vad_aggressiveness(),
+        "defaultTranscriptionLanguage": "any"
+    }), 200
+
 @app.route('/healthz', methods=['GET'])
 def healthz():
     # Constant-time, no external calls
