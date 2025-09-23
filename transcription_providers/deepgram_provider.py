@@ -15,7 +15,7 @@ class DeepgramProvider(TranscriptionProvider):
         self.smart_format = smart_format
         self.punctuate = punctuate
         self._endpoint = "https://api.deepgram.com/v1/listen"
-        logger.info(f"DeepgramProvider initialized with model={model}, api_key={'*' * 10}{'...' if len(self.api_key) > 10 else ''}")
+        logger.info(f"DeepgramProvider initialized with model={model} (multilingual capable), api_key={'*' * 10}{'...' if len(self.api_key) > 10 else ''}")
 
     def _request(self, path: str, language: Optional[str]) -> Dict[str, Any]:
         # Deepgram parameters - enable word timestamps and smart formatting
@@ -26,7 +26,12 @@ class DeepgramProvider(TranscriptionProvider):
             "words": "true",  # Enable word-level timestamps
             "timestamps": "true"  # Enable timestamps
         }
-        if language and language != "any": params["language"] = language
+        # Handle language parameter for nova-3 multilingual support
+        if language and language != "any":
+            params["language"] = language
+        else:
+            # For nova-3, enable multilingual detection when language is "any"
+            params["detect_language"] = "true"
         headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "audio/wav"  # Specify content type
