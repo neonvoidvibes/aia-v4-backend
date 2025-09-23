@@ -1021,10 +1021,11 @@ def _transcribe_audio_segment_openai(
     audio_file_path: str,
     openai_api_key: str,
     language_setting_from_client: Optional[str] = "any",
-    rolling_context_prompt: Optional[str] = None
+    rolling_context_prompt: Optional[str] = None,
+    vad_aggressiveness: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
     # Backward-compatible wrapper; now goes through provider
-    return _provider.transcribe_file(audio_file_path, language=language_setting_from_client, prompt=rolling_context_prompt)
+    return _provider.transcribe_file(audio_file_path, language=language_setting_from_client, prompt=rolling_context_prompt, vad_aggressiveness=vad_aggressiveness)
 
 def process_audio_segment_and_update_s3(
     temp_segment_wav_path: str, 
@@ -1078,11 +1079,13 @@ def process_audio_segment_and_update_s3(
     # Transcribe audio (slow network call), passing in the rolling context
     # Note: last_transcript is accessed here, before the lock, which is fine.
     last_transcript = session_data.get("last_successful_transcript", "")
+    vad_aggressiveness_from_client = session_data.get("vad_aggressiveness_from_client")
     transcription_result = _transcribe_audio_segment_openai(
         temp_segment_wav_path,
         openai_api_key,
         language_setting_from_client,
-        rolling_context_prompt=last_transcript
+        rolling_context_prompt=last_transcript,
+        vad_aggressiveness=vad_aggressiveness_from_client
     )
 
     # If transcription fails, exit early.

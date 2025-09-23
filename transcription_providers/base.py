@@ -10,5 +10,6 @@ class TranscriptionProvider:
         path: str,
         language: Optional[str] = None,
         prompt: Optional[str] = None,
+        vad_aggressiveness: Optional[int] = None,
     ) -> Optional[TranscriptionResult]:
         raise NotImplementedError

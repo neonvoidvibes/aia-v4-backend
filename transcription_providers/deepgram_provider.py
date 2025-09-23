@@ -17,7 +17,33 @@ class DeepgramProvider(TranscriptionProvider):
         self._endpoint = "https://api.deepgram.com/v1/listen"
         logger.info(f"DeepgramProvider initialized with model={model} (multilingual capable), api_key={'*' * 10}{'...' if len(self.api_key) > 10 else ''}")
 
-    def _request(self, path: str, language: Optional[str]) -> Dict[str, Any]:
+    def _get_deepgram_vad_mode(self, vad_aggressiveness: Optional[int]) -> Optional[int]:
+        """
+        Map frontend VAD aggressiveness (1=Quiet, 2=Mid, 3=Noisy) to Deepgram VAD mode.
+
+        Frontend mapping:
+        - 1 = Quiet environment (less aggressive VAD needed)
+        - 2 = Mid environment (balanced VAD)
+        - 3 = Noisy environment (more aggressive VAD needed)
+
+        Deepgram vad_mode:
+        - 0 = Least aggressive (more inclusive)
+        - 1 = Default (balanced)
+        - 2 = More aggressive
+        - 3 = Most aggressive (highly restrictive)
+        """
+        if vad_aggressiveness is None:
+            return None
+
+        # Map frontend levels to Deepgram VAD modes
+        mapping = {
+            1: 1,  # Quiet -> Default balanced mode
+            2: 2,  # Mid -> More aggressive
+            3: 3   # Noisy -> Most aggressive
+        }
+        return mapping.get(vad_aggressiveness, 2)  # Default to 2 if invalid
+
+    def _request(self, path: str, language: Optional[str], vad_aggressiveness: Optional[int] = None) -> Dict[str, Any]:
         # Deepgram parameters - enable word timestamps and smart formatting
         params = {
             "model": self.model,
@@ -32,6 +58,11 @@ class DeepgramProvider(TranscriptionProvider):
         else:
             # For nova-3, enable multilingual detection when language is "any"
             params["detect_language"] = "true"
+
+        # Add VAD mode if configured
+        vad_mode = self._get_deepgram_vad_mode(vad_aggressiveness)
+        if vad_mode is not None:
+            params["vad_mode"] = str(vad_mode)
         headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "audio/wav"  # Specify content type
@@ -80,10 +111,11 @@ class DeepgramProvider(TranscriptionProvider):
                      "avg_logprob": 0.0, "compression_ratio": 0.0, "no_speech_prob": 0.0})
         return segs
 
-    def transcribe_file(self, path: str, language: Optional[str] = None, prompt: Optional[str] = None) -> Optional[TranscriptionResult]:
+    def transcribe_file(self, path: str, language: Optional[str] = None, prompt: Optional[str] = None, vad_aggressiveness: Optional[int] = None) -> Optional[TranscriptionResult]:
         try:
-            logger.info(f"Deepgram transcribe_file called: path={path}, language={language}")
-            data = self._request(path, language)
+            vad_info = f", VAD={self._get_deepgram_vad_mode(vad_aggressiveness)}" if vad_aggressiveness else ""
+            logger.info(f"Deepgram transcribe_file called: path={path}, language={language}{vad_info}")
+            data = self._request(path, language, vad_aggressiveness)
             text, words = self._extract(data)
             segments = self._words_to_segments(words)
 

@@ -989,12 +989,13 @@ def start_recording_route(user: SupabaseUser):
             return jsonify({"status": "error", "message": "A recording session is already in progress. Cannot start a transcript session."}), 409
 
     data = g.get('json_data', {})
-    agent_name = data.get('agent') 
+    agent_name = data.get('agent')
     event_id = data.get('event')
     # 'language' is the old key, 'transcriptionLanguage' is the new one. Prioritize new one.
     language_setting = data.get('transcriptionLanguage', data.get('language', 'any')) # Default to 'any'
+    vad_aggressiveness = data.get('vadAggressiveness')  # VAD aggressiveness level (1, 2, 3)
 
-    logger.info(f"Start recording: agent='{agent_name}', event='{event_id}', language_setting='{language_setting}'")
+    logger.info(f"Start recording: agent='{agent_name}', event='{event_id}', language_setting='{language_setting}', vad_aggressiveness='{vad_aggressiveness}'")
 
     if not event_id: 
         return jsonify({"status": "error", "message": "Missing event ID"}), 400
@@ -1018,6 +1019,7 @@ def start_recording_route(user: SupabaseUser):
         "event_id": event_id,
         "session_type": "transcript", # Differentiate session type
         "language_setting_from_client": language_setting, # Store the new setting
+        "vad_aggressiveness_from_client": vad_aggressiveness, # Store VAD aggressiveness level
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_transcript_key,
         "temp_audio_session_dir": temp_audio_base_dir, 
@@ -1088,8 +1090,9 @@ def start_audio_recording(user: SupabaseUser):
     data = g.get('json_data', {})
     agent_name = data.get('agent')
     language_setting = data.get('transcriptionLanguage', 'any')
-    
-    logger.info(f"Start audio recording: agent='{agent_name}', language='{language_setting}'")
+    vad_aggressiveness = data.get('vadAggressiveness')  # VAD aggressiveness level (1, 2, 3)
+
+    logger.info(f"Start audio recording: agent='{agent_name}', language='{language_setting}', vad_aggressiveness='{vad_aggressiveness}'")
 
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
@@ -1109,6 +1112,7 @@ def start_audio_recording(user: SupabaseUser):
         "agent_name": agent_name,
         "session_type": "recording", # Differentiate session type
         "language_setting_from_client": language_setting,
+        "vad_aggressiveness_from_client": vad_aggressiveness, # Store VAD aggressiveness level
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_recording_key, # Re-use the same key name for compatibility
         "temp_audio_session_dir": temp_audio_base_dir,

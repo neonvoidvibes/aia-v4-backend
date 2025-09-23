@@ -32,7 +32,7 @@ class WhisperProvider(TranscriptionProvider):
             })
         return out
 
-    def transcribe_file(self, path: str, language: Optional[str] = None, prompt: Optional[str] = None) -> Optional[TranscriptionResult]:
+    def transcribe_file(self, path: str, language: Optional[str] = None, prompt: Optional[str] = None, vad_aggressiveness: Optional[int] = None) -> Optional[TranscriptionResult]:
         if _USE_INTERNAL_HELPER:
             data = _openai_helper(path=path, language=language, prompt=prompt)
             if not data: return None
