@@ -19,18 +19,21 @@ import concurrent.futures # For parallel processing
 
 from utils.hallucination_detector import get_hallucination_manager # For hallucination detection
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
 # Provider router
 from transcription_providers.base import TranscriptionProvider
 _PROVIDER_NAME = os.getenv("TRANSCRIPTION_PROVIDER", "whisper").strip().lower()
+logger.info(f"Initializing transcription provider: {_PROVIDER_NAME}")
 if _PROVIDER_NAME == "deepgram":
     from transcription_providers.deepgram_provider import DeepgramProvider as _Provider
     _provider: TranscriptionProvider = _Provider(os.getenv("DEEPGRAM_API_KEY"))
+    logger.info("Deepgram provider initialized successfully")
 else:
     from transcription_providers.whisper_provider import WhisperProvider as _Provider
     _provider: TranscriptionProvider = _Provider(os.getenv("OPENAI_API_KEY"))
-
-# Configure logging
-logger = logging.getLogger(__name__)
+    logger.info("Whisper provider initialized successfully")
 
 # --- Utility Functions (adapted from magic_audio.py) ---
 
