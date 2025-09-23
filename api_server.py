@@ -932,7 +932,7 @@ def create_user_admin(user: SupabaseUser):
 from utils.llm_api_utils import (
     _call_anthropic_stream_with_retry, _call_gemini_stream_with_retry,
     _call_openai_stream_with_retry, _call_gemini_non_stream_with_retry,
-    _call_groq_stream_with_retry,
+    _call_groq_stream_with_retry, _call_groq_non_stream_with_retry,
     anthropic_circuit_breaker, gemini_circuit_breaker, openai_circuit_breaker,
     groq_circuit_breaker,
     CircuitBreakerOpen
@@ -4016,14 +4016,14 @@ def pinecone_upsert_proxy(user: SupabaseUser):
 # --- Restored User Chat History Endpoints ---
 
 def generate_chat_title(first_user_message: str) -> str:
-    """Generate a concise title for a chat using Gemini 1.5 Flash"""
+    """Generate a concise title for a chat using Groq GPT-OSS-20B"""
     try:
-        title = _call_gemini_non_stream_with_retry(
-            model_name="gemini-1.5-flash-latest",
+        title = _call_groq_non_stream_with_retry(
+            model_name="openai/gpt-oss-20b",
             max_tokens=50,
             system_instruction="Generate a concise, descriptive title (max 4 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.",
             messages=[{"role": "user", "content": first_user_message}],
-            api_key=os.getenv('GOOGLE_API_KEY'), # Use global key for this utility
+            api_key=os.getenv('GROQ_API_KEY'), # Use global key for this utility
             temperature=0.9
         )
         return title.strip().strip('"')[:100]

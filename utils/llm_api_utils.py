@@ -198,6 +198,27 @@ def _call_groq_stream_with_retry(model_name: str, max_tokens: int, system_instru
     )
     return stream
 
+@retry_strategy_groq
+def _call_groq_non_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
+    if groq_circuit_breaker.is_open():
+        raise CircuitBreakerOpen(f"Assistant ({groq_circuit_breaker.name}) is temporarily unavailable.")
+    if not api_key:
+        raise ValueError("API key for Groq is missing.")
+
+    client = Groq(api_key=api_key)
+
+    groq_messages = [{"role": "system", "content": system_instruction}] + messages
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=groq_messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        stream=False
+    )
+
+    return response.choices[0].message.content
+
 @retry_strategy_gemini
 def _call_gemini_non_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):
     if gemini_circuit_breaker.is_open():
