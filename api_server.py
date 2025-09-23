@@ -1746,12 +1746,20 @@ def audio_stream_socket(ws, session_id: str):
                                 "error_count": 0
                             }
                     
-                    # Handle mobile audio processing if mobile header was received
+                    # Log mobile audio header for telemetry but skip normalization
+                    # VAD → WAV pipeline already handles all audio formats correctly
                     has_mobile_header = "mobile_audio_header" in session_data
                     if has_mobile_header:
-                        _handle_mobile_audio_processing(session_id, message, session_data)
-                        # Continue with normal VAD processing using normalized audio
-                        message = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
+                        mobile_header = session_data["mobile_audio_header"]
+                        logger.info(f"Session {session_id}: Mobile audio detected ({mobile_header.get('contentType')}) - using VAD pipeline")
+                        # Update telemetry
+                        if "mobile_telemetry" not in session_data:
+                            session_data["mobile_telemetry"] = {
+                                "codec_detected": mobile_header.get("contentType", "unknown"),
+                                "header_received_at": time.time(),
+                                "vad_pipeline_used": True,
+                                "normalization_bypassed": True
+                            }
 
                     # Check if VAD is enabled for this session
                     vad_enabled = session_data.get("vad_enabled", False)
