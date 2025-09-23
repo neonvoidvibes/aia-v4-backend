@@ -18,17 +18,30 @@ class WhisperProvider(TranscriptionProvider):
             from openai import OpenAI  # type: ignore
             self._client = OpenAI(api_key=self.api_key)
 
-    def _normalize_segments(self, segments: List[Dict[str, Any]]) -> List[Segment]:
+    def _normalize_segments(self, segments: List[Any]) -> List[Segment]:
         out: List[Segment] = []
         for s in segments or []:
-            start = float(s.get("start", s.get("start_time", 0.0)))
-            end = float(s.get("end", s.get("end_time", start)))
-            text = (s.get("text") or s.get("transcript") or "").strip()
+            # Handle both dict objects (internal helper) and Pydantic objects (OpenAI API)
+            if hasattr(s, 'get'):  # Dictionary-like object
+                start = float(s.get("start", s.get("start_time", 0.0)))
+                end = float(s.get("end", s.get("end_time", start)))
+                text = (s.get("text") or s.get("transcript") or "").strip()
+                avg_logprob = float(s.get("avg_logprob", 0.0))
+                compression_ratio = float(s.get("compression_ratio", 0.0))
+                no_speech_prob = float(s.get("no_speech_prob", 0.0))
+            else:  # Pydantic object (OpenAI API response)
+                start = float(getattr(s, "start", getattr(s, "start_time", 0.0)))
+                end = float(getattr(s, "end", getattr(s, "end_time", start)))
+                text = (getattr(s, "text", None) or getattr(s, "transcript", None) or "").strip()
+                avg_logprob = float(getattr(s, "avg_logprob", 0.0))
+                compression_ratio = float(getattr(s, "compression_ratio", 0.0))
+                no_speech_prob = float(getattr(s, "no_speech_prob", 0.0))
+
             out.append({
                 "start": start, "end": end, "text": text,
-                "avg_logprob": float(s.get("avg_logprob", 0.0)),
-                "compression_ratio": float(s.get("compression_ratio", 0.0)),
-                "no_speech_prob": float(s.get("no_speech_prob", 0.0)),
+                "avg_logprob": avg_logprob,
+                "compression_ratio": compression_ratio,
+                "no_speech_prob": no_speech_prob,
             })
         return out
 
