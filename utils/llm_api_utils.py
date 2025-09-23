@@ -217,7 +217,16 @@ def _call_groq_non_stream_with_retry(model_name: str, max_tokens: int, system_in
         stream=False
     )
 
-    return response.choices[0].message.content
+    logger.debug(f"Groq API response object: {response}")
+    logger.debug(f"Groq choices length: {len(response.choices) if response.choices else 0}")
+    if response.choices:
+        logger.debug(f"Groq choice[0]: {response.choices[0]}")
+        logger.debug(f"Groq message content: '{response.choices[0].message.content}'")
+        logger.debug(f"Groq finish reason: {response.choices[0].finish_reason}")
+
+    content = response.choices[0].message.content
+    logger.debug(f"Returning content: '{content}' (type: {type(content)})")
+    return content
 
 @retry_strategy_gemini
 def _call_gemini_non_stream_with_retry(model_name: str, max_tokens: int, system_instruction: str, messages: List[Dict[str, Any]], api_key: str, temperature: float):

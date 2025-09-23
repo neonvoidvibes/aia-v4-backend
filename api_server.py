@@ -4017,19 +4017,30 @@ def pinecone_upsert_proxy(user: SupabaseUser):
 
 def generate_chat_title(first_user_message: str) -> str:
     """Generate a concise title for a chat using Groq GPT-OSS-20B"""
+    logger.info(f"generate_chat_title called with message: {first_user_message[:100] if first_user_message else 'None'}")
     try:
+        logger.info("Calling Groq API for title generation...")
+        logger.info(f"Request details - Model: openai/gpt-oss-20b, Max tokens: 50, Temperature: 0.9")
+        logger.info(f"System instruction: 'Generate a concise, descriptive title (max 4 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.'")
+        logger.info(f"User message: '{first_user_message}'")
+
         title = _call_groq_non_stream_with_retry(
             model_name="openai/gpt-oss-20b",
             max_tokens=50,
-            system_instruction="Generate a concise, descriptive title (max 4 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.",
+            system_instruction="Create a short 3-4 word title for this conversation.",
             messages=[{"role": "user", "content": first_user_message}],
             api_key=os.getenv('GROQ_API_KEY'), # Use global key for this utility
-            temperature=0.9
+            temperature=0.7
         )
-        return title.strip().strip('"')[:100]
+        logger.info(f"Raw Groq response: '{title}'")
+        final_title = title.strip().strip('"')[:100] if title else "Untitled Chat"
+        logger.info(f"Final processed title: '{final_title}'")
+        return final_title
     except Exception as e:
-        logger.error(f"Error generating chat title: {e}")
-        return first_user_message[:50] + "..." if len(first_user_message) > 50 else first_user_message
+        logger.error(f"Error generating chat title: {e}", exc_info=True)
+        fallback = first_user_message[:50] + "..." if len(first_user_message) > 50 else first_user_message
+        logger.info(f"Using fallback title: '{fallback}'")
+        return fallback
 
 @app.route('/api/chat/history/save', methods=['POST'])
 @supabase_auth_required(agent_required=True)
@@ -4054,7 +4065,11 @@ def save_chat_history(user: SupabaseUser):
 
     if not title and not chat_id and messages:
         first_user_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), None)
+        logger.info(f"Generating title for new chat. First user message: {first_user_message[:50] if first_user_message else 'None'}...")
         title = generate_chat_title(first_user_message) if first_user_message else "New Chat"
+        logger.info(f"Generated title: '{title}'")
+    else:
+        logger.info(f"Skipping title generation - title: {bool(title)}, chat_id: {bool(chat_id)}, messages: {len(messages) if messages else 0}")
 
     try:
         def _merge_messages(existing_list, incoming_list):
