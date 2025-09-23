@@ -187,6 +187,43 @@ Monitor key metrics:
 - Graceful degradation on failures
 - No sensitive data exposure in logs
 
+## Provider Abstraction
+
+### Transcription Provider System
+- **Provider toggle**:
+  - `TRANSCRIPTION_PROVIDER=whisper|deepgram` (default whisper)
+  - `DEEPGRAM_API_KEY` required for deepgram
+- **Filenames**:
+  - Only `transcript_*.txt`
+  - No rolling or live files
+- **Read-time window**:
+  - `TRANSCRIPT_MODE=regular|window`
+  - In 'window' mode, backend computes a time-window slice from canonical transcript files; it does not write new files.
+
+### Provider Architecture
+
+The system now supports pluggable transcription providers through a clean abstraction layer:
+
+1. **Base Provider** (`transcription_providers/base.py`)
+   - Abstract interface for all transcription providers
+   - Standardized input/output format
+
+2. **Whisper Provider** (`transcription_providers/whisper_provider.py`)
+   - OpenAI Whisper integration with backward compatibility
+   - Maintains existing segment normalization and error handling
+
+3. **Deepgram Provider** (`transcription_providers/deepgram_provider.py`)
+   - Deepgram API integration with nova-2-general model
+   - Word-level timestamps converted to segments
+   - Configurable smart formatting and punctuation
+
+### Window Mode Implementation
+
+- **No File Writes**: Rolling transcript files are no longer created
+- **Read-Time Computation**: Window filtering happens when transcripts are accessed
+- **Canonical Files Only**: System only processes `transcript_*.txt` files
+- **Time-Based Filtering**: Uses `[HH:MM:SS]` timestamps to filter recent content
+
 ## Future Enhancements
 
 ### Planned Improvements
@@ -194,12 +231,15 @@ Monitor key metrics:
 2. **Chunked Processing**: Optimized memory usage for long sessions
 3. **Quality Metrics**: Enhanced audio quality assessment
 4. **Configuration API**: Runtime VAD parameter adjustment
+5. **Provider Extensions**: Additional transcription service integrations
+6. **Enhanced Window Modes**: Configurable window strategies
 
 ### Integration Opportunities
 1. **Real-time Feedback**: Live VAD status to frontend
-2. **Analytics Dashboard**: VAD effectiveness metrics
+2. **Analytics Dashboard**: VAD effectiveness metrics and provider comparisons
 3. **Custom VAD Models**: Domain-specific voice detection
 4. **Multi-language VAD**: Language-specific optimization
+5. **Provider Selection UI**: Dynamic provider switching interface
 
 ## Troubleshooting
 

@@ -6,10 +6,11 @@ from datetime import datetime, timezone # Ensure timezone is imported
 from typing import Optional, Dict, Any, List, Tuple
 
 from .s3_utils import get_s3_client
+from .rolling_transcript_utils import get_window_context
 
 logger = logging.getLogger(__name__)
 
-TRANSCRIPT_MODE = os.getenv('TRANSCRIPT_MODE', 'regular') # Read from env, default to 'regular'
+TRANSCRIPT_MODE = os.getenv('TRANSCRIPT_MODE', 'regular')  # 'regular' or 'window'
 logger.info(f"Transcript mode set to: {TRANSCRIPT_MODE}")
 
 
@@ -46,11 +47,9 @@ def get_latest_transcript_file(agent_name: Optional[str] = None, event_id: Optio
                           relative_path = key[len(base_transcript_path):]
                           if '/' not in relative_path: # Check if it's directly in the target folder
                                filename = os.path.basename(key)
-                               is_rolling = filename.startswith('rolling-')
-                               # Filter based on TRANSCRIPT_MODE
-                               if (TRANSCRIPT_MODE == 'rolling' and is_rolling) or \
-                                  (TRANSCRIPT_MODE == 'regular' and not is_rolling):
-                                    candidate_files.append(obj)
+                               # canonical only: transcript_*.txt directly under transcripts/
+                               if filename.startswith('transcript_') and '/transcripts/' in key and '/saved/' not in key:
+                                   candidate_files.append(obj)
     except Exception as e:
         logger.error(f"Error listing S3 objects under prefix '{base_transcript_path}': {e}", exc_info=True)
         return None # Return None on error
@@ -70,15 +69,14 @@ def get_latest_transcript_file(agent_name: Optional[str] = None, event_id: Optio
 def read_new_transcript_content(agent_name: str, event_id: str) -> Tuple[Optional[str], bool]:
     """
     Read new transcript content.
-    This function is now stateless for 'latest' mode. It finds the single latest
-    transcript file and reads its entire content on every call.
+    This function handles both 'regular' and 'window' modes.
 
     Returns a tuple: (content: Optional[str], success: bool).
-    - content: The full content of the latest file, or None.
+    - content: The full content (regular mode) or windowed content, or None.
     - success: True if the operation completed (even if no file was found), False on an error.
     """
     s3 = get_s3_client()
-    if not s3: 
+    if not s3:
         logger.error("read_new_transcript_content: S3 client unavailable.")
         return None, False
 
@@ -87,28 +85,44 @@ def read_new_transcript_content(agent_name: str, event_id: str) -> Tuple[Optiona
         logger.error("read_new_transcript_content: AWS_S3_BUCKET not set.")
         return None, False
 
-    latest_key_on_s3 = get_latest_transcript_file(agent_name, event_id, s3)
+    if TRANSCRIPT_MODE == "regular":
+        latest_key_on_s3 = get_latest_transcript_file(agent_name, event_id, s3)
 
-    if not latest_key_on_s3:
-        logger.info(f"Listen: Latest - No transcript file found for agent '{agent_name}', event '{event_id}' (Mode: {TRANSCRIPT_MODE}).")
-        return None, True  # True: the operation was successful, but no file was found
+        if not latest_key_on_s3:
+            logger.info(f"Listen: Latest - No transcript file found for agent '{agent_name}', event '{event_id}' (Mode: {TRANSCRIPT_MODE}).")
+            return None, True  # True: the operation was successful, but no file was found
 
-    try:
-        logger.info(f"Listen: Latest - Reading full content of latest file: {latest_key_on_s3}")
-        response = s3.get_object(Bucket=aws_s3_bucket, Key=latest_key_on_s3)
-        file_content_bytes = response['Body'].read()
-        file_content_str = file_content_bytes.decode('utf-8', errors='replace')
+        try:
+            logger.info(f"Listen: Latest - Reading full content of latest file: {latest_key_on_s3}")
+            response = s3.get_object(Bucket=aws_s3_bucket, Key=latest_key_on_s3)
+            file_content_bytes = response['Body'].read()
+            file_content_str = file_content_bytes.decode('utf-8', errors='replace')
 
-        filename = os.path.basename(latest_key_on_s3)
-        # Prepend a standard header to the content.
-        labeled_content = f"(Source File: {filename})\n{file_content_str}"
+            filename = os.path.basename(latest_key_on_s3)
+            # Prepend a standard header to the content.
+            labeled_content = f"(Source File: {filename})\n{file_content_str}"
 
-        logger.info(f"Listen: Latest - Read {len(labeled_content)} chars from {latest_key_on_s3}.")
-        return labeled_content, True # True: success
+            logger.info(f"Listen: Latest - Read {len(labeled_content)} chars from {latest_key_on_s3}.")
+            return labeled_content, True # True: success
 
-    except Exception as e:
-        logger.error(f"Listen: Latest - Error reading file {latest_key_on_s3}: {e}", exc_info=True)
-        return None, False # False: there was an operational error
+        except Exception as e:
+            logger.error(f"Listen: Latest - Error reading file {latest_key_on_s3}: {e}", exc_info=True)
+            return None, False # False: there was an operational error
+
+    else:  # 'window'
+        base_path = f"organizations/river/agents/{agent_name}/events/{event_id}"
+        window_seconds = int(os.getenv('WINDOW_SECONDS', '240'))  # Default 4 minutes
+        try:
+            windowed_content = get_window_context(s3, aws_s3_bucket, base_path, window_seconds)
+            if windowed_content:
+                labeled_content = f"(Window Mode: Last {window_seconds}s)\n{windowed_content}"
+                return labeled_content, True
+            else:
+                logger.info(f"Listen: Window - No recent content found for agent '{agent_name}', event '{event_id}'.")
+                return None, True
+        except Exception as e:
+            logger.error(f"Listen: Window - Error getting windowed content: {e}", exc_info=True)
+            return None, False
 
 
 def read_all_transcripts_in_folder(agent_name: str, event_id: str) -> Optional[str]:
@@ -191,11 +205,9 @@ def list_saved_transcripts(agent_name: str, event_id: str) -> List[Dict[str, Any
                          relative_path = key[len(base_prefix):]
                          if '/' not in relative_path: # Files directly in folder
                             filename = os.path.basename(key)
-                            is_rolling = filename.startswith('rolling-')
-                            # Adhere to TRANSCRIPT_MODE
-                            if (TRANSCRIPT_MODE == 'rolling' and is_rolling) or \
-                               (TRANSCRIPT_MODE == 'regular' and not is_rolling):
-                                 transcript_files_metadata.append(obj)
+                            # canonical only: transcript_*.txt directly under transcripts/
+                            if filename.startswith('transcript_') and '/transcripts/' in key and '/saved/' not in key:
+                                transcript_files_metadata.append(obj)
                                  
         if not transcript_files_metadata:
             logger.warning(f"No transcript files found in {base_prefix} matching mode '{TRANSCRIPT_MODE}'.")

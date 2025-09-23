@@ -1,67 +1,57 @@
-"""Utilities for managing rolling transcripts."""
+"""Utilities for read-time windowed transcripts (no rolling files)."""
 import logging
 import boto3
 import os
 from datetime import datetime
+from .rolling_transcript import RollingTranscriptWindow
 
-def get_latest_rolling_transcript(agent_name=None, event_id=None, s3_client=None, bucket_name=None):
-    """Get the latest rolling transcript file from the agent's event folder."""
-    if s3_client is None:
-        s3_client = boto3.client(
-            's3',
-            region_name=os.getenv('AWS_REGION'),
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
-        )
-    
-    if bucket_name is None:
-        bucket_name = os.getenv('AWS_S3_BUCKET')
-    
+def pick_latest_canonical_transcript_key(s3, bucket, base_path):
+    """Find the latest canonical transcript_*.txt file."""
     try:
-        # First try agent's event folder
-        if agent_name and event_id:
-            prefix = f'organizations/river/agents/{agent_name}/events/{event_id}/transcripts/'
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter='/')
-            
-            if 'Contents' in response:
-                # Filter for rolling transcript files
-                rolling_files = [
-                    obj['Key'] for obj in response['Contents']
-                    if obj['Key'].startswith(prefix) and obj['Key'] != prefix
-                    and not obj['Key'].replace(prefix, '').strip('/').count('/')
-                    and obj['Key'].endswith('.txt')
-                    and obj['Key'].replace(prefix, '').startswith('rolling-')
-                ]
-                if rolling_files:
-                    logging.debug(f"Found {len(rolling_files)} rolling transcript files in agent folder:")
-                    for rf in rolling_files:
-                        obj = s3_client.head_object(Bucket=bucket_name, Key=rf)
-                        logging.debug(f"  - {rf} (Size: {obj['ContentLength']} bytes, Modified: {obj['LastModified']})")
-                    
-                    # Get the latest by LastModified timestamp
-                    latest_file = max(rolling_files, key=lambda x: s3_client.head_object(Bucket=bucket_name, Key=x)['LastModified'])
-                    obj = s3_client.head_object(Bucket=bucket_name, Key=latest_file)
-                    logging.debug(f"Selected latest rolling transcript in agent folder: {latest_file}")
-                    return latest_file
-                    
-        # Fallback to default transcripts folder
-        prefix = '_files/transcripts/'
-        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter='/')
-        
-        if 'Contents' in response:
-            rolling_files = [
-                obj['Key'] for obj in response['Contents']
-                if obj['Key'].startswith(prefix) and obj['Key'] != prefix
-                and not obj['Key'].replace(prefix, '').strip('/').count('/')
-                and obj['Key'].endswith('.txt')
-                and obj['Key'].replace(prefix, '').startswith('rolling-')
-            ]
-            if rolling_files:
-                latest_file = max(rolling_files, key=lambda x: s3_client.head_object(Bucket=bucket_name, Key=x)['LastModified'])
-                return latest_file
-                
-        return None
-        
+        if base_path.endswith('/'):
+            prefix = f"{base_path}transcripts/"
+        else:
+            prefix = f"{base_path}/transcripts/"
+
+        response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+
+        if 'Contents' not in response:
+            return None
+
+        # Find canonical transcript files only
+        transcript_files = [
+            obj['Key'] for obj in response['Contents']
+            if obj['Key'].endswith('.txt')
+            and obj['Key'].rsplit('/', 1)[-1].startswith('transcript_')
+            and '/transcripts/' in obj['Key']
+            and '/saved/' not in obj['Key']
+        ]
+
+        if not transcript_files:
+            return None
+
+        # Return latest by LastModified
+        latest = max(transcript_files, key=lambda x: s3.head_object(Bucket=bucket, Key=x)['LastModified'])
+        return latest
+
     except Exception as e:
-        logging.error(f"Error finding rolling transcript files in S3: {e}")
+        logging.error(f"Error finding canonical transcript files: {e}")
         return None
+
+def get_window_context(s3, bucket, base_path, window_seconds: int) -> str:
+    """
+    1) list canonical transcripts: f"{base_path}/transcripts/"
+    2) pick latest 'transcript_*.txt' by LastModified
+    3) read full text
+    4) return windowed text via RollingTranscriptWindow.compute_window(...)
+    """
+    latest_key = pick_latest_canonical_transcript_key(s3, bucket, base_path)
+    if not latest_key:
+        return ""
+
+    try:
+        blob = s3.get_object(Bucket=bucket, Key=latest_key)['Body'].read().decode('utf-8')
+        return RollingTranscriptWindow().compute_window(blob, window_seconds)
+    except Exception as e:
+        logging.error(f"Error reading transcript {latest_key}: {e}")
+        return ""

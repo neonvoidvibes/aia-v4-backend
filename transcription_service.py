@@ -19,6 +19,16 @@ import concurrent.futures # For parallel processing
 
 from utils.hallucination_detector import get_hallucination_manager # For hallucination detection
 
+# Provider router
+from transcription_providers.base import TranscriptionProvider
+_PROVIDER_NAME = os.getenv("TRANSCRIPTION_PROVIDER", "whisper").strip().lower()
+if _PROVIDER_NAME == "deepgram":
+    from transcription_providers.deepgram_provider import DeepgramProvider as _Provider
+    _provider: TranscriptionProvider = _Provider(os.getenv("DEEPGRAM_API_KEY"))
+else:
+    from transcription_providers.whisper_provider import WhisperProvider as _Provider
+    _provider: TranscriptionProvider = _Provider(os.getenv("OPENAI_API_KEY"))
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -979,238 +989,13 @@ def transcribe_large_audio_file(
         return None
 
 def _transcribe_audio_segment_openai(
-    audio_file_path: str, 
-    openai_api_key: str, 
+    audio_file_path: str,
+    openai_api_key: str,
     language_setting_from_client: Optional[str] = "any",
     rolling_context_prompt: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-    if not openai_api_key:
-        logger.error("OpenAI API key not provided for transcription.")
-        return None
-
-    openai.api_key = openai_api_key 
-
-    try:
-        with open(audio_file_path, "rb") as audio_file_obj: # Renamed to audio_file_obj
-            url = "https://api.openai.com/v1/audio/transcriptions"
-            headers = {"Authorization": f"Bearer {openai_api_key}"}
-
-            data_payload: Dict[str, Any] = {
-                'model': 'whisper-1',
-                'response_format': 'verbose_json', 
-                'temperature': 0.2,                 # Increased from 0.0 to 0.2 to help break repetitive loops
-                'no_speech_threshold': 0.95,        # Increased from 0.9 to 0.95 (much stricter)
-                'logprob_threshold': -0.3,          # Increased from -0.5 to -0.3 (much stricter)
-                'compression_ratio_threshold': 1.5, # Decreased from 1.8 to 1.5 (much stricter)
-            }
-
-            # Handle language setting from client
-            if language_setting_from_client == "en" or language_setting_from_client == "sv":
-                data_payload['language'] = language_setting_from_client
-                logger.info(f"Whisper: Language explicitly set to '{language_setting_from_client}'.")
-            elif language_setting_from_client == "any" or language_setting_from_client is None: # Explicitly handle None as 'any'
-                logger.info(f"Whisper: Language set to '{language_setting_from_client if language_setting_from_client else 'any (default)'}' (auto-detect by omitting language param).")
-                # No 'language' key is added to data_payload, Whisper will auto-detect
-            else: # Unrecognized, treat as auto-detect
-                logger.info(f"Whisper: Language setting '{language_setting_from_client}' unrecognized, defaulting to auto-detect.")
-                # No 'language' key added for auto-detect
-
-            # PERFORMANCE & ACCURACY: Ultra-minimal context to maximize speed and reduce hallucinations
-            # For performance optimization, we use minimal to no context
-            if rolling_context_prompt and len(rolling_context_prompt.strip()) > 0:
-                # Use only the last 1-2 words for performance optimization
-                context_words = rolling_context_prompt.strip().split()[-1:]
-                minimal_context = " ".join(context_words)
-                # Only use context if it's a single meaningful word (>2 chars)
-                if len(minimal_context) > 2 and len(minimal_context) < 20:
-                    data_payload['prompt'] = minimal_context
-                    logger.debug(f"Whisper: Using ultra-minimal context: '{minimal_context}'")
-                else:
-                    logger.debug("Whisper: Skipping context for optimal performance.")
-            else:
-                logger.debug("Whisper: No context - optimized for speed and accuracy.")
-                # No prompt parameter added - fastest processing
-
-
-            # === DYNAMIC MIME TYPE DETECTION ===
-            file_name_for_api = os.path.basename(audio_file_path)
-            mime_type, _ = mimetypes.guess_type(audio_file_path)
-
-            # Fallback for common audio types if mimetypes fails or is too generic
-            # OpenAI Whisper supports: mp3, mp4, mpeg, mpga, m4a, wav, webm
-            if not mime_type or mime_type == 'application/octet-stream':
-                ext = os.path.splitext(file_name_for_api)[1].lower()
-                if ext == '.mp3':
-                    mime_type = 'audio/mpeg'
-                elif ext == '.mp4':
-                    mime_type = 'audio/mp4'
-                elif ext == '.m4a':
-                    mime_type = 'audio/mp4' # M4A files are MP4 containers
-                elif ext == '.wav':
-                    mime_type = 'audio/wav'
-                elif ext == '.webm':
-                    mime_type = 'audio/webm'
-                elif ext == '.mpeg':
-                    mime_type = 'audio/mpeg'
-                elif ext == '.mpga':
-                    mime_type = 'audio/mpeg'
-                else:
-                    logger.warning(f"Could not determine specific audio MIME type for {file_name_for_api} (ext: {ext}). Using 'application/octet-stream'. OpenAI might infer.")
-                    mime_type = 'application/octet-stream'
-            
-            # Validate file before sending to OpenAI API
-            audio_file_obj.seek(0, 2)  # Seek to end to get file size
-            file_size = audio_file_obj.tell()
-            audio_file_obj.seek(0)  # Reset to beginning
-            
-            # Check file size (25MB OpenAI limit)
-            if file_size > 25 * 1024 * 1024:  # 25MB in bytes
-                raise Exception(f"File size {file_size / (1024*1024):.1f}MB exceeds OpenAI 25MB limit")
-            
-            # Check for empty file
-            if file_size == 0:
-                raise Exception("Empty audio file cannot be transcribed")
-                
-            logger.info(f"Preparing to send {file_name_for_api} ({file_size / (1024*1024):.1f}MB) to OpenAI with MIME type: {mime_type}")
-            files_param = {'file': (file_name_for_api, audio_file_obj, mime_type)}
-            # === END DYNAMIC MIME TYPE DETECTION ===
-
-            max_retries = 4  # Reduced retries to fail faster on persistent issues
-            transcription_timeout = 900 # 15 minutes
-            consecutive_failures = 0  # Track consecutive failures for circuit breaking
-            
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Attempting transcription for {audio_file_path} (attempt {attempt + 1}/{max_retries})...")
-                    # Reset file pointer for retries if the file object is being reused
-                    audio_file_obj.seek(0)
-                    
-                    # Create optimized requests session with connection pooling
-                    session = requests.Session()
-                    from requests.adapters import HTTPAdapter
-                    from urllib3.util.retry import Retry
-                    
-                    # Configure retry strategy for connection issues
-                    retry_strategy = Retry(
-                        total=0,  # We handle retries manually
-                        connect=3,  # Retry connection failures
-                        read=3,     # Retry read failures
-                        backoff_factor=0.5,  # Faster backoff for performance
-                        status_forcelist=[502, 503, 504]  # Retry on server errors
-                    )
-                    
-                    # Optimized adapter with connection pooling
-                    adapter = HTTPAdapter(
-                        max_retries=retry_strategy,
-                        pool_connections=10,  # Connection pool size
-                        pool_maxsize=20       # Max connections in pool
-                    )
-                    session.mount("http://", adapter)
-                    session.mount("https://", adapter)
-                    
-                    response = session.post(
-                        url, 
-                        headers=headers, 
-                        data=data_payload, 
-                        files=files_param, 
-                        timeout=(30, transcription_timeout)  # (connect_timeout, read_timeout)
-                    )
-                    response.raise_for_status()
-                    transcription = response.json()
-
-                    if 'segments' in transcription and isinstance(transcription['segments'], list):
-                        logger.info(f"Successfully transcribed {audio_file_path} on attempt {attempt + 1}.")
-                        consecutive_failures = 0  # Reset failure counter on success
-                        return transcription
-                    else:
-                        logger.warning(f"Unexpected transcription format for {audio_file_path}: {transcription}")
-                        if attempt == max_retries - 1:
-                            return None
-                        continue
-                        
-                except requests.exceptions.Timeout as e:
-                    logger.warning(f"Timeout transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
-                    if attempt == max_retries - 1: 
-                        raise Exception(f"Transcription failed after {max_retries} attempts due to timeout")
-                        
-                except requests.exceptions.ConnectionError as e:
-                    logger.warning(f"Connection error transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
-                    if attempt == max_retries - 1: 
-                        raise Exception(f"Transcription failed after {max_retries} attempts due to connection issues")
-                        
-                except requests.exceptions.HTTPError as e:
-                    logger.error(f"HTTP error transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
-                    consecutive_failures += 1
-                    
-                    # Categorize errors for intelligent retry
-                    if response.status_code in [400, 401, 403]:  # Client errors - don't retry
-                        try:
-                            error_detail = response.json()
-                            logger.error(f"OpenAI API client error: {error_detail}")
-                            error_msg = error_detail.get('error', {}).get('message', str(e))
-                            raise Exception(f"OpenAI API client error: {error_msg}")
-                        except json.JSONDecodeError:
-                            logger.error(f"OpenAI API error response (non-JSON): {response.text[:500]}")
-                            raise Exception(f"OpenAI API client error ({response.status_code}): {response.text[:200]}")
-                    
-                    elif response.status_code == 413:  # File too large - don't retry
-                        raise Exception("File too large for OpenAI API (exceeds 25MB limit)")
-                    
-                    elif response.status_code == 429:  # Rate limit - longer backoff
-                        if attempt == max_retries - 1:
-                            raise Exception("OpenAI API rate limit exceeded after all retries")
-                        # Longer backoff for rate limits with jitter to avoid thundering herd
-                        base_delay = min(30, 5 * (2 ** attempt))  # 5s, 10s, 20s, 30s
-                        jitter = base_delay * 0.3 * (0.5 - (time.time() % 1))  # +/- 30% jitter
-                        rate_limit_delay = base_delay + jitter
-                        logger.warning(f"Rate limit hit. Backing off for {rate_limit_delay:.1f}s...")
-                        time.sleep(rate_limit_delay)
-                        continue
-                        
-                    elif response.status_code >= 500:  # Server errors - retry with backoff
-                        if attempt == max_retries - 1: 
-                            raise Exception(f"OpenAI API server error ({response.status_code}) persisted after {max_retries} attempts")
-                        logger.warning(f"Server error {response.status_code}, will retry...")
-                    
-                    else:  # Other HTTP errors
-                        if attempt == max_retries - 1: 
-                            raise Exception(f"HTTP error ({response.status_code}) after {max_retries} attempts")
-                        
-                except requests.exceptions.RequestException as e:
-                    logger.error(f"Request exception transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
-                    if attempt == max_retries - 1: 
-                        raise Exception(f"Transcription failed after {max_retries} attempts due to request error: {str(e)}")
-                        
-                except Exception as e: 
-                    logger.error(f"Unexpected error transcribing {audio_file_path} on attempt {attempt + 1}/{max_retries}: {e}")
-                    if attempt == max_retries - 1: 
-                        raise Exception(f"Transcription failed after {max_retries} attempts: {str(e)}")
-                
-                # Smart backoff based on error type and consecutive failures
-                if attempt < max_retries - 1:
-                    # Circuit breaker: Longer delays for persistent failures
-                    if consecutive_failures >= 3:
-                        base_delay = min(30 + (consecutive_failures * 10), 120)  # 30s to 2min based on failures
-                        logger.warning(f"Circuit breaker activated: {consecutive_failures} consecutive failures detected")
-                    else:
-                        base_delay = min(2 ** attempt, 16)  # Standard exponential backoff, cap at 16s
-                    
-                    # Add jitter to avoid thundering herd
-                    jitter = base_delay * 0.2 * (0.5 - (time.time() % 1))  # +/- 20% jitter
-                    delay = max(1, base_delay + jitter)  # Minimum 1 second delay
-                    
-                    logger.info(f"Backing off for {delay:.1f}s (consecutive failures: {consecutive_failures})...")
-                    time.sleep(delay)
-                else:
-                    # Final attempt failed
-                    if consecutive_failures >= 3:
-                        logger.error(f"Circuit breaker tripped: {consecutive_failures} consecutive failures for {audio_file_path}")
-                        raise Exception(f"OpenAI API appears unstable - {consecutive_failures} consecutive failures. Please try again later.") 
-            return None 
-
-    except Exception as e:
-        logger.error(f"Transcription error for {audio_file_path}: {e}", exc_info=True)
-        return None
+    # Backward-compatible wrapper; now goes through provider
+    return _provider.transcribe_file(audio_file_path, language=language_setting_from_client, prompt=rolling_context_prompt)
 
 def process_audio_segment_and_update_s3(
     temp_segment_wav_path: str, 

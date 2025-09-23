@@ -1,11 +1,10 @@
-"""Scheduler for rolling transcript management."""
+"""Scheduler for transcript management (no rolling files)."""
 import os
 import time
 import logging
 import schedule
 import threading
 from datetime import datetime
-from utils.rolling_transcript import RollingTranscriptManager
 
 # Configure logging
 logging.basicConfig(
@@ -23,77 +22,48 @@ def create_event_id() -> str:
     return datetime.now().strftime('%Y%m%d')
 
 def start_scheduler(agent_name: str, session_id: str, event_id: str) -> threading.Thread:
-    """Start the rolling transcript scheduler in a background thread.
-    
+    """Start the transcript scheduler in a background thread.
+    Note: In the new architecture, no rolling files are written. This scheduler
+    now only handles canonical transcript monitoring if needed.
+
     Args:
         agent_name: Name of the agent
         session_id: Current session ID
         event_id: Current event ID
-        
+
     Returns:
         The scheduler thread
     """
-    manager = RollingTranscriptManager(
-        agent_name=agent_name,
-        session_id=session_id,
-        event_id=event_id
-    )
-    
     def update_all():
-        """Update both rolling transcript and process embeddings."""
+        """Monitor canonical transcripts (no rolling files created)."""
         try:
-            logger.info("Starting scheduled update")
-            # Get current transcript files
-            response = manager.s3_client.list_objects_v2(
-                Bucket=manager.s3_bucket,
-                Prefix=manager.transcript_folder,
-                Delimiter='/'
-            )
-            
-            # Find original transcripts (excluding rolling ones)
-            if 'Contents' in response:
-                transcript_files = [
-                    obj['Key'] for obj in response['Contents']
-                    if obj['Key'].startswith(manager.transcript_folder)
-                    and obj['Key'] != manager.transcript_folder
-                    and not obj['Key'].replace(manager.transcript_folder, '').strip('/').count('/')
-                    and obj['Key'].endswith('.txt')
-                    and not obj['Key'].replace(manager.transcript_folder, '').startswith('rolling-')
-                ]
-                
-                if transcript_files:
-                    # Update transcript keys and process
-                    manager.transcript_keys = transcript_files
-                    manager.update_rolling_transcript()
-                    manager.process_embeddings()
-                    logger.info("Completed scheduled update")
-                else:
-                    logger.info("No original transcripts found yet, waiting...")
-            else:
-                logger.info("No files in transcript folder yet, waiting...")
-                
+            logger.info("Scheduled transcript monitoring (no rolling file writes)")
+            # In the new architecture, windowing happens at read-time.
+            # This scheduler could be used for other transcript processing if needed.
+            logger.info("Canonical transcripts are processed at read-time via window mode")
         except Exception as e:
             logger.error(f"Error in scheduled update: {e}")
-    
+
     def run_scheduler():
         """Run the scheduler in a loop."""
-        # Schedule updates every minute
+        # Schedule monitoring every minute (can be adjusted or removed)
         schedule.every(1).minutes.do(update_all)
-        
+
         # Run initial update
         update_all()
-        
+
         logger.info(f"Started transcript scheduler for agent {agent_name}")
         logger.info(f"Session ID: {session_id}")
         logger.info(f"Event ID: {event_id}")
-        
+        logger.info("Note: No rolling files are created - windowing happens at read-time")
+
         try:
             while True:
                 schedule.run_pending()
-                time.sleep(1)
+                time.sleep(60)  # Less frequent polling since no file processing
         except Exception as e:
             logger.error(f"Scheduler error: {e}")
-    
+
     # Start scheduler in background thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
