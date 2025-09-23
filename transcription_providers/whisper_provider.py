@@ -33,14 +33,17 @@ class WhisperProvider(TranscriptionProvider):
         return out
 
     def transcribe_file(self, path: str, language: Optional[str] = None, prompt: Optional[str] = None, vad_aggressiveness: Optional[int] = None) -> Optional[TranscriptionResult]:
+        # Handle language parameter: OpenAI Whisper uses None for auto-detect, not 'any'
+        openai_language = None if not language or language == "any" else language
+
         if _USE_INTERNAL_HELPER:
-            data = _openai_helper(path=path, language=language, prompt=prompt)
+            data = _openai_helper(path=path, language=openai_language, prompt=prompt)
             if not data: return None
             return {"text": (data.get("text") or "").strip(), "segments": self._normalize_segments(data.get("segments") or [])}
 
         with open(path, "rb") as f:
             resp = self._client.audio.transcriptions.create(  # type: ignore
-                file=f, model=self.model, language=language, prompt=prompt, response_format="verbose_json", temperature=0
+                file=f, model=self.model, language=openai_language, prompt=prompt, response_format="verbose_json", temperature=0
             )
         text = (getattr(resp, "text", None) or getattr(resp, "get", lambda *_: None)("text") or "").strip()  # type: ignore
         segments = getattr(resp, "segments", None) or (isinstance(resp, dict) and resp.get("segments") or [])
