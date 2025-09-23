@@ -4031,7 +4031,7 @@ def generate_chat_title(first_user_message: str) -> str:
             messages=[{"role": "user", "content": f"Create a title for: {first_user_message}"}],
             api_key=os.getenv('GROQ_API_KEY'), # Use global key for this utility
             temperature=0.3,
-            reasoning_effort="none"
+            reasoning_effort="low"
         )
         logger.info(f"Raw Groq response: '{title}'")
         final_title = title.strip().strip('"')[:100] if title else "Untitled Chat"

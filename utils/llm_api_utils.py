@@ -231,7 +231,14 @@ def _call_groq_non_stream_with_retry(model_name: str, max_tokens: int, system_in
         logger.debug(f"Groq message content: '{response.choices[0].message.content}'")
         logger.debug(f"Groq finish reason: {response.choices[0].finish_reason}")
 
-    content = response.choices[0].message.content
+    # For reasoning models, extract only the content, not the reasoning
+    message = response.choices[0].message
+    content = message.content
+
+    # Log reasoning separately for debugging (but don't return it)
+    if hasattr(message, 'reasoning') and message.reasoning:
+        logger.debug(f"Reasoning (not returned): {message.reasoning}")
+
     logger.debug(f"Returning content: '{content}' (type: {type(content)})")
     return content
 
