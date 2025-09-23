@@ -33,7 +33,7 @@ class DeepgramProvider(TranscriptionProvider):
         - 3 = Most aggressive (highly restrictive)
         """
         if vad_aggressiveness is None:
-            return None
+            return 1  # Default to Quiet for Deepgram (reduces hallucination)
 
         # Map frontend levels to Deepgram VAD modes
         mapping = {
@@ -41,7 +41,7 @@ class DeepgramProvider(TranscriptionProvider):
             2: 2,  # Mid -> More aggressive
             3: 3   # Noisy -> Most aggressive
         }
-        return mapping.get(vad_aggressiveness, 2)  # Default to 2 if invalid
+        return mapping.get(vad_aggressiveness, 1)  # Default to Quiet (1) if invalid
 
     def _request(self, path: str, language: Optional[str], vad_aggressiveness: Optional[int] = None) -> Dict[str, Any]:
         # Deepgram parameters - enable word timestamps and smart formatting
