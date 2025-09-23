@@ -993,7 +993,7 @@ def start_recording_route(user: SupabaseUser):
     event_id = data.get('event')
     # 'language' is the old key, 'transcriptionLanguage' is the new one. Prioritize new one.
     language_setting = data.get('transcriptionLanguage', data.get('language', 'any')) # Default to 'any'
-    
+
     logger.info(f"Start recording: agent='{agent_name}', event='{event_id}', language_setting='{language_setting}'")
 
     if not event_id: 
