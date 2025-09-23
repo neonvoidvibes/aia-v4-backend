@@ -59,7 +59,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, re
 from flask_cors import CORS
 import boto3
 
-from transcription_service import process_audio_segment_and_update_s3, get_current_transcription_provider, format_language_for_header
+from transcription_service import process_audio_segment_and_update_s3, get_current_transcription_provider, get_default_vad_aggressiveness, format_language_for_header
 import tempfile
 
 # Mobile recording uses custom magic number detection (no external dependencies needed)
@@ -993,7 +993,7 @@ def start_recording_route(user: SupabaseUser):
     event_id = data.get('event')
     # 'language' is the old key, 'transcriptionLanguage' is the new one. Prioritize new one.
     language_setting = data.get('transcriptionLanguage', data.get('language', 'any')) # Default to 'any'
-    vad_aggressiveness = data.get('vadAggressiveness')  # VAD aggressiveness level (1, 2, 3)
+    vad_aggressiveness = data.get('vadAggressiveness') or get_default_vad_aggressiveness()  # VAD aggressiveness level (1, 2, 3)
 
     logger.info(f"Start recording: agent='{agent_name}', event='{event_id}', language_setting='{language_setting}', vad_aggressiveness='{vad_aggressiveness}'")
 
@@ -1090,7 +1090,7 @@ def start_audio_recording(user: SupabaseUser):
     data = g.get('json_data', {})
     agent_name = data.get('agent')
     language_setting = data.get('transcriptionLanguage', 'any')
-    vad_aggressiveness = data.get('vadAggressiveness')  # VAD aggressiveness level (1, 2, 3)
+    vad_aggressiveness = data.get('vadAggressiveness') or get_default_vad_aggressiveness()  # VAD aggressiveness level (1, 2, 3)
 
     logger.info(f"Start audio recording: agent='{agent_name}', language='{language_setting}', vad_aggressiveness='{vad_aggressiveness}'")
 

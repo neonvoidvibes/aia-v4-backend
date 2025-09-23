@@ -39,6 +39,13 @@ def get_current_transcription_provider() -> str:
     """Get the name of the currently active transcription provider."""
     return _PROVIDER_NAME.capitalize()
 
+def get_default_vad_aggressiveness() -> int:
+    """Get the default VAD aggressiveness level for the current transcription provider."""
+    if _PROVIDER_NAME == "deepgram":
+        return 1  # Quiet environment - Deepgram has good built-in noise handling
+    else:  # whisper
+        return 2  # Mid environment - Whisper needs more VAD filtering
+
 def format_language_for_header(language_code: str) -> str:
     """Format language code for display in transcript headers."""
     language_map = {
