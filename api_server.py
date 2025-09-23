@@ -61,7 +61,8 @@ import boto3
 
 from transcription_service import process_audio_segment_and_update_s3
 import tempfile
-import magic
+
+# Mobile recording uses custom magic number detection (no external dependencies needed)
 
 # ---------------------------
 # New: Multi-Agent Transcript Save Endpoint helpers/imports
