@@ -6,7 +6,7 @@ from .base import TranscriptionProvider, TranscriptionResult, Segment
 logger = logging.getLogger(__name__)
 
 class DeepgramProvider(TranscriptionProvider):
-    def __init__(self, api_key: Optional[str] = None, model: str = "nova-2-general", smart_format: bool = True, punctuate: bool = True):
+    def __init__(self, api_key: Optional[str] = None, model: str = "nova-3", smart_format: bool = True, punctuate: bool = True):
         self.api_key = api_key or os.getenv("DEEPGRAM_API_KEY", "")
         if not self.api_key:
             logger.error("DEEPGRAM_API_KEY is not set")

@@ -59,7 +59,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, re
 from flask_cors import CORS
 import boto3
 
-from transcription_service import process_audio_segment_and_update_s3
+from transcription_service import process_audio_segment_and_update_s3, get_current_transcription_provider
 import tempfile
 
 # Mobile recording uses custom magic number detection (no external dependencies needed)
@@ -1061,7 +1061,7 @@ def start_recording_route(user: SupabaseUser):
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if s3 and aws_s3_bucket:
-        header = f"# Transcript - Session {session_id}\nAgent: {agent_name}, Event: {event_id}\nUser: {user.id}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
+        header = f"# Transcript - Session {session_id}\nAgent: {agent_name}, Event: {event_id}\nUser: {user.id}\nProvider: {get_current_transcription_provider()}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
         try:
             s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=header.encode('utf-8'))
             logger.info(f"Initialized S3 transcript file: {s3_transcript_key}")
@@ -2312,6 +2312,7 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
                 f"# Transcript - Uploaded\n"
                 f"Agent: {agent_name}\n"
                 f"User: {user_name}\n"
+                f"Provider: {get_current_transcription_provider()}\n"
                 f"Transcript Uploaded (UTC): {upload_timestamp_utc}\n\n"
             )
             
@@ -2441,6 +2442,7 @@ def transcribe_uploaded_file(user: SupabaseUser):
                     f"# Transcript - Uploaded\n"
                     f"Agent: {agent_name_from_form}\n"
                     f"User: {user_name}\n"
+                    f"Provider: {get_current_transcription_provider()}\n"
                     f"Transcript Uploaded (UTC): {upload_timestamp_utc}\n\n"
                 )
                 
