@@ -3297,6 +3297,9 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                 except Exception as e:
                     logger.error(f"Unexpected RAG error: {e}", exc_info=True)
                     final_system_prompt += "\n\n=== RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
+                    # Ensure the variable is initialized even if an error occurred
+                    if 'retrieved_docs_for_reinforcement' not in locals():
+                        retrieved_docs_for_reinforcement = []
                 logger.info(f"[PERF] RAG processing took {time.time() - rag_start_time:.4f}s")
             
             # --- Part 3: Static Knowledge Base & Historical Context ---
@@ -3608,6 +3611,9 @@ When you identify information that should be permanently stored in your agent do
                                     _first_token_logged = True
                                 yield f"data: {json.dumps({'delta': chunk.delta.text})}\n\n"
                 
+                # Ensure retrieved_docs_for_reinforcement is defined
+                if 'retrieved_docs_for_reinforcement' not in locals():
+                    retrieved_docs_for_reinforcement = []
                 doc_ids_for_reinforcement = [doc.metadata.get('vector_id') for doc in retrieved_docs_for_reinforcement if doc.metadata.get('vector_id')]
                 sse_done_data = {'done': True, 'retrieved_doc_ids': doc_ids_for_reinforcement}
                 yield f"data: {json.dumps(sse_done_data)}\n\n"
