@@ -43,7 +43,13 @@ class DeepgramProvider(TranscriptionProvider):
         }
         return mapping.get(vad_aggressiveness, 1)  # Default to Quiet (1) if invalid
 
-    def _request(self, path: str, language: Optional[str], vad_aggressiveness: Optional[int] = None) -> Dict[str, Any]:
+    def _request(self, path: str, language: Optional[str], vad_aggressiveness: Optional[int] = None, timeout_s: float = None, max_retries: int = None) -> Dict[str, Any]:
+        import httpx, time, math
+
+        # Get timeout and retry settings from environment or use defaults
+        timeout_s = timeout_s if timeout_s is not None else float(os.getenv("DEEPGRAM_TIMEOUT_MS", "6000")) / 1000.0
+        max_retries = max_retries if max_retries is not None else int(os.getenv("DEEPGRAM_MAX_RETRIES", "2"))
+
         # Deepgram parameters - enable word timestamps and smart formatting
         params = {
             "model": self.model,
@@ -63,29 +69,44 @@ class DeepgramProvider(TranscriptionProvider):
         vad_mode = self._get_deepgram_vad_mode(vad_aggressiveness)
         if vad_mode is not None:
             params["vad_mode"] = str(vad_mode)
+
         headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "audio/wav"  # Specify content type
         }
 
-        logger.info(f"Deepgram request: file={path}, params={params}")
+        logger.info(f"Deepgram request: file={path}, params={params}, timeout={timeout_s}s, max_retries={max_retries}")
 
-        try:
+        def _do():
             with open(path, "rb") as f:
-                r = requests.post(self._endpoint, headers=headers, params=params, data=f)
+                with httpx.Client(timeout=httpx.Timeout(timeout_s)) as cli:
+                    r = cli.post(self._endpoint, headers=headers, params=params, data=f)
 
-            logger.info(f"Deepgram response: status={r.status_code}")
+                    logger.info(f"Deepgram response: status={r.status_code}")
 
-            if r.status_code >= 300:
-                logger.error(f"Deepgram HTTP {r.status_code}: {r.text[:500]}")
-                raise RuntimeError(f"Deepgram HTTP {r.status_code}: {r.text[:500]}")
+                    if r.status_code >= 300:
+                        logger.error(f"Deepgram HTTP {r.status_code}: {r.text[:500]}")
+                        raise RuntimeError(f"Deepgram HTTP {r.status_code}: {r.text[:500]}")
 
-            response_data = r.json()
-            logger.info(f"Deepgram response data keys: {list(response_data.keys())}")
-            return response_data
-        except Exception as e:
-            logger.error(f"Deepgram request failed: {e}")
-            raise
+                    response_data = r.json()
+                    logger.info(f"Deepgram response data keys: {list(response_data.keys())}")
+                    return response_data
+
+        last_exc = None
+        for attempt in range(max_retries + 1):
+            try:
+                return _do()
+            except Exception as e:
+                last_exc = e
+                if attempt < max_retries:
+                    # backoff with jitter
+                    sleep_time = min(0.2 * (2 ** attempt), 1.2) + (0.05 * math.tanh(attempt))
+                    logger.warning(f"Deepgram attempt {attempt + 1} failed: {e}. Retrying in {sleep_time:.2f}s")
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(f"Deepgram request failed after {max_retries + 1} attempts: {e}")
+
+        raise last_exc
 
     def _extract(self, data: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]]]:
         try:

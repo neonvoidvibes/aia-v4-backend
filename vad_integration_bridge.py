@@ -109,34 +109,40 @@ class VADIntegrationBridge:
     def destroy_vad_session(self, session_id: str) -> bool:
         """
         Destroy a VAD session and clean up resources.
-        
+
         Args:
             session_id: Session identifier
-            
+
         Returns:
             True if session destroyed successfully, False otherwise
         """
+        from session_cleanup import mark_session_terminated, maybe_cleanup_session
+
         logger.info(f"Destroying VAD session {session_id}")
-        
+
         with self.bridge_lock:
             if session_id not in self.session_metadata:
                 logger.warning(f"VAD session {session_id} not found for destruction")
                 return False
-            
+
             try:
                 # Clean up hallucination manager for the session
                 cleanup_session_manager(session_id)
-                
-                # Clean up session temporary directory
-                self.vad_manager.cleanup_session_directory(session_id)
-                
+
+                # Mark session as terminated, but don't immediately clean up files
+                # This allows pending transcriptions to complete
+                mark_session_terminated(session_id)
+
+                # Try cleanup - this will only succeed if no pending transcriptions
+                maybe_cleanup_session(session_id)
+
                 # Clean up local references
                 del self.session_metadata[session_id]
-                
+
                 self.global_stats["sessions_destroyed"] += 1
                 logger.info(f"VAD session {session_id} destroyed successfully")
                 return True
-                
+
             except Exception as e:
                 logger.error(f"Failed to destroy VAD session {session_id}: {e}", exc_info=True)
                 return False

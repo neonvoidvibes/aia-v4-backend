@@ -691,11 +691,24 @@ def verify_user(token: Optional[str]) -> Optional[SupabaseUser]:
         logger.warning("Auth check failed: No token provided.")
         return None
 
+    # Bound the auth call; retry once on timeout
+    def _get_user_with_timeout(jwt: str, timeout_s: float = 2.5):
+        import httpx, time
+        t0 = time.time()
+        try:
+            return client.auth.get_user(jwt)  # Note: supabase client may not support timeout kw directly
+        except Exception as e:
+            # Retry once if this smells like a timeout
+            if "timeout" in str(e).lower() or isinstance(e, (httpx.ReadTimeout, TimeoutError)):
+                logger.info(f"Auth timeout, retrying after {time.time() - t0:.2f}s")
+                return client.auth.get_user(jwt)
+            raise
+
     try:
-        user_resp = client.auth.get_user(token)
+        user_resp = _get_user_with_timeout(token)
         if user_resp and user_resp.user:
             logger.debug(f"Token verified for user ID: {user_resp.user.id}")
-            return user_resp.user 
+            return user_resp.user
         else:
             logger.warning("Auth check failed: Invalid token or user not found in response.")
             return None
@@ -1578,7 +1591,11 @@ def audio_stream_socket(ws, session_id: str):
     
     if not user:
         logger.warning(f"WebSocket Auth Failed: Invalid token for session {session_id}. Closing.")
-        ws.close(reason='Authentication failed')
+        # Close with RFC6455 code + reason; guard send errors
+        try:
+            ws.close(code=1008, reason='Authentication failed')  # Policy violation/unauthorized
+        except Exception as _:
+            pass
         return
 
     logger.info(f"WebSocket connection attempt for session {session_id}, user {user.id}, client_id={client_id}, resume={resume}")

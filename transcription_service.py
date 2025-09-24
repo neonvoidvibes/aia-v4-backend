@@ -22,18 +22,38 @@ from utils.hallucination_detector import get_hallucination_manager # For halluci
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Provider router
+# Provider router with fallback support
 from transcription_providers.base import TranscriptionProvider
-_PROVIDER_NAME = os.getenv("TRANSCRIPTION_PROVIDER", "whisper").strip().lower()
-logger.info(f"Initializing transcription provider: {_PROVIDER_NAME}")
-if _PROVIDER_NAME == "deepgram":
-    from transcription_providers.deepgram_provider import DeepgramProvider as _Provider
-    _provider: TranscriptionProvider = _Provider(os.getenv("DEEPGRAM_API_KEY"))
-    logger.info("Deepgram provider initialized successfully")
+_PRIMARY_PROVIDER = os.getenv("TRANSCRIBE_PRIMARY", "deepgram").strip().lower()
+_FALLBACK_PROVIDER = os.getenv("TRANSCRIBE_FALLBACK", "whisper").strip().lower()
+_PROVIDER_NAME = _PRIMARY_PROVIDER  # For backward compatibility
+
+logger.info(f"Initializing transcription providers: primary={_PRIMARY_PROVIDER}, fallback={_FALLBACK_PROVIDER}")
+
+# Initialize primary provider
+if _PRIMARY_PROVIDER == "deepgram":
+    from transcription_providers.deepgram_provider import DeepgramProvider as _PrimaryProvider
+    _primary_provider: TranscriptionProvider = _PrimaryProvider(os.getenv("DEEPGRAM_API_KEY"))
+    logger.info("Deepgram primary provider initialized successfully")
 else:
-    from transcription_providers.whisper_provider import WhisperProvider as _Provider
-    _provider: TranscriptionProvider = _Provider(os.getenv("OPENAI_API_KEY"))
-    logger.info("Whisper provider initialized successfully")
+    from transcription_providers.whisper_provider import WhisperProvider as _PrimaryProvider
+    _primary_provider: TranscriptionProvider = _PrimaryProvider(os.getenv("OPENAI_API_KEY"))
+    logger.info("Whisper primary provider initialized successfully")
+
+# Initialize fallback provider
+_fallback_provider: Optional[TranscriptionProvider] = None
+if _FALLBACK_PROVIDER and _FALLBACK_PROVIDER != _PRIMARY_PROVIDER:
+    if _FALLBACK_PROVIDER == "whisper":
+        from transcription_providers.whisper_provider import WhisperProvider as _FallbackProvider
+        _fallback_provider = _FallbackProvider(os.getenv("OPENAI_API_KEY"))
+        logger.info("Whisper fallback provider initialized successfully")
+    elif _FALLBACK_PROVIDER == "deepgram":
+        from transcription_providers.deepgram_provider import DeepgramProvider as _FallbackProvider
+        _fallback_provider = _FallbackProvider(os.getenv("DEEPGRAM_API_KEY"))
+        logger.info("Deepgram fallback provider initialized successfully")
+
+# Backward compatibility
+_provider = _primary_provider
 
 def get_current_transcription_provider() -> str:
     """Get the name of the currently active transcription provider."""
@@ -1031,17 +1051,50 @@ def _transcribe_audio_segment_openai(
     rolling_context_prompt: Optional[str] = None,
     vad_aggressiveness: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
-    # Backward-compatible wrapper; now goes through provider
-    return _provider.transcribe_file(audio_file_path, language=language_setting_from_client, prompt=rolling_context_prompt, vad_aggressiveness=vad_aggressiveness)
+    # Provider with fallback support
+    try:
+        result = _primary_provider.transcribe_file(audio_file_path, language=language_setting_from_client, prompt=rolling_context_prompt, vad_aggressiveness=vad_aggressiveness)
+        if result:
+            return result
+    except Exception as e:
+        logger.error(f"Primary provider ({_PRIMARY_PROVIDER}) failed for {audio_file_path}: {e}. Falling back to {_FALLBACK_PROVIDER}.")
+
+    # Try fallback provider if available
+    if _fallback_provider:
+        try:
+            result = _fallback_provider.transcribe_file(audio_file_path, language="auto" if language_setting_from_client == "any" else language_setting_from_client)
+            if result:
+                logger.info(f"Fallback provider ({_FALLBACK_PROVIDER}) succeeded for {audio_file_path}")
+                return result
+        except Exception as ee:
+            logger.error(f"Fallback provider ({_FALLBACK_PROVIDER}) failed for {audio_file_path}: {ee}")
+
+    return None
 
 def process_audio_segment_and_update_s3(
-    temp_segment_wav_path: str, 
-    session_data: Dict[str, Any], 
+    temp_segment_wav_path: str,
+    session_data: Dict[str, Any],
     session_lock: threading.Lock,
     openai_api_key: Optional[str],
     anthropic_api_key: Optional[str]
 ) -> bool:
-    
+    from session_cleanup import session_id_from_path, release_transcription_ref
+    import time
+
+    # Guard: if the producer handed us a path, it must exist.
+    session_id = session_data.get("session_id")
+    if not os.path.exists(temp_segment_wav_path):
+        # Give a very brief grace period in case of FS latency
+        for _ in range(3):
+            time.sleep(0.05)
+            if os.path.exists(temp_segment_wav_path):
+                break
+        else:
+            logger.warning(f"Transcription skipped; file missing: {temp_segment_wav_path}")
+            if session_id:
+                release_transcription_ref(session_id)  # decrement refcount
+            return False
+
     # --- Part 1a: Calculate actual duration before anything else ---
     # This is now the authoritative source of duration for the segment.
     actual_duration_from_ffprobe = 0.0
@@ -1077,6 +1130,8 @@ def process_audio_segment_and_update_s3(
         if temp_segment_wav_path and os.path.exists(temp_segment_wav_path):
              try: os.remove(temp_segment_wav_path)
              except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path} after pre-check fail: {e_del}")
+        if session_id:
+            release_transcription_ref(session_id)
         return False
 
     if not openai_api_key:
@@ -1097,12 +1152,14 @@ def process_audio_segment_and_update_s3(
 
     # If transcription fails, exit early.
     if not transcription_result:
-        logger.warning(f"Transcription returned no result for {temp_segment_wav_path}. Skipping.")
+        logger.info(f"Transcription skipped (missing or failed): {temp_segment_wav_path}")
         if os.path.exists(temp_segment_wav_path):
             try:
                 os.remove(temp_segment_wav_path)
             except OSError as e:
                 logger.error(f"Error removing failed segment file {temp_segment_wav_path}: {e}")
+        if session_id:
+            release_transcription_ref(session_id)
         return False
 
     # Pre-process segments that don't depend on the atomic offset
@@ -1239,5 +1296,11 @@ def process_audio_segment_and_update_s3(
     if os.path.exists(temp_segment_wav_path):
         try: os.remove(temp_segment_wav_path); logger.debug(f"Cleaned up temp WAV: {temp_segment_wav_path}")
         except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
-        
+
+    # Release the transcription reference count and try cleanup
+    if session_id:
+        from session_cleanup import release_transcription_ref, maybe_cleanup_session
+        release_transcription_ref(session_id)
+        maybe_cleanup_session(session_id)
+
     return True

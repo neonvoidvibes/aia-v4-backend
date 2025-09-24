@@ -176,18 +176,31 @@ class VADTranscriptionService:
         session_lock: threading.Lock
     ):
         """Saves a clean speech segment to a WAV file and submits it to the worker pool."""
+        from pathlib import Path
+        import tempfile
+        from session_cleanup import ack_transcription_enqueue
+
         segment_id = uuid.uuid4().hex
-        clean_wav_path = os.path.join(temp_dir, f"clean_speech_{segment_id}.wav")
+        final_path = Path(temp_dir) / f"clean_speech_{segment_id}.wav"
 
         try:
-            with wave.open(clean_wav_path, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(self.sample_rate)
-                wf.writeframes(audio_bytes)
+            # Atomic write: temp file, fsync, then replace
+            with tempfile.NamedTemporaryFile(dir=temp_dir, delete=False, suffix='.wav') as tf:
+                with wave.open(tf.name, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(self.sample_rate)
+                    wf.writeframes(audio_bytes)
+                tf.flush()
+                os.fsync(tf.fileno())
+                tmp_path = Path(tf.name)
 
-            logger.info(f"Session {session_id}: Submitting clean WAV {clean_wav_path} to executor.")
-            
+            # Atomic replace
+            os.replace(tmp_path, final_path)
+            ack_transcription_enqueue(session_id)  # increment refcount
+
+            logger.info(f"Session {session_id}: Submitting clean WAV {final_path} to executor.")
+
             # Retrieve keys from session data to pass to the processing function
             openai_key = session_data.get("openai_api_key")
             anthropic_key = session_data.get("anthropic_api_key")
@@ -195,7 +208,7 @@ class VADTranscriptionService:
             from transcription_service import process_audio_segment_and_update_s3
             current_app.executor.submit(
                 process_audio_segment_and_update_s3,
-                temp_segment_wav_path=clean_wav_path,
+                temp_segment_wav_path=str(final_path),
                 session_data=session_data,
                 session_lock=session_lock,
                 openai_api_key=openai_key,
@@ -203,9 +216,9 @@ class VADTranscriptionService:
             )
         except Exception as e:
             logger.error(f"Session {session_id}: Failed to save and submit voiced segment: {e}", exc_info=True)
-            if os.path.exists(clean_wav_path):
-                try: os.remove(clean_wav_path)
-                except Exception as del_e: logger.error(f"Failed to clean up failed segment file {clean_wav_path}: {del_e}")
+            if os.path.exists(final_path):
+                try: os.remove(final_path)
+                except Exception as del_e: logger.error(f"Failed to clean up failed segment file {final_path}: {del_e}")
     
     def process_audio_segment(
         self,
