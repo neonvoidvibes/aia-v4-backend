@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Provider router with fallback support
 from transcription_providers.base import TranscriptionProvider
-_PRIMARY_PROVIDER = os.getenv("TRANSCRIBE_PRIMARY", "deepgram").strip().lower()
+_PRIMARY_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "deepgram").strip().lower()
 _FALLBACK_PROVIDER = os.getenv("TRANSCRIBE_FALLBACK", "whisper").strip().lower()
 _PROVIDER_NAME = _PRIMARY_PROVIDER  # For backward compatibility
 
