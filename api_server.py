@@ -1034,6 +1034,15 @@ def start_recording_route(user: SupabaseUser):
     temp_audio_base_dir = os.path.join('tmp', 'audio_sessions', session_id)
     os.makedirs(temp_audio_base_dir, exist_ok=True)
     
+    # Create session state for sticky provider fallback
+    from models.session_state import SessionState
+    session_state = SessionState(
+        id=session_id,
+        user_id=user.id,
+        language_hint=language_setting,
+        provider_cooldown_sec=int(os.getenv("TRANSCRIBE_PROVIDER_COOLDOWN_SEC", "900"))
+    )
+
     active_sessions[session_id] = {
         "session_id": session_id,
         "user_id": user.id,
@@ -1044,14 +1053,15 @@ def start_recording_route(user: SupabaseUser):
         "vad_aggressiveness_from_client": vad_aggressiveness, # Store VAD aggressiveness level
         "session_start_time_utc": session_start_time_utc,
         "s3_transcript_key": s3_transcript_key,
-        "temp_audio_session_dir": temp_audio_base_dir, 
+        "temp_audio_session_dir": temp_audio_base_dir,
         "openai_api_key": agent_openai_key,       # Store the potentially agent-specific key
         "anthropic_api_key": agent_anthropic_key, # Store the potentially agent-specific key
         "is_backend_processing_paused": False,
         "current_total_audio_duration_processed_seconds": 0.0,
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
-        "is_active": True, 
+        "is_active": True,
+        "session_state": session_state,  # Add session state for sticky provider fallback 
         "is_finalizing": False, 
         "current_segment_raw_bytes": bytearray(),
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,

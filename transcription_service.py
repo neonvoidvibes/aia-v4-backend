@@ -22,6 +22,9 @@ from utils.hallucination_detector import get_hallucination_manager # For halluci
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Import session state model
+from models.session_state import SessionState
+
 # Provider router with fallback support
 from transcription_providers.base import TranscriptionProvider
 _PRIMARY_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "deepgram").strip().lower()
@@ -54,6 +57,124 @@ if _FALLBACK_PROVIDER and _FALLBACK_PROVIDER != _PRIMARY_PROVIDER:
 
 # Backward compatibility
 _provider = _primary_provider
+
+# Sticky fallback with timed Deepgram probe functions
+def _mark_deepgram_failure(state: SessionState):
+    """Mark Deepgram as failed and switch to Whisper fallback."""
+    now = time.time()
+    # switch to whisper and set retry time if not already in fallback
+    if state.provider_current != "whisper":
+        state.provider_current = "whisper"
+        state.provider_fallback_at = now
+        state.provider_retry_after = now + state.provider_cooldown_sec
+        logger.info(f"Session {state.id}: Switched to Whisper fallback, retry after {state.provider_retry_after}")
+
+def _maybe_probe_deepgram(state: SessionState) -> bool:
+    """Check if we should probe Deepgram for availability."""
+    # only after cooldown, only one probe at a time
+    if state.provider_current != "whisper":
+        return False
+    if state.provider_retry_after is None or time.time() < state.provider_retry_after:
+        return False
+    if state.provider_probe_inflight:
+        return False
+    state.provider_probe_inflight = True
+    logger.info(f"Session {state.id}: Starting Deepgram probe")
+    return True
+
+def _complete_probe(state: SessionState, success: bool):
+    """Complete a Deepgram probe attempt."""
+    state.provider_probe_inflight = False
+    if success:
+        state.provider_current = "deepgram"
+        state.provider_fallback_at = None
+        state.provider_retry_after = None
+        logger.info(f"Session {state.id}: Deepgram probe successful, switched back to Deepgram")
+    else:
+        # push retry window forward (exponential-ish backoff)
+        state.provider_retry_after = time.time() + min(state.provider_cooldown_sec, 1800)
+        logger.info(f"Session {state.id}: Deepgram probe failed, retry after {state.provider_retry_after}")
+
+def _get_session_websocket(session_id: str):
+    """Get WebSocket connection for a session."""
+    try:
+        # Import here to avoid circular imports
+        from api_server import active_sessions
+        if session_id in active_sessions:
+            return active_sessions[session_id].get("websocket_connection")
+    except Exception:
+        pass
+    return None
+
+def _send_ws_status(state: SessionState, paused: bool, reason: str):
+    """Send WebSocket status update (PAUSED/RESUMED)."""
+    if not bool(os.getenv("TRANSCRIBE_WS_STATUS_EVENTS", "true").lower() in ("1", "true", "yes")):
+        return
+
+    now = time.time()
+    debounce_ms = int(os.getenv("TRANSCRIBE_WS_DEBOUNCE_MS", "1500"))
+
+    if paused:
+        if state.net_paused:
+            return
+        # debounce PAUSED if sent very recently
+        if state.last_pause_sent_at and (now - state.last_pause_sent_at) * 1000 < debounce_ms:
+            return
+
+        payload = {"type": "transcription_status", "state": "PAUSED", "reason": reason}
+        state.net_paused = True
+        state.last_pause_sent_at = now
+    else:
+        if not state.net_paused:
+            return
+
+        payload = {"type": "transcription_status", "state": "RESUMED"}
+        state.net_paused = False
+
+    # Send WebSocket message
+    ws = _get_session_websocket(state.id)
+    if ws:
+        try:
+            ws.send(json.dumps(payload))
+            logger.info(f"Session {state.id}: Sent transcription status {payload['state']} ({reason})")
+        except Exception as e:
+            logger.warning(f"Session {state.id}: Failed to send WebSocket status: {e}")
+    else:
+        logger.debug(f"Session {state.id}: No WebSocket connection for status {payload['state']}")
+
+def _on_provider_success(state: SessionState):
+    """Handle provider success - clear PAUSED state."""
+    _send_ws_status(state, paused=False, reason="")
+
+def _on_provider_failure(state: SessionState, e: Exception):
+    """Handle provider failure - notify UI once."""
+    logger.error(f"Session {state.id}: Transcription error: {e}")
+    # Notify UI once; reason is generic "network"
+    _send_ws_status(state, paused=True, reason="network")
+
+def _get_deepgram_params(language: Optional[str], vad_aggressiveness: Optional[int]) -> Dict[str, Any]:
+    """Get Deepgram parameters with language detection logic."""
+    base = {
+        'model': 'nova-3',
+        'smart_format': 'true',
+        'punctuate': 'true',
+        'words': 'true',
+        'timestamps': 'true'
+    }
+
+    # Add VAD mode if specified
+    if vad_aggressiveness is not None:
+        vad_mode = {1: 1, 2: 2, 3: 3}.get(vad_aggressiveness, 2)
+        base['vad_mode'] = str(vad_mode)
+
+    # Handle language parameter
+    if language and language != "any":
+        base['language'] = language
+        base['detect_language'] = 'false'
+    else:
+        base['detect_language'] = 'true'
+
+    return base
 
 def get_current_transcription_provider() -> str:
     """Get the name of the currently active transcription provider."""
@@ -1071,6 +1192,58 @@ def _transcribe_audio_segment_openai(
 
     return None
 
+def transcribe_chunk_with_sticky_fallback(state: SessionState, wav_path: str, language: Optional[str] = None, vad_aggressiveness: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """
+    Transcribe a chunk with sticky provider fallback logic.
+    """
+    provider = state.provider_current
+    # If we are in Whisper fallback and cooldown elapsed, try a single Deepgram probe on this chunk
+    probing = False
+    if provider == "whisper" and _maybe_probe_deepgram(state):
+        provider = "deepgram"
+        probing = True
+
+    try:
+        if provider == "deepgram":
+            # Use Deepgram with proper parameters
+            result = _primary_provider.transcribe_file(wav_path, language=language, vad_aggressiveness=vad_aggressiveness)
+        else:
+            # Use Whisper
+            result = _fallback_provider.transcribe_file(wav_path, language=language or "auto")
+
+        if result:
+            if probing:
+                _complete_probe(state, success=True)
+            _on_provider_success(state)
+            return result
+        else:
+            # No result but no exception - treat as failure
+            raise RuntimeError(f"{provider} returned no result")
+
+    except Exception as e:
+        if provider == "deepgram":
+            _mark_deepgram_failure(state)
+            if probing:
+                _complete_probe(state, success=False)
+
+        _on_provider_failure(state, e)
+
+        # sticky fallback: if we are not already in Whisper, do the switch now for this same chunk
+        if provider == "deepgram":
+            try:
+                result = _fallback_provider.transcribe_file(wav_path, language=language or "auto")
+                if result:
+                    _on_provider_success(state)
+                    return result
+                else:
+                    raise RuntimeError("Whisper fallback returned no result")
+            except Exception as ee:
+                _on_provider_failure(state, ee)
+                return None
+
+        # if Whisper failed, just bubble up (no further fallback)
+        return None
+
 def process_audio_segment_and_update_s3(
     temp_segment_wav_path: str,
     session_data: Dict[str, Any],
@@ -1138,17 +1311,30 @@ def process_audio_segment_and_update_s3(
         logger.error("OpenAI API key was not provided to process_audio_segment_and_update_s3. Cannot transcribe.")
         return False
         
-    # Transcribe audio (slow network call), passing in the rolling context
+    # Transcribe audio (slow network call), using sticky provider fallback
     # Note: last_transcript is accessed here, before the lock, which is fine.
     last_transcript = session_data.get("last_successful_transcript", "")
     vad_aggressiveness_from_client = session_data.get("vad_aggressiveness_from_client")
-    transcription_result = _transcribe_audio_segment_openai(
-        temp_segment_wav_path,
-        openai_api_key,
-        language_setting_from_client,
-        rolling_context_prompt=last_transcript,
-        vad_aggressiveness=vad_aggressiveness_from_client
-    )
+
+    # Get session state for sticky provider fallback
+    session_state = session_data.get("session_state")
+    if session_state:
+        # Use new sticky fallback logic
+        transcription_result = transcribe_chunk_with_sticky_fallback(
+            session_state,
+            temp_segment_wav_path,
+            language=language_setting_from_client,
+            vad_aggressiveness=vad_aggressiveness_from_client
+        )
+    else:
+        # Fallback to legacy logic if no session state
+        transcription_result = _transcribe_audio_segment_openai(
+            temp_segment_wav_path,
+            openai_api_key,
+            language_setting_from_client,
+            rolling_context_prompt=last_transcript,
+            vad_aggressiveness=vad_aggressiveness_from_client
+        )
 
     # If transcription fails, exit early.
     if not transcription_result:
