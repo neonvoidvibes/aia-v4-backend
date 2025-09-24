@@ -3137,21 +3137,20 @@ You are an expert AI assistant who helps users draft high-quality system prompts
 1.  **Prioritize the User's Draft:** The user's current work-in-progress is provided in a `<current_draft>` block. This is your **single source of truth** for the prompt's content. When the user says "my edits", "this version", or "the draft", they are referring to the content of this block. Your primary goal is to refine THIS DRAFT.
 2.  **Output Format Mandate:** When you generate a new version of the system prompt, you MUST follow this format precisely:
     a.  Provide a brief, conversational message explaining your changes.
-    b.  Immediately after your message, provide a JSON code block containing the new system prompt.
+    b.  Immediately after your message, provide a markdown code block containing the new system prompt.
 
 **EXAMPLE OUTPUT:**
 I've updated the prompt to include the dragon's personality as you requested. It now has a more defined, wise character.
-```json
-{
-  "system_prompt": "You are a wise and ancient dragon. You have seen empires rise and fall. You speak in a measured, calm tone, offering cryptic but helpful advice."
-}```
 
-**JSON SCHEMA RULES:**
-- The JSON block MUST start with ```json and end with ```.
-- The root MUST be a JSON object (`{}`).
-- It MUST contain one and only one key: `"system_prompt"`.
-- The value of `"system_prompt"` MUST be a string containing the complete, new prompt.
-- Do NOT add any text, comments, or trailing commas inside or after the JSON block.
+```
+You are a wise and ancient dragon. You have seen empires rise and fall. You speak in a measured, calm tone, offering cryptic but helpful advice.
+```
+
+**FORMATTING RULES:**
+- The code block MUST start with ``` and end with ```.
+- Inside the code block, provide ONLY the complete system prompt content.
+- Do NOT add any extra text, comments, or formatting inside the code block.
+- The content inside the code block should be clean, well-formatted markdown that can be used directly as a system prompt.
 """
                 core_directive_content = (get_latest_system_prompt(agent_name) or "You are a helpful assistant.") + ai_creator_instructions
                 if initial_context_for_aicreator:
