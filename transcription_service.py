@@ -1680,7 +1680,8 @@ def process_audio_segment_and_update_s3(
 
 
         # Add verification log before persistence
-        logger.info(f"Session {session_id_for_log}: Persisting transcript: chars={len('\\n'.join(lines_to_append_to_s3))}, lines={len(lines_to_append_to_s3)}")
+        joined_lines = '\n'.join(lines_to_append_to_s3)
+        logger.info(f"Session {session_id_for_log}: Persisting transcript: chars={len(joined_lines)}, lines={len(lines_to_append_to_s3)}")
 
         # Perform S3 append if there's new content
         if lines_to_append_to_s3:
