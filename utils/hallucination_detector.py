@@ -391,10 +391,15 @@ class HallucinationDetector:
         """
         words = text.split()
         
-        # Check for immediate word repetition (word word)
+        # Check for immediate word repetition (word word) - but be more lenient
+        # Only flag if it's an obvious hallucination pattern, not natural speech disfluency
         for i in range(len(words) - 1):
-            if words[i] == words[i + 1] and len(words[i]) > 2:  # Ignore short words like "a", "is"
-                return f"word_repeat_{words[i]}"
+            if words[i] == words[i + 1] and len(words[i]) > 4:  # Only flag longer words (5+ chars)
+                # Skip common disfluency patterns that are natural in speech
+                disfluency_whitelist = ['there', 'would', 'could', 'should', 'really', 'maybe', 'probably',
+                                      'like', 'well', 'so', 'and', 'but', 'the', 'this', 'that', 'what', 'why', 'how']
+                if words[i].lower() not in disfluency_whitelist:
+                    return f"word_repeat_{words[i]}"
         
         # Check for phrase repetition
         for phrase_len in range(2, min(5, len(words) // 2 + 1)):
@@ -412,16 +417,16 @@ class HallucinationManager:
     Main manager class that coordinates transcript history and hallucination detection.
     """
     
-    def __init__(self, session_id: str, similarity_threshold: float = 0.5, 
+    def __init__(self, session_id: str, similarity_threshold: float = 0.75,
                  max_history: int = 5, min_transcript_length: int = 2):
         """
-        Initialize the hallucination manager for a session - AGGRESSIVE ROBUSTNESS MODE.
-        
+        Initialize the hallucination manager for a session - BALANCED MODE.
+
         Args:
             session_id: Unique session identifier
-            similarity_threshold: AGGRESSIVE: Default 0.5 for maximum robustness (was 0.8)
+            similarity_threshold: BALANCED: Default 0.75 for balanced robustness vs natural speech
             max_history: Maximum number of transcripts to keep in history
-            min_transcript_length: AGGRESSIVE: Default 2 words (was 3) to filter more aggressively
+            min_transcript_length: Minimum transcript length in words
         """
         self.session_id = session_id
         self.history_manager = TranscriptHistoryManager(max_history)
