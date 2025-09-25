@@ -1437,9 +1437,42 @@ def process_audio_segment_and_update_s3(
                     
                     # Add the single, combined, corrected, and PII-filtered line
                     lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
-                    
+
                     # Update context with this new valid line
                     session_data["last_successful_transcript"] = final_text_for_s3
+
+                    # Feed result to ring buffer for reconnection support
+                    try:
+                        recent_results = session_data.get("recent_results")
+                        next_seq = session_data.get("next_seq", 1)
+
+                        if recent_results is not None:
+                            # Create transcript result for ring buffer
+                            result_data = {
+                                "seq": next_seq,
+                                "text": final_text_for_s3,
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "timestamp_str": timestamp_str
+                            }
+                            recent_results.append(result_data)
+                            session_data["next_seq"] = next_seq + 1
+
+                            # Send to WebSocket if connected
+                            ws = session_data.get("websocket_connection")
+                            if ws:
+                                try:
+                                    ws.send(json.dumps({
+                                        "type": "transcript",
+                                        "seq": next_seq,
+                                        "text": final_text_for_s3,
+                                        "ts": result_data["ts"],
+                                        "timestamp": timestamp_str
+                                    }))
+                                    logger.debug(f"Session {session_id_for_log}: Sent transcript result seq={next_seq} to WebSocket")
+                                except Exception as ws_e:
+                                    logger.warning(f"Session {session_id_for_log}: Failed to send transcript to WebSocket: {ws_e}")
+                    except Exception as ring_e:
+                        logger.warning(f"Session {session_id_for_log}: Failed to add result to ring buffer: {ring_e}")
                 else:
                     logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:

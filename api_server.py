@@ -211,6 +211,14 @@ def _handle_mobile_audio_processing(session_id: str, audio_bytes: bytes, session
         # Process with existing transcription service
         session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(normalized_audio)
 
+        # Feed normalized audio into ring buffer for reconnection
+        try:
+            recent_audio = session_data.get("recent_audio")
+            if recent_audio is not None:
+                recent_audio.append(normalized_audio)
+        except Exception as e:
+            logger.debug(f"Session {session_id}: Failed to add audio to ring buffer: {e}")
+
         # Estimate duration (rough approximation based on content type)
         duration_estimate = _estimate_audio_duration(normalized_audio, content_type)
         session_data["accumulated_audio_duration_for_current_segment_seconds"] += duration_estimate
@@ -373,6 +381,21 @@ logger.info("Initialized and cleared active_sessions and session_locks at startu
 
 # Reattach grace window for unexpected disconnects (seconds)
 REATTACH_GRACE_SECONDS = int(os.getenv("REATTACH_GRACE_SECONDS", "90"))
+RINGBUF_SECONDS = int(os.getenv("RINGBUF_SECONDS", "45"))
+RINGBUF_MAX_RESULTS = int(os.getenv("RINGBUF_MAX_RESULTS", "200"))
+
+def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
+    """Initialize session state for reconnection support with ring buffers."""
+    from collections import deque
+    return {
+        "reconnect_token": uuid4().hex,
+        "last_disconnect_ts": None,
+        "grace_deadline": None,
+        "recent_audio": deque(maxlen=RINGBUF_SECONDS * 3),  # rough chunks @ ~3 items/s
+        "recent_results": deque(maxlen=RINGBUF_MAX_RESULTS),
+        "next_seq": 1,
+        "last_client_ack": 0,
+    }
 
 # Job tracking system for async transcription
 transcription_jobs: Dict[str, Dict[str, Any]] = {}
@@ -1043,6 +1066,9 @@ def start_recording_route(user: SupabaseUser):
         provider_cooldown_sec=int(os.getenv("TRANSCRIBE_PROVIDER_COOLDOWN_SEC", "900"))
     )
 
+    # Initialize reconnection state
+    reconnect_state = _init_session_reconnect_state(session_id)
+
     active_sessions[session_id] = {
         "session_id": session_id,
         "user_id": user.id,
@@ -1061,16 +1087,17 @@ def start_recording_route(user: SupabaseUser):
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True,
-        "session_state": session_state,  # Add session state for sticky provider fallback 
-        "is_finalizing": False, 
+        "session_state": session_state,  # Add session state for sticky provider fallback
+        "is_finalizing": False,
         "current_segment_raw_bytes": bytearray(),
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0,
-        "webm_global_header_bytes": None, 
+        "webm_global_header_bytes": None,
         "is_first_blob_received": False,
         "vad_enabled": False,  # Will be set to True if VAD session is created successfully
         "last_successful_transcript": "", # For providing rolling context to Whisper
         "actual_segment_duration_seconds": 0.0, # To track duration of processed segments
+        **reconnect_state  # Add reconnection fields
     }
     logger.info(f"Transcript session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
@@ -1592,6 +1619,190 @@ def resume_audio_recording_route(user: SupabaseUser):
         else:
             return jsonify({"status": "error", "message": "Session not found."}), 404
 
+@sock.route('/api/recording/attach')
+def attach_ws(ws):
+    """WebSocket attach endpoint with reconnection support."""
+    session_id = request.args.get("session_id")
+    rt = request.args.get("rt")  # reconnect_token
+    client_from_seq = int(request.args.get("client_from_seq") or 0)
+    token = request.args.get('token')
+
+    # Authenticate user
+    user = verify_user(token)
+    if not user:
+        logger.warning(f"WebSocket attach failed: Invalid token for session {session_id}. Closing.")
+        ws.close(code=1008, reason='Authentication failed')
+        return
+
+    if not session_id or session_id not in active_sessions:
+        logger.warning(f"WebSocket attach failed: Session {session_id} not found. Closing.")
+        ws.close(code=1011, reason='Session not found')
+        return
+
+    with session_locks[session_id]:
+        sess = active_sessions[session_id]
+
+        # Verify user owns session
+        if sess.get("user_id") != user.id:
+            logger.warning(f"WebSocket attach failed: Access denied for session {session_id}. Closing.")
+            ws.close(code=1008, reason='Access denied')
+            return
+
+        # Verify reconnect token
+        if sess.get("reconnect_token") != rt:
+            logger.warning(f"WebSocket attach failed: Invalid reconnect token for session {session_id}. Closing.")
+            ws.close(code=1008, reason='Invalid reconnect token')
+            return
+
+        now = time.time()
+        grace_deadline = sess.get("grace_deadline")
+
+        # Check if grace period has expired
+        if grace_deadline and now > grace_deadline:
+            # Grace expired: reset session with fresh token
+            logger.info(f"WebSocket attach: Grace period expired for session {session_id}. Resetting session.")
+            reconnect_state = _init_session_reconnect_state(session_id)
+            sess.update(reconnect_state)
+
+        # Attach WebSocket to session
+        sess["websocket_connection"] = ws
+        sess["last_disconnect_ts"] = None
+        sess["grace_deadline"] = None
+        sess["last_activity_timestamp"] = time.time()
+        sess["is_active"] = True
+
+        # Update session state for status tracking
+        session_state = sess.get("session_state")
+        if session_state:
+            session_state.mark_ws_reconnected()
+            session_state.last_status = {"type": "status", "state": "RESUMED"}
+
+        # Replay missed results
+        recent_results = sess.get("recent_results", [])
+        missed = [r for r in recent_results if r.get("seq", 0) > client_from_seq]
+
+        logger.info(f"WebSocket attached for session {session_id}, replaying {len(missed)} missed messages")
+
+    # Send missed results to client
+    for result in missed:
+        try:
+            ws.send(json.dumps({
+                "type": "transcript",
+                "seq": result.get("seq", 0),
+                "text": result.get("text", ""),
+                "ts": result.get("ts", "")
+            }))
+        except Exception as e:
+            logger.warning(f"Failed to send missed result to session {session_id}: {e}")
+            break
+
+    # Send RESUMED status
+    try:
+        ws.send(json.dumps({"type": "status", "state": "RESUMED"}))
+    except Exception as e:
+        logger.warning(f"Failed to send RESUMED status to session {session_id}: {e}")
+
+    # Basic message handling loop for pings/pongs
+    try:
+        while True:
+            message = ws.receive(timeout=30)
+            if message is None:
+                continue
+
+            # Handle control messages
+            if isinstance(message, str):
+                try:
+                    control_msg = json.loads(message)
+                    msg_type = control_msg.get("type")
+                    if msg_type == "ping":
+                        ws.send(json.dumps({"type": "pong"}))
+                    elif msg_type == "pong":
+                        pass  # Acknowledge pong
+                    elif msg_type == "ack":
+                        # Client acknowledging receipt of sequence number
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess:
+                                sess["last_client_ack"] = control_msg.get("seq", 0)
+                except json.JSONDecodeError:
+                    logger.warning(f"WebSocket attach session {session_id}: Invalid JSON message")
+    except Exception as e:
+        logger.info(f"WebSocket attach for session {session_id} closed: {e}")
+    finally:
+        # Mark as disconnected but keep grace period
+        _mark_ws_disconnected(session_id)
+
+def _mark_ws_disconnected(session_id: str):
+    """Mark WebSocket as disconnected and start grace period."""
+    with session_locks[session_id]:
+        sess = active_sessions.get(session_id)
+        if not sess:
+            return
+
+        sess["websocket_connection"] = None
+        sess["last_disconnect_ts"] = time.time()
+        sess["grace_deadline"] = sess["last_disconnect_ts"] + REATTACH_GRACE_SECONDS
+
+        # Update session state
+        session_state = sess.get("session_state")
+        if session_state:
+            session_state.mark_ws_disconnected(REATTACH_GRACE_SECONDS)
+            session_state.last_status = {"type": "status", "state": "PAUSED", "reason": "network"}
+
+        logger.info(f"WebSocket disconnected for session {session_id}. Grace period until {sess['grace_deadline']}")
+
+def _heartbeat_loop():
+    """Monitor WebSocket connections and handle grace period expiry."""
+    while True:
+        time.sleep(10)  # Check every 10 seconds
+        current_time = time.time()
+        sessions_to_finalize = []
+
+        # Create a snapshot of sessions to avoid modification during iteration
+        session_snapshots = list(active_sessions.items())
+
+        for session_id, sess in session_snapshots:
+            try:
+                with session_locks.get(session_id, threading.Lock()):
+                    # Skip if session was removed
+                    if session_id not in active_sessions:
+                        continue
+
+                    sess = active_sessions[session_id]
+                    ws = sess.get("websocket_connection")
+                    grace_deadline = sess.get("grace_deadline")
+
+                    if ws:
+                        # WebSocket is connected, send ping
+                        try:
+                            ws.send(json.dumps({"type": "ping", "t": int(current_time)}))
+                            logger.debug(f"Heartbeat ping sent to session {session_id}")
+                        except Exception as e:
+                            logger.warning(f"Heartbeat ping failed for session {session_id}: {e}")
+                            # Mark as disconnected
+                            _mark_ws_disconnected(session_id)
+                    else:
+                        # No WebSocket connection, check grace expiry
+                        if grace_deadline and current_time > grace_deadline:
+                            logger.info(f"Heartbeat: Grace period expired for session {session_id}")
+                            sessions_to_finalize.append(session_id)
+
+            except Exception as e:
+                logger.error(f"Error in heartbeat loop for session {session_id}: {e}")
+
+        # Finalize expired sessions
+        for session_id in sessions_to_finalize:
+            try:
+                logger.info(f"Heartbeat: Finalizing expired session {session_id}")
+                _finalize_session(session_id)
+            except Exception as e:
+                logger.error(f"Error finalizing expired session {session_id}: {e}")
+
+# Start heartbeat monitoring thread
+_heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+_heartbeat_thread.start()
+logger.info("Heartbeat monitoring thread started")
+
 @sock.route('/ws/audio_stream/<session_id>')
 def audio_stream_socket(ws, session_id: str):
     token = request.args.get('token')
@@ -2054,39 +2265,38 @@ def audio_stream_socket(ws, session_id: str):
         logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
     finally:
         logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected. Marking for reattachment grace period.")
-        with session_locks[session_id]:
-            sess = active_sessions.get(session_id)
-            if sess:
-                session_state = sess.get("session_state")
-                if session_state:
-                    # Mark WebSocket as disconnected with grace period
-                    session_state.mark_ws_disconnected(REATTACH_GRACE_SECONDS)
-                    # Store PAUSED status for client polling
-                    session_state.last_status = {"type": "status", "state": "PAUSED", "reason": "network"}
-                    logger.info(f"Session {session_id} marked for reattachment. Grace period until {session_state.reattach_deadline}")
-                else:
-                    # Fallback to old behavior if no session_state
-                    sess["is_active"] = False
-                    logger.warning(f"Session {session_id} has no session_state, falling back to immediate termination")
-
-                # Keep session active but clear WebSocket reference
-                if sess.get("websocket_connection") == ws:
-                    sess["websocket_connection"] = None
-                    sess["last_activity_timestamp"] = time.time()
-                    logger.debug(f"Session {session_id} WebSocket cleared but session kept active for reattachment.")
-
-                # Don't stop keepalive immediately - let it continue for reattachment
-                keepalive_thread = sess.get("keepalive_thread")
-                if keepalive_thread and keepalive_thread.is_alive() and not session_state:
-                    # Only stop keepalive if no session_state (fallback case)
-                    sess["is_active"] = False
-                    logger.debug(f"Session {session_id}: Keepalive thread will stop (fallback mode)")
+        _mark_ws_disconnected(session_id)
 
         try:
             ws.close()
         except Exception:
             pass
         
+
+@app.route('/api/recording/start', methods=['POST'])
+@supabase_auth_required(agent_required=False)
+def start_recording():
+    """Start or get existing recording session with reconnection token."""
+    user = g.user
+    session_id = request.args.get("session_id") or str(uuid4())
+
+    with session_locks[session_id]:
+        if session_id not in active_sessions:
+            # Session doesn't exist, return error - sessions must be created via existing transcript endpoint
+            return jsonify({"error": "Session not found. Create session via /api/transcribe/start first."}), 404
+
+        sess = active_sessions[session_id]
+
+        # Check if user owns this session
+        if sess.get("user_id") != user.id:
+            return jsonify({"error": "Access denied"}), 403
+
+        # Return existing session info with reconnect token
+        return jsonify({
+            "session_id": session_id,
+            "reconnect_token": sess.get("reconnect_token", ""),
+            "next_seq": sess.get("next_seq", 1)
+        }), 200
 
 @app.route('/api/recording/status', methods=['GET'])
 def get_recording_status_route():
@@ -4949,13 +5159,20 @@ def cleanup_idle_sessions():
         for session_id, session_data in current_sessions:
             with session_locks[session_id]:
                 # Case 1: Session is active but has lost its WebSocket connection.
-                # Check for reattachment grace period using session state
+                # Check for reattachment grace period using both session state and grace_deadline
                 session_state = session_data.get("session_state")
+                grace_deadline = session_data.get("grace_deadline")
+
+                # Check session state reattachment expiry
                 if session_state and session_state.reattach_deadline and session_state.is_reattach_expired():
-                    logger.warning(f"Idle session cleanup: Session {session_id} reattachment grace period expired. Marking for finalization.")
+                    logger.warning(f"Idle session cleanup: Session {session_id} reattachment grace period expired (session_state). Marking for finalization.")
                     sessions_to_finalize.append(session_id)
-                # Fallback for sessions without session_state (legacy behavior)
-                elif not session_state and \
+                # Check new grace_deadline field
+                elif grace_deadline and now > grace_deadline:
+                    logger.warning(f"Idle session cleanup: Session {session_id} grace period expired (grace_deadline). Marking for finalization.")
+                    sessions_to_finalize.append(session_id)
+                # Fallback for sessions without session_state or grace_deadline (legacy behavior)
+                elif not session_state and not grace_deadline and \
                      session_data.get("is_active") and \
                      not session_data.get("is_finalizing") and \
                      session_data.get("websocket_connection") is None and \
