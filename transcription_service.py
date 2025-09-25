@@ -1587,6 +1587,7 @@ def process_audio_segment_and_update_s3(
 
                     # Try ordered delivery first, fallback to direct S3 append
                     delivered_via_ordering = False
+                    logger.info(f"Session {session_id_for_log}: Processing transcript for seq={current_seq}, text='{final_text_for_s3[:50]}...'")
                     try:
                         # Import the ordering function from api_server
                         from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
@@ -1601,7 +1602,7 @@ def process_audio_segment_and_update_s3(
                                 session_lock=session_lock
                             )
                             delivered_via_ordering = True
-                            logger.debug(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
+                            logger.info(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
 
                     except Exception as delivery_e:
                         logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
@@ -1610,7 +1611,7 @@ def process_audio_segment_and_update_s3(
                     # Fallback to direct S3 append if ordering failed or is disabled
                     if not delivered_via_ordering:
                         lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
-                        logger.debug(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
+                        logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
                 else:
                     logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:
