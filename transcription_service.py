@@ -25,6 +25,128 @@ logger = logging.getLogger(__name__)
 # Import session state model
 from models.session_state import SessionState
 
+def is_transient_provider_error(e) -> bool:
+    """Classify errors as transient (retryable) or permanent."""
+    import socket
+    from requests.exceptions import ConnectionError, Timeout, HTTPError
+
+    # Network and DNS errors
+    if isinstance(e, (socket.gaierror, ConnectionError, Timeout,
+                      ConnectionResetError, ConnectionAbortedError)):
+        return True
+
+    # HTTP status codes
+    if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
+        status_code = e.response.status_code
+        return status_code >= 500 or status_code == 429
+
+    if hasattr(e, 'status_code'):
+        return e.status_code >= 500 or e.status_code == 429
+
+    # OpenAI specific errors
+    if 'openai' in str(type(e)).lower():
+        error_msg = str(e).lower()
+        if any(term in error_msg for term in ['timeout', 'connection', 'network', 'rate limit']):
+            return True
+
+    return False
+
+def save_for_retry(wav_path: str, session_data: Dict[str, Any], segment_offset_seconds: float, seq: int) -> bool:
+    """Save failed segment to disk queue for retry."""
+    try:
+        session_id = session_data.get("session_id")
+        if not session_id:
+            return False
+
+        # Create retry directory
+        retry_dir = f"tmp/retry_segments/{session_id}"
+        os.makedirs(retry_dir, exist_ok=True)
+
+        # Generate unique filename with sequence number
+        retry_base = f"{seq:06d}_{int(time.time())}"
+        retry_json_path = os.path.join(retry_dir, f"{retry_base}.json")
+        retry_wav_path = os.path.join(retry_dir, f"{retry_base}.wav")
+
+        # Copy WAV file to retry location
+        import shutil
+        shutil.copy2(wav_path, retry_wav_path)
+
+        # Create retry metadata
+        retry_metadata = {
+            "session_id": session_id,
+            "seq": seq,
+            "segment_offset_seconds": segment_offset_seconds,
+            "wav_path": retry_wav_path,
+            "original_wav_path": wav_path,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "attempts": 0,
+            "last_error": None,
+            "session_data_snapshot": {
+                "language_setting_from_client": session_data.get("language_setting_from_client"),
+                "vad_aggressiveness_from_client": session_data.get("vad_aggressiveness_from_client"),
+                "last_successful_transcript": session_data.get("last_successful_transcript", ""),
+                "s3_transcript_key": session_data.get("s3_transcript_key"),
+                "session_start_time_utc": session_data.get("session_start_time_utc").isoformat() if session_data.get("session_start_time_utc") else None,
+                "agent_name": session_data.get("agent_name"),
+                "event_id": session_data.get("event_id"),
+                "user_id": session_data.get("user_id"),
+            }
+        }
+
+        # Save metadata
+        with open(retry_json_path, 'w') as f:
+            json.dump(retry_metadata, f, indent=2)
+
+        logger.info(f"Saved segment seq={seq} for retry in session {session_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to save segment for retry: {e}")
+        return False
+
+def load_retry_segment(retry_json_path: str) -> Optional[Dict[str, Any]]:
+    """Load retry segment metadata from disk."""
+    try:
+        if not os.path.exists(retry_json_path):
+            return None
+
+        with open(retry_json_path, 'r') as f:
+            retry_data = json.load(f)
+
+        # Validate required fields
+        required_fields = ["session_id", "seq", "wav_path", "created_at"]
+        if not all(field in retry_data for field in required_fields):
+            logger.warning(f"Invalid retry metadata in {retry_json_path}")
+            return None
+
+        # Check if WAV file exists
+        if not os.path.exists(retry_data["wav_path"]):
+            logger.warning(f"Missing WAV file for retry: {retry_data['wav_path']}")
+            return None
+
+        return retry_data
+
+    except Exception as e:
+        logger.error(f"Failed to load retry segment {retry_json_path}: {e}")
+        return None
+
+def cleanup_retry_files(retry_json_path: str) -> None:
+    """Clean up retry files after successful processing or max attempts."""
+    try:
+        retry_data = load_retry_segment(retry_json_path)
+        if retry_data:
+            wav_path = retry_data.get("wav_path")
+            if wav_path and os.path.exists(wav_path):
+                os.remove(wav_path)
+
+        if os.path.exists(retry_json_path):
+            os.remove(retry_json_path)
+
+        logger.debug(f"Cleaned up retry files for {retry_json_path}")
+
+    except Exception as e:
+        logger.error(f"Failed to cleanup retry files {retry_json_path}: {e}")
+
 # Provider router with fallback support
 from transcription_providers.base import TranscriptionProvider
 _PRIMARY_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "deepgram").strip().lower()
@@ -1311,6 +1433,12 @@ def process_audio_segment_and_update_s3(
         logger.error("OpenAI API key was not provided to process_audio_segment_and_update_s3. Cannot transcribe.")
         return False
         
+    # Assign sequence number for this segment (before transcription)
+    with session_lock:
+        current_seq = session_data.get("next_segment_seq", 1)
+        session_data["next_segment_seq"] = current_seq + 1
+        segment_offset_seconds = session_data.get('current_total_audio_duration_processed_seconds', 0.0)
+
     # Transcribe audio (slow network call), using sticky provider fallback
     # Note: last_transcript is accessed here, before the lock, which is fine.
     last_transcript = session_data.get("last_successful_transcript", "")
@@ -1318,23 +1446,42 @@ def process_audio_segment_and_update_s3(
 
     # Get session state for sticky provider fallback
     session_state = session_data.get("session_state")
-    if session_state:
-        # Use new sticky fallback logic
-        transcription_result = transcribe_chunk_with_sticky_fallback(
-            session_state,
-            temp_segment_wav_path,
-            language=language_setting_from_client,
-            vad_aggressiveness=vad_aggressiveness_from_client
-        )
-    else:
-        # Fallback to legacy logic if no session state
-        transcription_result = _transcribe_audio_segment_openai(
-            temp_segment_wav_path,
-            openai_api_key,
-            language_setting_from_client,
-            rolling_context_prompt=last_transcript,
-            vad_aggressiveness=vad_aggressiveness_from_client
-        )
+    transcription_result = None
+
+    try:
+        if session_state:
+            # Use new sticky fallback logic
+            transcription_result = transcribe_chunk_with_sticky_fallback(
+                session_state,
+                temp_segment_wav_path,
+                language=language_setting_from_client,
+                vad_aggressiveness=vad_aggressiveness_from_client
+            )
+        else:
+            # Fallback to legacy logic if no session state
+            transcription_result = _transcribe_audio_segment_openai(
+                temp_segment_wav_path,
+                openai_api_key,
+                language_setting_from_client,
+                rolling_context_prompt=last_transcript,
+                vad_aggressiveness=vad_aggressiveness_from_client
+            )
+    except Exception as e:
+        # Check if this is a transient error that should be retried
+        if is_transient_provider_error(e):
+            logger.warning(f"Session {session_id}: Transient transcription error for seq={current_seq}: {e}")
+
+            # Save segment for retry
+            if save_for_retry(temp_segment_wav_path, session_data, segment_offset_seconds, current_seq):
+                # Return success - segment will be processed by retry worker
+                if session_id:
+                    release_transcription_ref(session_id)
+                return True
+            else:
+                logger.error(f"Session {session_id}: Failed to save segment seq={current_seq} for retry")
+
+        # Re-raise for permanent errors or retry save failures
+        raise
 
     # If transcription fails, exit early.
     if not transcription_result:
@@ -1435,44 +1582,29 @@ def process_audio_segment_and_update_s3(
                     
                     timestamp_str = format_timestamp_range(abs_start, abs_end, session_start_time_utc)
                     
-                    # Add the single, combined, corrected, and PII-filtered line
-                    lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
-
                     # Update context with this new valid line
                     session_data["last_successful_transcript"] = final_text_for_s3
 
-                    # Feed result to ring buffer for reconnection support
+                    # Use ordered delivery system instead of direct S3 append
                     try:
-                        recent_results = session_data.get("recent_results")
-                        next_seq = session_data.get("next_seq", 1)
+                        # Import the ordering function from api_server
+                        from api_server import try_deliver_ordered_results
 
-                        if recent_results is not None:
-                            # Create transcript result for ring buffer
-                            result_data = {
-                                "seq": next_seq,
-                                "text": final_text_for_s3,
-                                "ts": datetime.now(timezone.utc).isoformat(),
-                                "timestamp_str": timestamp_str
-                            }
-                            recent_results.append(result_data)
-                            session_data["next_seq"] = next_seq + 1
+                        # Deliver through ordering system for gap-free transcripts
+                        try_deliver_ordered_results(
+                            session_id=session_id_for_log,
+                            seq=current_seq,
+                            transcript_text=final_text_for_s3,
+                            timestamp_str=timestamp_str,
+                            session_lock=session_lock
+                        )
 
-                            # Send to WebSocket if connected
-                            ws = session_data.get("websocket_connection")
-                            if ws:
-                                try:
-                                    ws.send(json.dumps({
-                                        "type": "transcript",
-                                        "seq": next_seq,
-                                        "text": final_text_for_s3,
-                                        "ts": result_data["ts"],
-                                        "timestamp": timestamp_str
-                                    }))
-                                    logger.debug(f"Session {session_id_for_log}: Sent transcript result seq={next_seq} to WebSocket")
-                                except Exception as ws_e:
-                                    logger.warning(f"Session {session_id_for_log}: Failed to send transcript to WebSocket: {ws_e}")
-                    except Exception as ring_e:
-                        logger.warning(f"Session {session_id_for_log}: Failed to add result to ring buffer: {ring_e}")
+                        logger.debug(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
+
+                    except Exception as delivery_e:
+                        logger.error(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
+                        # Fallback: add to old lines_to_append_to_s3 for legacy processing
+                        lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
                 else:
                     logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:

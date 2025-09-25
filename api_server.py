@@ -384,6 +384,12 @@ REATTACH_GRACE_SECONDS = int(os.getenv("REATTACH_GRACE_SECONDS", "90"))
 RINGBUF_SECONDS = int(os.getenv("RINGBUF_SECONDS", "45"))
 RINGBUF_MAX_RESULTS = int(os.getenv("RINGBUF_MAX_RESULTS", "200"))
 
+# Gap recovery configuration
+SEGMENT_RETRY_ENABLED = os.getenv("SEGMENT_RETRY_ENABLED", "true").lower() == "true"
+SEGMENT_RETRY_MAX_ATTEMPTS = int(os.getenv("SEGMENT_RETRY_MAX_ATTEMPTS", "3"))
+MAX_PENDING_SEGMENTS = int(os.getenv("MAX_PENDING_SEGMENTS", "20"))
+SEGMENT_GAP_TIMEOUT_SEC = int(os.getenv("SEGMENT_GAP_TIMEOUT_SEC", "120"))
+
 def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
     """Initialize session state for reconnection support with ring buffers."""
     from collections import deque
@@ -395,6 +401,11 @@ def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
         "recent_results": deque(maxlen=RINGBUF_MAX_RESULTS),
         "next_seq": 1,
         "last_client_ack": 0,
+        # Gap recovery sequence tracking
+        "next_segment_seq": 1,       # Next sequence number for transcription segments
+        "expected_seq": 1,           # Next sequence we expect to deliver
+        "pending_seqs": {},          # {seq: transcript_data} waiting for gaps to fill
+        "max_delivered_seq": 0,      # Highest sequence sent to client
     }
 
 # Job tracking system for async transcription
@@ -1751,6 +1762,169 @@ def _mark_ws_disconnected(session_id: str):
 
         logger.info(f"WebSocket disconnected for session {session_id}. Grace period until {sess['grace_deadline']}")
 
+def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str, timestamp_str: str, session_lock: threading.Lock = None) -> None:
+    """Deliver transcript results in perfect order, handling gaps gracefully."""
+    if not SEGMENT_RETRY_ENABLED:
+        # Fallback to direct delivery if gap recovery disabled
+        _deliver_to_client_and_s3(session_id, seq, transcript_text, timestamp_str)
+        return
+
+    lock_to_use = session_lock or session_locks.get(session_id, threading.Lock())
+
+    with lock_to_use:
+        sess = active_sessions.get(session_id)
+        if not sess:
+            logger.warning(f"Session {session_id} not found when trying to deliver seq={seq}")
+            return
+
+        expected_seq = sess.get("expected_seq", 1)
+        pending_seqs = sess.get("pending_seqs", {})
+        max_delivered_seq = sess.get("max_delivered_seq", 0)
+
+        if seq == expected_seq:
+            # Perfect order - deliver immediately
+            _deliver_to_client_and_s3(session_id, seq, transcript_text, timestamp_str)
+            sess["expected_seq"] = seq + 1
+            sess["max_delivered_seq"] = seq
+
+            # Deliver any consecutive pending sequences
+            while sess["expected_seq"] in pending_seqs:
+                next_seq = sess["expected_seq"]
+                pending_data = pending_seqs.pop(next_seq)
+                _deliver_to_client_and_s3(session_id, next_seq,
+                                        pending_data["text"],
+                                        pending_data["timestamp_str"])
+                sess["expected_seq"] = next_seq + 1
+                sess["max_delivered_seq"] = next_seq
+
+            logger.debug(f"Session {session_id}: Delivered seq={seq} and {len(pending_seqs)} pending seqs")
+
+        elif seq > expected_seq:
+            # Out of order - store for later
+            pending_seqs[seq] = {
+                "text": transcript_text,
+                "timestamp_str": timestamp_str,
+                "received_at": time.time()
+            }
+            sess["pending_seqs"] = pending_seqs
+
+            # Prevent unbounded pending queue
+            if len(pending_seqs) > MAX_PENDING_SEGMENTS:
+                # Deliver oldest pending with gap marker
+                oldest_seq = min(pending_seqs.keys())
+                oldest_data = pending_seqs.pop(oldest_seq)
+
+                # Insert gap marker in S3
+                gap_marker = f"[Gap: Missing segments {expected_seq}-{oldest_seq-1}]"
+                _deliver_to_client_and_s3(session_id, oldest_seq,
+                                        gap_marker + " " + oldest_data["text"],
+                                        oldest_data["timestamp_str"])
+
+                sess["expected_seq"] = oldest_seq + 1
+                sess["max_delivered_seq"] = oldest_seq
+                logger.warning(f"Session {session_id}: Forced delivery of seq={oldest_seq} due to queue limit")
+
+            logger.debug(f"Session {session_id}: Queued seq={seq} for later (expecting seq={expected_seq})")
+
+        else:
+            # Sequence already delivered or too old
+            logger.debug(f"Session {session_id}: Ignoring duplicate/old seq={seq} (max_delivered={max_delivered_seq})")
+
+        # Check for timed-out gaps
+        current_time = time.time()
+        expired_seqs = []
+        for pending_seq, pending_data in pending_seqs.items():
+            if current_time - pending_data["received_at"] > SEGMENT_GAP_TIMEOUT_SEC:
+                expired_seqs.append(pending_seq)
+
+        # Handle expired sequences
+        for expired_seq in expired_seqs:
+            expired_data = pending_seqs.pop(expired_seq)
+            gap_marker = f"[Delayed segment seq={expired_seq}]"
+            _deliver_to_client_and_s3(session_id, expired_seq,
+                                    gap_marker + " " + expired_data["text"],
+                                    expired_data["timestamp_str"])
+            logger.warning(f"Session {session_id}: Delivered expired seq={expired_seq} after timeout")
+
+def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, timestamp_str: str) -> None:
+    """Deliver transcript to both client and S3."""
+    try:
+        sess = active_sessions.get(session_id)
+        if not sess:
+            return
+
+        # Append to S3 (reuse existing S3 logic)
+        s3_transcript_key = sess.get('s3_transcript_key')
+        if s3_transcript_key:
+            from utils.s3_utils import get_s3_client
+            s3 = get_s3_client()
+            aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+
+            if s3 and aws_s3_bucket:
+                try:
+                    # Read existing content
+                    try:
+                        obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
+                        existing_content = obj['Body'].read().decode('utf-8')
+                    except s3.exceptions.NoSuchKey:
+                        # Create header for new transcript
+                        session_start_time_utc = sess.get('session_start_time_utc')
+                        agent_name = sess.get('agent_name', 'N/A')
+                        event_id = sess.get('event_id', 'N/A')
+                        language_setting = sess.get('language_setting_from_client', 'any')
+
+                        existing_content = f"# Transcript - Session {session_id}\n"
+                        existing_content += f"Agent: {agent_name}, Event: {event_id}\n"
+                        existing_content += f"Language: {language_setting}\n"
+                        if session_start_time_utc:
+                            existing_content += f"Session Started (UTC): {session_start_time_utc.isoformat()}\n"
+                        existing_content += "\n"
+
+                    # Append new line
+                    new_line = f"{timestamp_str} {transcript_text}\n"
+                    updated_content = existing_content + new_line
+
+                    # Write back to S3
+                    s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
+                    logger.debug(f"Session {session_id}: Appended seq={seq} to S3")
+
+                except Exception as s3_e:
+                    logger.error(f"Session {session_id}: Failed to append seq={seq} to S3: {s3_e}")
+
+        # Send to WebSocket client (reuse existing ring buffer logic)
+        recent_results = sess.get("recent_results")
+        next_ws_seq = sess.get("next_seq", 1)
+
+        if recent_results is not None:
+            result_data = {
+                "seq": next_ws_seq,
+                "text": transcript_text,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "timestamp_str": timestamp_str,
+                "segment_seq": seq  # Include segment sequence for debugging
+            }
+            recent_results.append(result_data)
+            sess["next_seq"] = next_ws_seq + 1
+
+            # Send to WebSocket if connected
+            ws = sess.get("websocket_connection")
+            if ws:
+                try:
+                    ws.send(json.dumps({
+                        "type": "transcript",
+                        "seq": next_ws_seq,
+                        "text": transcript_text,
+                        "ts": result_data["ts"],
+                        "timestamp": timestamp_str,
+                        "segment_seq": seq
+                    }))
+                    logger.debug(f"Session {session_id}: Sent seq={seq} to WebSocket")
+                except Exception as ws_e:
+                    logger.warning(f"Session {session_id}: Failed to send seq={seq} to WebSocket: {ws_e}")
+
+    except Exception as e:
+        logger.error(f"Session {session_id}: Error delivering seq={seq}: {e}")
+
 def _heartbeat_loop():
     """Monitor WebSocket connections and handle grace period expiry."""
     while True:
@@ -1798,10 +1972,195 @@ def _heartbeat_loop():
             except Exception as e:
                 logger.error(f"Error finalizing expired session {session_id}: {e}")
 
-# Start heartbeat monitoring thread
+def _retry_worker():
+    """Background worker to retry failed transcription segments."""
+    import glob
+    import json
+    from datetime import datetime, timezone
+    from transcription_service import (
+        load_retry_segment, cleanup_retry_files, transcribe_chunk_with_sticky_fallback,
+        _transcribe_audio_segment_openai, format_timestamp_range, is_valid_transcription
+    )
+    from utils.hallucination_detector import get_hallucination_manager
+    from utils.pii_filter import anonymize_transcript_chunk
+
+    while True:
+        if not SEGMENT_RETRY_ENABLED:
+            time.sleep(30)
+            continue
+
+        try:
+            # Find all retry files
+            retry_files = glob.glob("tmp/retry_segments/*/*.json")
+
+            for retry_json_path in retry_files:
+                try:
+                    retry_data = load_retry_segment(retry_json_path)
+                    if not retry_data:
+                        continue
+
+                    session_id = retry_data["session_id"]
+                    seq = retry_data["seq"]
+                    attempts = retry_data.get("attempts", 0)
+                    created_at_str = retry_data.get("created_at")
+
+                    # Check if max attempts reached
+                    if attempts >= SEGMENT_RETRY_MAX_ATTEMPTS:
+                        logger.warning(f"Session {session_id}: Max retry attempts reached for seq={seq}")
+                        cleanup_retry_files(retry_json_path)
+                        continue
+
+                    # Check if timeout reached
+                    if created_at_str:
+                        try:
+                            created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                            age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+                            if age_seconds > SEGMENT_GAP_TIMEOUT_SEC:
+                                logger.warning(f"Session {session_id}: Retry timeout reached for seq={seq}")
+                                cleanup_retry_files(retry_json_path)
+                                continue
+                        except Exception as time_e:
+                            logger.warning(f"Session {session_id}: Error parsing created_at for seq={seq}: {time_e}")
+
+                    # Check if session still exists
+                    if session_id not in active_sessions:
+                        logger.debug(f"Session {session_id}: Session no longer exists, cleaning up retry seq={seq}")
+                        cleanup_retry_files(retry_json_path)
+                        continue
+
+                    # Attempt retry
+                    wav_path = retry_data["wav_path"]
+                    if not os.path.exists(wav_path):
+                        logger.warning(f"Session {session_id}: WAV file missing for retry seq={seq}")
+                        cleanup_retry_files(retry_json_path)
+                        continue
+
+                    logger.info(f"Session {session_id}: Retrying transcription for seq={seq} (attempt {attempts + 1})")
+
+                    # Get session data snapshot
+                    session_snapshot = retry_data.get("session_data_snapshot", {})
+                    language_setting = session_snapshot.get("language_setting_from_client", "any")
+                    vad_aggressiveness = session_snapshot.get("vad_aggressiveness_from_client")
+                    last_transcript = session_snapshot.get("last_successful_transcript", "")
+
+                    # Attempt transcription
+                    transcription_result = None
+                    session_state = None
+
+                    with session_locks[session_id]:
+                        sess = active_sessions.get(session_id)
+                        if sess:
+                            session_state = sess.get("session_state")
+
+                    try:
+                        if session_state:
+                            transcription_result = transcribe_chunk_with_sticky_fallback(
+                                session_state,
+                                wav_path,
+                                language=language_setting,
+                                vad_aggressiveness=vad_aggressiveness
+                            )
+                        else:
+                            # Fallback to OpenAI
+                            openai_key = session_snapshot.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+                            if openai_key:
+                                transcription_result = _transcribe_audio_segment_openai(
+                                    wav_path,
+                                    openai_key,
+                                    language_setting,
+                                    rolling_context_prompt=last_transcript,
+                                    vad_aggressiveness=vad_aggressiveness
+                                )
+
+                        if transcription_result and transcription_result.get('text'):
+                            # Success! Process the result
+                            text = transcription_result['text'].strip()
+
+                            if is_valid_transcription(text):
+                                # Apply hallucination detection
+                                hallucination_manager = get_hallucination_manager(session_id)
+                                is_valid, reason, corrected_text = hallucination_manager.process_transcript(text)
+
+                                if not is_valid:
+                                    logger.warning(f"Session {session_id}: Retry seq={seq} failed hallucination check: {reason}")
+                                    final_text = corrected_text
+                                else:
+                                    final_text = corrected_text
+
+                                # Apply PII filtering if enabled
+                                if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
+                                    # We'd need anthropic_api_key for PII filtering - skip for now in retry
+                                    pass
+
+                                # Create timestamp
+                                segment_offset_seconds = retry_data.get("segment_offset_seconds", 0)
+                                session_start_time_utc = None
+                                if session_snapshot.get("session_start_time_utc"):
+                                    session_start_time_utc = datetime.fromisoformat(session_snapshot["session_start_time_utc"].replace('Z', '+00:00'))
+
+                                if session_start_time_utc:
+                                    # Estimate duration for timestamp
+                                    duration = 15.0  # Default estimate
+                                    timestamp_str = format_timestamp_range(
+                                        segment_offset_seconds,
+                                        segment_offset_seconds + duration,
+                                        session_start_time_utc
+                                    )
+                                else:
+                                    timestamp_str = f"[{segment_offset_seconds:.1f}s]"
+
+                                # Deliver via ordering system
+                                try_deliver_ordered_results(
+                                    session_id=session_id,
+                                    seq=seq,
+                                    transcript_text=final_text,
+                                    timestamp_str=timestamp_str
+                                )
+
+                                logger.info(f"Session {session_id}: Successfully retried seq={seq}")
+                                cleanup_retry_files(retry_json_path)
+                            else:
+                                logger.warning(f"Session {session_id}: Retry seq={seq} produced invalid text")
+                                # Update attempts and continue
+                                retry_data["attempts"] = attempts + 1
+                                retry_data["last_error"] = "Invalid transcription text"
+                                with open(retry_json_path, 'w') as f:
+                                    json.dump(retry_data, f, indent=2)
+                        else:
+                            # Transcription failed, update attempts
+                            retry_data["attempts"] = attempts + 1
+                            retry_data["last_error"] = "Transcription returned no result"
+                            with open(retry_json_path, 'w') as f:
+                                json.dump(retry_data, f, indent=2)
+
+                    except Exception as transcribe_e:
+                        # Transcription failed, update attempts
+                        retry_data["attempts"] = attempts + 1
+                        retry_data["last_error"] = str(transcribe_e)
+                        with open(retry_json_path, 'w') as f:
+                            json.dump(retry_data, f, indent=2)
+                        logger.warning(f"Session {session_id}: Retry attempt {attempts + 1} failed for seq={seq}: {transcribe_e}")
+
+                except Exception as retry_e:
+                    logger.error(f"Error processing retry file {retry_json_path}: {retry_e}")
+
+        except Exception as e:
+            logger.error(f"Error in retry worker: {e}")
+
+        # Sleep before next scan
+        time.sleep(30)
+
+# Start background threads
 _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
 _heartbeat_thread.start()
 logger.info("Heartbeat monitoring thread started")
+
+if SEGMENT_RETRY_ENABLED:
+    _retry_worker_thread = threading.Thread(target=_retry_worker, daemon=True)
+    _retry_worker_thread.start()
+    logger.info("Segment retry worker thread started")
+else:
+    logger.info("Segment retry worker disabled")
 
 @sock.route('/ws/audio_stream/<session_id>')
 def audio_stream_socket(ws, session_id: str):
