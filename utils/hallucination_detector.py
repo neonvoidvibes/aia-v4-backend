@@ -109,3 +109,27 @@ def maybe_trim_repetition(
     if kept_text and len(kept_text) >= 0.5 * max(1, len(curr_text_raw)):
         return kept_text, "initial_overlap_trimmed"
     return curr_text_raw, ""
+
+# Backward compatibility functions for existing code
+class LegacyHallucinationManager:
+    """Legacy wrapper to maintain backward compatibility"""
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+
+    def process_transcript(self, text: str) -> tuple:
+        # Legacy function that just returns valid for all text
+        return True, "valid", text
+
+# Global manager tracking (for backward compatibility)
+_legacy_managers = {}
+
+def get_hallucination_manager(session_id: str, **kwargs) -> LegacyHallucinationManager:
+    """Legacy function for backward compatibility - returns a pass-through manager"""
+    if session_id not in _legacy_managers:
+        _legacy_managers[session_id] = LegacyHallucinationManager(session_id)
+    return _legacy_managers[session_id]
+
+def cleanup_session_manager(session_id: str) -> None:
+    """Legacy cleanup function for backward compatibility"""
+    if session_id in _legacy_managers:
+        del _legacy_managers[session_id]
