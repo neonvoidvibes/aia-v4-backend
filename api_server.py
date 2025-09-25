@@ -1958,6 +1958,10 @@ def _heartbeat_loop():
                     else:
                         # No WebSocket connection, check grace expiry
                         if grace_deadline and current_time > grace_deadline:
+                            # Skip if already being finalized
+                            if sess.get("is_finalizing", False):
+                                logger.debug(f"Heartbeat: Session {session_id} is already being finalized, skipping")
+                                continue
                             logger.info(f"Heartbeat: Grace period expired for session {session_id}")
                             sessions_to_finalize.append(session_id)
 
