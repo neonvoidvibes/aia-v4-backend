@@ -1618,55 +1618,55 @@ def process_audio_segment_and_update_s3(
                 delivered_words = [w for w in curr_words if w.end > head_end]
             session_data['prev_delivered_words'] = (session_data['prev_delivered_words'] + delivered_words)[-200:]
             session_data['stream_time_s'] = delivered_words[-1].end if delivered_words else session_data['stream_time_s']
-                
-                # Apply PII filtering to the final, corrected, combined text
-                if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
-                    lang_hint = language_setting_from_client if language_setting_from_client != 'any' else language_hint_fallback
-                    model_name_pii = os.getenv("PII_REDACTION_MODEL_NAME", "claude-3-haiku-20240307")
-                    final_text_for_s3 = anonymize_transcript_chunk(final_text_for_s3, pii_llm_client_for_service, model_name_pii, language_hint=lang_hint)
 
-                if is_valid_transcription(final_text_for_s3):
-                    # Create a single timestamp from the first segment's start to the last segment's end
-                    first_segment = final_filtered_segments[0]
-                    last_segment = final_filtered_segments[-1]
-                    
-                    abs_start = segment_offset_seconds + first_segment.get('start', 0.0)
-                    abs_end = segment_offset_seconds + last_segment.get('end', 0.0)
-                    
-                    timestamp_str = format_timestamp_range(abs_start, abs_end, session_start_time_utc)
-                    
-                    # Update context with this new valid line
-                    session_data["last_successful_transcript"] = final_text_for_s3
+            # Apply PII filtering to the final, corrected, combined text
+            if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
+                lang_hint = language_setting_from_client if language_setting_from_client != 'any' else language_hint_fallback
+                model_name_pii = os.getenv("PII_REDACTION_MODEL_NAME", "claude-3-haiku-20240307")
+                final_text_for_s3 = anonymize_transcript_chunk(final_text_for_s3, pii_llm_client_for_service, model_name_pii, language_hint=lang_hint)
 
-                    # Try ordered delivery first, fallback to direct S3 append
+            if is_valid_transcription(final_text_for_s3):
+                # Create a single timestamp from the first segment's start to the last segment's end
+                first_segment = final_filtered_segments[0]
+                last_segment = final_filtered_segments[-1]
+
+                abs_start = segment_offset_seconds + first_segment.get('start', 0.0)
+                abs_end = segment_offset_seconds + last_segment.get('end', 0.0)
+
+                timestamp_str = format_timestamp_range(abs_start, abs_end, session_start_time_utc)
+
+                # Update context with this new valid line
+                session_data["last_successful_transcript"] = final_text_for_s3
+
+                # Try ordered delivery first, fallback to direct S3 append
+                delivered_via_ordering = False
+                logger.info(f"Session {session_id_for_log}: Processing transcript for seq={current_seq}, text='{final_text_for_s3[:50]}...'")
+                try:
+                    # Import the ordering function from api_server
+                    from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
+
+                    # Only use ordering system if gap recovery is enabled and session exists
+                    if SEGMENT_RETRY_ENABLED:
+                        try_deliver_ordered_results(
+                            session_id=session_id_for_log,
+                            seq=current_seq,
+                            transcript_text=final_text_for_s3,
+                            timestamp_str=timestamp_str,
+                            session_lock=session_lock
+                        )
+                        delivered_via_ordering = True
+                        logger.info(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
+
+                except Exception as delivery_e:
+                    logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
                     delivered_via_ordering = False
-                    logger.info(f"Session {session_id_for_log}: Processing transcript for seq={current_seq}, text='{final_text_for_s3[:50]}...'")
-                    try:
-                        # Import the ordering function from api_server
-                        from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
 
-                        # Only use ordering system if gap recovery is enabled and session exists
-                        if SEGMENT_RETRY_ENABLED:
-                            try_deliver_ordered_results(
-                                session_id=session_id_for_log,
-                                seq=current_seq,
-                                transcript_text=final_text_for_s3,
-                                timestamp_str=timestamp_str,
-                                session_lock=session_lock
-                            )
-                            delivered_via_ordering = True
-                            logger.info(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
-
-                    except Exception as delivery_e:
-                        logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
-                        delivered_via_ordering = False
-
-                    # Fallback to direct S3 append if ordering failed or is disabled
-                    if not delivered_via_ordering:
-                        lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
-                        logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
-                else:
-                    logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
+                # Fallback to direct S3 append if ordering failed or is disabled
+                if not delivered_via_ordering:
+                    lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
+                    logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
+            else:
+                logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:
             logger.info(f"Session {session_id_for_log}: No valid segments remained after filtering, nothing to append.")
         # --- END: New segment combination logic ---
