@@ -1775,7 +1775,7 @@ def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str,
         sess = active_sessions.get(session_id)
         if not sess:
             logger.warning(f"Session {session_id} not found when trying to deliver seq={seq}")
-            return
+            raise RuntimeError(f"Session {session_id} not found, triggering fallback delivery")
 
         expected_seq = sess.get("expected_seq", 1)
         pending_seqs = sess.get("pending_seqs", {})

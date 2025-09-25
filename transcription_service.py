@@ -1585,26 +1585,32 @@ def process_audio_segment_and_update_s3(
                     # Update context with this new valid line
                     session_data["last_successful_transcript"] = final_text_for_s3
 
-                    # Use ordered delivery system instead of direct S3 append
+                    # Try ordered delivery first, fallback to direct S3 append
+                    delivered_via_ordering = False
                     try:
                         # Import the ordering function from api_server
-                        from api_server import try_deliver_ordered_results
+                        from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
 
-                        # Deliver through ordering system for gap-free transcripts
-                        try_deliver_ordered_results(
-                            session_id=session_id_for_log,
-                            seq=current_seq,
-                            transcript_text=final_text_for_s3,
-                            timestamp_str=timestamp_str,
-                            session_lock=session_lock
-                        )
-
-                        logger.debug(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
+                        # Only use ordering system if gap recovery is enabled and session exists
+                        if SEGMENT_RETRY_ENABLED:
+                            try_deliver_ordered_results(
+                                session_id=session_id_for_log,
+                                seq=current_seq,
+                                transcript_text=final_text_for_s3,
+                                timestamp_str=timestamp_str,
+                                session_lock=session_lock
+                            )
+                            delivered_via_ordering = True
+                            logger.debug(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
 
                     except Exception as delivery_e:
-                        logger.error(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
-                        # Fallback: add to old lines_to_append_to_s3 for legacy processing
+                        logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
+                        delivered_via_ordering = False
+
+                    # Fallback to direct S3 append if ordering failed or is disabled
+                    if not delivered_via_ordering:
                         lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
+                        logger.debug(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
                 else:
                     logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:
