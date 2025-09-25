@@ -1567,38 +1567,18 @@ def process_audio_segment_and_update_s3(
 
             # Initialize detector state if not exists
             if 'hallu_state' not in session_data:
-                from config import HALLU
-                session_data['hallu_state'] = DetectorState(
-                    prev_tail=[],
-                    cooldown_until_ts=0.0,
-                    tail_window_s=HALLU.TAIL_WINDOW_S,
-                    head_window_s=HALLU.HEAD_WINDOW_S,
-                    min_tokens=HALLU.MIN_TOKENS,
-                    jaccard_thresh=HALLU.JACCARD,
-                    prefix_char_sim_thresh=HALLU.PREFIX,
-                    min_conf=HALLU.MIN_CONF,
-                    cooldown_s=HALLU.COOLDOWN_S,
-                )
+                session_data['hallu_state'] = DetectorState()
                 session_data['prev_delivered_words'] = []
                 session_data['stream_time_s'] = 0.0
 
-            # Guard: only consider trimming if prev tail ended within MAX_GAP_S of current start
-            within_gap = False
-            if session_data['prev_delivered_words'] and curr_words:
-                from config import HALLU
-                prev_end = session_data['prev_delivered_words'][-1].end
-                curr_start = curr_words[0].start
-                within_gap = (curr_start - prev_end) <= HALLU.MAX_GAP_S
-
-            trimmed_text, reason, cut_s = (curr_text_raw, "", -1.0)
-            if within_gap:
-                trimmed_text, reason, cut_s = maybe_trim_repetition(
-                    state=session_data['hallu_state'],
-                    stream_time_s=session_data['stream_time_s'],
-                    prev_delivered_words=session_data['prev_delivered_words'],
-                    curr_words=curr_words,
-                    curr_text_raw=curr_text_raw,
-                )
+            # Apply strict subtractive overlap trimming (no gap guard needed)
+            trimmed_text, reason, cut_s = maybe_trim_repetition(
+                state=session_data['hallu_state'],
+                stream_time_s=session_data['stream_time_s'],
+                prev_delivered_words=session_data['prev_delivered_words'],
+                curr_words=curr_words,
+                curr_text_raw=curr_text_raw,
+            )
             final_text_for_s3 = trimmed_text
             if reason:
                 logger.warning(f"hallucination_trim reason={reason} orig={curr_text_raw[:120]!r} kept={final_text_for_s3[:120]!r}")
