@@ -75,30 +75,30 @@ def maybe_trim_repetition(
     prev_delivered_words: List[Word],
     curr_words: List[Word],
     curr_text_raw: str
-) -> Tuple[str, str]:
-    """Return (text, reason). Empty reason => no change."""
+) -> Tuple[str, str, float]:
+    """Return (text, reason, trimmed_until_s). Empty reason => no change; trimmed_until_s=-1."""
     if stream_time_s < state.cooldown_until_ts:
-        return curr_text_raw, ""
+        return curr_text_raw, "", -1.0
 
     tail = _slice_tail(prev_delivered_words, state.tail_window_s)
     head = _slice_head(curr_words, state.head_window_s)
     if not tail or not head:
-        return curr_text_raw, ""
+        return curr_text_raw, "", -1.0
 
     tail_text = " ".join(w.text for w in tail if w.conf >= state.min_conf)
     head_text = " ".join(w.text for w in head if w.conf >= state.min_conf)
     if NUMERIC_RE.search(head_text):
-        return curr_text_raw, ""
+        return curr_text_raw, "", -1.0
 
     tail_tokens = _content_tokens(tail_text)
     head_tokens = _content_tokens(head_text)
     if len(head_tokens) < state.min_tokens:
-        return curr_text_raw, ""
+        return curr_text_raw, "", -1.0
 
     jacc = _jaccard(tail_tokens, head_tokens)
     pfx = _prefix_char_sim(tail_text.lower(), head_text.lower())
     if jacc < state.jaccard_thresh or pfx < state.prefix_char_sim_thresh:
-        return curr_text_raw, ""
+        return curr_text_raw, "", -1.0
 
     # Trim at most the first ~head_window_s seconds of the current segment
     head_last_end = max(w.end for w in head)
@@ -107,8 +107,8 @@ def maybe_trim_repetition(
 
     state.cooldown_until_ts = stream_time_s + state.cooldown_s
     if kept_text and len(kept_text) >= 0.5 * max(1, len(curr_text_raw)):
-        return kept_text, "initial_overlap_trimmed"
-    return curr_text_raw, ""
+        return kept_text, "initial_overlap_trimmed", head_last_end
+    return curr_text_raw, "", -1.0
 
 # Backward compatibility functions for existing code
 class LegacyHallucinationManager:

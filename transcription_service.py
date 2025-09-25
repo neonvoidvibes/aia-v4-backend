@@ -1590,9 +1590,9 @@ def process_audio_segment_and_update_s3(
                 curr_start = curr_words[0].start
                 within_gap = (curr_start - prev_end) <= HALLU.MAX_GAP_S
 
-            trimmed_text, reason = (curr_text_raw, "")
+            trimmed_text, reason, cut_s = (curr_text_raw, "", -1.0)
             if within_gap:
-                trimmed_text, reason = maybe_trim_repetition(
+                trimmed_text, reason, cut_s = maybe_trim_repetition(
                     state=session_data['hallu_state'],
                     stream_time_s=session_data['stream_time_s'],
                     prev_delivered_words=session_data['prev_delivered_words'],
@@ -1611,11 +1611,7 @@ def process_audio_segment_and_update_s3(
                     logger.debug(f"Failed to record hallucination trim metric: {e}")
 
             # Update rolling tail using delivered words (not raw)
-            delivered_words = curr_words
-            if reason:
-                # Drop words that were trimmed from the head window
-                head_end = min((w.end for w in curr_words), default=0.0) + session_data['hallu_state'].head_window_s
-                delivered_words = [w for w in curr_words if w.end > head_end]
+            delivered_words = curr_words if cut_s < 0 else [w for w in curr_words if w.end > cut_s]
             session_data['prev_delivered_words'] = (session_data['prev_delivered_words'] + delivered_words)[-200:]
             session_data['stream_time_s'] = delivered_words[-1].end if delivered_words else session_data['stream_time_s']
 
@@ -1661,10 +1657,13 @@ def process_audio_segment_and_update_s3(
                     logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
                     delivered_via_ordering = False
 
-                # Fallback to direct S3 append if ordering failed or is disabled
+                # IMPORTANT: Always append to lines_to_append_to_s3 regardless of ordering system
+                # This ensures transcript persistence works whether ordering succeeds or fails
+                lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
                 if not delivered_via_ordering:
-                    lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
                     logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
+                else:
+                    logger.info(f"Session {session_id_for_log}: Added seq={current_seq} to S3 buffer after ordering delivery")
             else:
                 logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:
@@ -1679,6 +1678,9 @@ def process_audio_segment_and_update_s3(
             lines_to_append_to_s3.insert(0, f"[{timestamp} UTC] {marker_to_write}") # Insert at the beginning
             session_data["pause_marker_to_write"] = None # Clear after processing
 
+
+        # Add verification log before persistence
+        logger.info(f"Session {session_id_for_log}: Persisting transcript: chars={len('\\n'.join(lines_to_append_to_s3))}, lines={len(lines_to_append_to_s3)}")
 
         # Perform S3 append if there's new content
         if lines_to_append_to_s3:
