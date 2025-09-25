@@ -144,7 +144,12 @@ class DeepgramProvider(TranscriptionProvider):
             if text:
                 logger.info(f"Deepgram transcript preview: {text[:100]}...")
 
-            result = {"text": text, "segments": segments}
+# Normalize to service Word schema in upstream caller; ensure 'confidence' key exists.
+            words_normalized = [
+                {"text": w.get("word") or w.get("text",""), "start": w["start"], "end": w["end"], "confidence": w.get("confidence", 1.0)}
+                for w in words
+            ]
+            result = {"text": text, "segments": segments, "words": words_normalized}
             return result
         except Exception as e:
             logger.error(f"Deepgram transcribe_file failed: {e}")

@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 import os
 import argparse
+import sys
+from types import SimpleNamespace
 from dotenv import load_dotenv
 
 @dataclass
@@ -134,7 +136,15 @@ class AppConfig:
         if self.interface_mode not in {'cli', 'web', 'web_only'}: raise ValueError(f"Invalid interface mode: {self.interface_mode}")
         if not isinstance(self.llm_model_name, str) or not self.llm_model_name: raise ValueError("LLM model name must be a non-empty string")
         if not isinstance(self.llm_max_output_tokens, int) or self.llm_max_output_tokens <= 0: raise ValueError("LLM max output tokens must be a positive integer")
-        # No validation needed for optional index name itself here.
-        # No validation needed for optional index name itself here.
-        if not isinstance(self.llm_model_name, str) or not self.llm_model_name: raise ValueError("LLM model name must be a non-empty string")
-        if not isinstance(self.llm_max_output_tokens, int) or self.llm_max_output_tokens <= 0: raise ValueError("LLM max output tokens must be a positive integer")
+
+# Hallucination detector configuration
+HALLU = SimpleNamespace(
+  TAIL_WINDOW_S=float(os.getenv("HALLU_TAIL_WINDOW_S", 1.8)),
+  HEAD_WINDOW_S=float(os.getenv("HALLU_HEAD_WINDOW_S", 1.8)),
+  JACCARD=float(os.getenv("HALLU_JACCARD", 0.55)),
+  PREFIX=float(os.getenv("HALLU_PREFIX_SIM", 0.80)),
+  MIN_TOKENS=int(os.getenv("HALLU_MIN_TOKENS", 3)),
+  MIN_CONF=float(os.getenv("HALLU_MIN_CONF", 0.35)),
+  COOLDOWN_S=float(os.getenv("HALLU_COOLDOWN_S", 6.0)),
+  MAX_GAP_S=float(os.getenv("HALLU_MAX_GAP_S", 0.4)),
+)

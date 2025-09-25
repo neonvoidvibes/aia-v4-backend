@@ -17,7 +17,7 @@ import mimetypes # Import the mimetypes library
 import math # For chunking calculations
 import concurrent.futures # For parallel processing
 
-from utils.hallucination_detector import get_hallucination_manager # For hallucination detection
+from utils.hallucination_detector import DetectorState, Word, maybe_trim_repetition
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1555,16 +1555,69 @@ def process_audio_segment_and_update_s3(
             # This is a better source for the hallucination detector as it has more context
             full_unsegmented_text = transcription_result.get("text", "").strip()
 
-            # Run hallucination detection on the full, unsegmented text block
-            hallucination_manager = get_hallucination_manager(session_id)
-            is_valid, reason, corrected_text = hallucination_manager.process_transcript(full_unsegmented_text)
+            # Convert provider words to Word[]
+            curr_words = []
+            if transcription_result.get('words'):
+                curr_words = [
+                    Word(w.get('text') or w.get('word', ''), w['start'], w['end'], w.get('confidence', 1.0))
+                    for w in transcription_result['words']
+                ]
 
-            if not is_valid:
-                logger.warning(f"Session {session_id_for_log}: Hallucination detected in combined block. Reason: {reason}. Original: '{full_unsegmented_text}'. Corrected: '{corrected_text}'. Skipping update.")
-                # Aggressively clear context on hallucination
-                session_data["last_successful_transcript"] = ""
-            else:
-                final_text_for_s3 = corrected_text
+            curr_text_raw = full_unsegmented_text
+
+            # Initialize detector state if not exists
+            if 'hallu_state' not in session_data:
+                from config import HALLU
+                session_data['hallu_state'] = DetectorState(
+                    prev_tail=[],
+                    cooldown_until_ts=0.0,
+                    tail_window_s=HALLU.TAIL_WINDOW_S,
+                    head_window_s=HALLU.HEAD_WINDOW_S,
+                    min_tokens=HALLU.MIN_TOKENS,
+                    jaccard_thresh=HALLU.JACCARD,
+                    prefix_char_sim_thresh=HALLU.PREFIX,
+                    min_conf=HALLU.MIN_CONF,
+                    cooldown_s=HALLU.COOLDOWN_S,
+                )
+                session_data['prev_delivered_words'] = []
+                session_data['stream_time_s'] = 0.0
+
+            # Guard: only consider trimming if prev tail ended within MAX_GAP_S of current start
+            within_gap = False
+            if session_data['prev_delivered_words'] and curr_words:
+                from config import HALLU
+                prev_end = session_data['prev_delivered_words'][-1].end
+                curr_start = curr_words[0].start
+                within_gap = (curr_start - prev_end) <= HALLU.MAX_GAP_S
+
+            trimmed_text, reason = (curr_text_raw, "")
+            if within_gap:
+                trimmed_text, reason = maybe_trim_repetition(
+                    state=session_data['hallu_state'],
+                    stream_time_s=session_data['stream_time_s'],
+                    prev_delivered_words=session_data['prev_delivered_words'],
+                    curr_words=curr_words,
+                    curr_text_raw=curr_text_raw,
+                )
+            final_text_for_s3 = trimmed_text
+            if reason:
+                logger.warning(f"hallucination_trim reason={reason} orig={curr_text_raw[:120]!r} kept={final_text_for_s3[:120]!r}")
+                # Track metrics
+                try:
+                    from metrics import HALLU_TRIMS
+                    provider = session_data.get("session_state", {}).get("provider_current", "unknown")
+                    HALLU_TRIMS.labels(reason=reason, provider=provider).inc()
+                except Exception as e:
+                    logger.debug(f"Failed to record hallucination trim metric: {e}")
+
+            # Update rolling tail using delivered words (not raw)
+            delivered_words = curr_words
+            if reason:
+                # Drop words that were trimmed from the head window
+                head_end = min((w.end for w in curr_words), default=0.0) + session_data['hallu_state'].head_window_s
+                delivered_words = [w for w in curr_words if w.end > head_end]
+            session_data['prev_delivered_words'] = (session_data['prev_delivered_words'] + delivered_words)[-200:]
+            session_data['stream_time_s'] = delivered_words[-1].end if delivered_words else session_data['stream_time_s']
                 
                 # Apply PII filtering to the final, corrected, combined text
                 if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':

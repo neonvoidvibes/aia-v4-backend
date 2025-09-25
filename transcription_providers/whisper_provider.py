@@ -45,6 +45,34 @@ class WhisperProvider(TranscriptionProvider):
             })
         return out
 
+    def _align_words_from_segments(self, segments: List[Segment]) -> List[Dict[str, Any]]:
+        """Provide 'words' with start/end/conf so the detector can run consistently."""
+        words = []
+        for seg in segments:
+            text = seg.get('text', '').strip()
+            if not text:
+                continue
+
+            # Simple word splitting with approximate timing
+            words_in_seg = text.split()
+            if not words_in_seg:
+                continue
+
+            seg_duration = seg.get('end', 0) - seg.get('start', 0)
+            word_duration = seg_duration / len(words_in_seg) if len(words_in_seg) > 0 else 0
+
+            for i, word in enumerate(words_in_seg):
+                word_start = seg.get('start', 0) + (i * word_duration)
+                word_end = word_start + word_duration
+                words.append({
+                    "text": word,
+                    "start": word_start,
+                    "end": word_end,
+                    "confidence": 1.0  # Whisper doesn't provide word-level confidence
+                })
+
+        return words
+
     def transcribe_file(self, path: str, language: Optional[str] = None, prompt: Optional[str] = None, vad_aggressiveness: Optional[int] = None) -> Optional[TranscriptionResult]:
         # Handle language parameter: OpenAI Whisper uses None for auto-detect, not 'any'
         openai_language = None if not language or language == "any" else language
@@ -52,7 +80,9 @@ class WhisperProvider(TranscriptionProvider):
         if _USE_INTERNAL_HELPER:
             data = _openai_helper(path=path, language=openai_language, prompt=prompt)
             if not data: return None
-            return {"text": (data.get("text") or "").strip(), "segments": self._normalize_segments(data.get("segments") or [])}
+            segments = self._normalize_segments(data.get("segments") or [])
+            words = self._align_words_from_segments(segments)
+            return {"text": (data.get("text") or "").strip(), "segments": segments, "words": words}
 
         with open(path, "rb") as f:
             resp = self._client.audio.transcriptions.create(  # type: ignore
@@ -60,4 +90,6 @@ class WhisperProvider(TranscriptionProvider):
             )
         text = (getattr(resp, "text", None) or getattr(resp, "get", lambda *_: None)("text") or "").strip()  # type: ignore
         segments = getattr(resp, "segments", None) or (isinstance(resp, dict) and resp.get("segments") or [])
-        return {"text": text, "segments": self._normalize_segments(segments or [])}
+        normalized_segments = self._normalize_segments(segments or [])
+        words = self._align_words_from_segments(normalized_segments)
+        return {"text": text, "segments": normalized_segments, "words": words}
