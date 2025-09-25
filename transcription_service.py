@@ -1611,7 +1611,8 @@ def process_audio_segment_and_update_s3(
                     logger.debug(f"Failed to record hallucination trim metric: {e}")
 
             # Update rolling tail using delivered words (not raw)
-            delivered_words = curr_words if cut_s < 0 else [w for w in curr_words if w.end > cut_s]
+            # small epsilon avoids jitter re-emission on boundary
+            delivered_words = curr_words if cut_s < 0 else [w for w in curr_words if w.end > cut_s + 1e-3]
             session_data['prev_delivered_words'] = (session_data['prev_delivered_words'] + delivered_words)[-200:]
             session_data['stream_time_s'] = delivered_words[-1].end if delivered_words else session_data['stream_time_s']
 

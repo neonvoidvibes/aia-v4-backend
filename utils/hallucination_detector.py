@@ -15,6 +15,13 @@ a an the and or but if then so of in on at to for with from by as is are was wer
 NUMERIC_RE = re.compile(r"\d")
 PUNCT_RE = re.compile(r"[^\w']+")
 
+# Token normalizer for overlap detection
+_PUNCT_RE = re.compile(r"^[\W_]+|[\W_]+$")
+def _norm_token(t: str) -> str:
+    t = t.lower()
+    t = _PUNCT_RE.sub("", t)
+    return t
+
 @dataclass
 class Word:
     text: str
@@ -34,6 +41,9 @@ class DetectorState:
     prefix_char_sim_thresh: float = 0.80
     min_conf: float = 0.35
     cooldown_s: float = 6.0
+    # New stricter overlap criteria
+    min_overlap_words: int = 4
+    min_overlap_secs: float = 1.2
 
 def _content_tokens(s: str) -> List[str]:
     toks = [t.lower() for t in PUNCT_RE.sub(" ", s).split() if t]
@@ -76,38 +86,43 @@ def maybe_trim_repetition(
     curr_words: List[Word],
     curr_text_raw: str
 ) -> Tuple[str, str, float]:
-    """Return (text, reason, trimmed_until_s). Empty reason => no change; trimmed_until_s=-1."""
-    if stream_time_s < state.cooldown_until_ts:
+    """
+    Returns (text, reason, cut_s). cut_s < 0 => no trim.
+    """
+    # Guard: need data
+    if not prev_delivered_words or not curr_words:
         return curr_text_raw, "", -1.0
 
-    tail = _slice_tail(prev_delivered_words, state.tail_window_s)
-    head = _slice_head(curr_words, state.head_window_s)
-    if not tail or not head:
-        return curr_text_raw, "", -1.0
+    # Build normalized sequences for consecutive tail/head match
+    prev_tokens = [_norm_token(w.text) for w in prev_delivered_words]
+    curr_tokens = [_norm_token(w.text) for w in curr_words]
 
-    tail_text = " ".join(w.text for w in tail if w.conf >= state.min_conf)
-    head_text = " ".join(w.text for w in head if w.conf >= state.min_conf)
-    if NUMERIC_RE.search(head_text):
-        return curr_text_raw, "", -1.0
+    max_run = 0
+    cut_idx = 0
+    max_run_secs = 0.0
+    # find longest k where prev tail == curr head (consecutive)
+    for k in range(1, min(len(curr_tokens), len(prev_tokens)) + 1):
+        if prev_tokens[-k:] == curr_tokens[:k]:
+            max_run = k
+            cut_idx = k
+            max_run_secs = curr_words[k-1].end - curr_words[0].start
+        else:
+            break
 
-    tail_tokens = _content_tokens(tail_text)
-    head_tokens = _content_tokens(head_text)
-    if len(head_tokens) < state.min_tokens:
-        return curr_text_raw, "", -1.0
+    # Stricter overlap: at least 4 words and 1.2s, and ≥2 distinct tokens
+    if max_run >= state.min_overlap_words and \
+       max_run_secs >= state.min_overlap_secs and \
+       len(set(curr_tokens[:cut_idx])) >= 2:
+        kept_words = curr_words[cut_idx:]
+        kept_text = " ".join(w.text for w in kept_words) if kept_words else ""
 
-    jacc = _jaccard(tail_tokens, head_tokens)
-    pfx = _prefix_char_sim(tail_text.lower(), head_text.lower())
-    if jacc < state.jaccard_thresh or pfx < state.prefix_char_sim_thresh:
-        return curr_text_raw, "", -1.0
+        # Log the trim event with details
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"overlap_trim k={max_run} secs={max_run_secs:.1f}")
 
-    # Trim at most the first ~head_window_s seconds of the current segment
-    head_last_end = max(w.end for w in head)
-    kept_words = [w for w in curr_words if w.end > head_last_end]
-    kept_text = " ".join(w.text for w in kept_words) if kept_words else ""
+        return kept_text, "initial_overlap_trimmed", curr_words[cut_idx-1].end
 
-    state.cooldown_until_ts = stream_time_s + state.cooldown_s
-    if kept_text and len(kept_text) >= 0.5 * max(1, len(curr_text_raw)):
-        return kept_text, "initial_overlap_trimmed", head_last_end
     return curr_text_raw, "", -1.0
 
 # Backward compatibility functions for existing code
