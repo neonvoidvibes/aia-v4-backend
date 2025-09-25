@@ -1640,27 +1640,66 @@ def audio_stream_socket(ws, session_id: str):
                 ws.close(1008, "Connection already exists")
                 return
         else:
-            active_sessions[session_id]["websocket_connection"] = ws
-            active_sessions[session_id]["last_activity_timestamp"] = time.time()
-            active_sessions[session_id]["is_active"] = True 
-            logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
+            # Check if this is a reattachment scenario
+            session_state = active_sessions[session_id].get("session_state")
+            if session_state and session_state.reattach_deadline and not session_state.is_reattach_expired():
+                # Successful reattachment within grace period
+                session_state.mark_ws_reconnected()
+                session_state.last_status = {"type": "status", "state": "RESUMED"}
+                active_sessions[session_id]["websocket_connection"] = ws
+                active_sessions[session_id]["last_activity_timestamp"] = time.time()
+                active_sessions[session_id]["is_active"] = True
+                logger.info(f"WebSocket for session {session_id} (user {user.id}) successfully reattached within grace period.")
+                # Send RESUMED status to client
+                try:
+                    ws.send(json.dumps({"type": "status", "state": "RESUMED"}))
+                except Exception as e:
+                    logger.warning(f"Failed to send RESUMED status to reattached client {session_id}: {e}")
+            else:
+                # New connection or reattachment expired
+                if session_state:
+                    session_state.mark_ws_reconnected()  # Clear any stale deadline
+                    session_state.last_status = {"type": "status", "state": "RESUMED"}
+                active_sessions[session_id]["websocket_connection"] = ws
+                active_sessions[session_id]["last_activity_timestamp"] = time.time()
+                active_sessions[session_id]["is_active"] = True
+                logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
     # Server-side keepalive using threading
     def _server_keepalive_thread(ws, session_id, interval=15, log=logger):
         # app-level keepalive to satisfy proxies; pairs with client's 'pong' handler
+        # Modified to continue running during WebSocket disconnection for reattachment
         try:
             while True:
                 time.sleep(interval)
                 # Check if session is still active
-                if session_id not in active_sessions or not active_sessions[session_id].get("is_active"):
+                sess = active_sessions.get(session_id)
+                if not sess or not sess.get("is_active"):
                     log.info(f"WS {session_id}: Session no longer active, stopping keepalive")
                     break
-                try:
-                    ws.send(json.dumps({"type": "ping"}))
-                    log.debug(f"WS {session_id}: Server keepalive ping sent")
-                except Exception as e:
-                    log.warning(f"WS {session_id}: keepalive send failed: {e}")
+
+                # Check for reattachment expiry
+                session_state = sess.get("session_state")
+                if session_state and session_state.reattach_deadline and session_state.is_reattach_expired():
+                    log.info(f"WS {session_id}: Reattachment grace period expired, stopping keepalive")
                     break
+
+                # Try to send keepalive if WebSocket is available
+                current_ws = sess.get("websocket_connection")
+                if current_ws:
+                    try:
+                        current_ws.send(json.dumps({"type": "ping"}))
+                        log.debug(f"WS {session_id}: Server keepalive ping sent")
+                    except Exception as e:
+                        log.warning(f"WS {session_id}: keepalive send failed: {e}")
+                        # Don't break - WebSocket might have disconnected, continue for reattachment
+                else:
+                    # No WebSocket, but session might be waiting for reattachment
+                    if session_state and session_state.reattach_deadline:
+                        log.debug(f"WS {session_id}: No WebSocket connection, continuing keepalive for reattachment")
+                    else:
+                        log.info(f"WS {session_id}: No WebSocket and no reattachment expected, stopping keepalive")
+                        break
         except Exception as e:
             log.error(f"WS {session_id}: keepalive thread error: {e}")
 
@@ -2014,22 +2053,35 @@ def audio_stream_socket(ws, session_id: str):
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id} (user {user.id}): {e}", exc_info=True)
     finally:
-        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected. Deregistering from session.")
+        logger.info(f"WebSocket for session {session_id} (user {user.id}) disconnected. Marking for reattachment grace period.")
         with session_locks[session_id]:
             sess = active_sessions.get(session_id)
             if sess:
-                # Stop server keepalive thread by marking session as inactive
-                # The thread will check this and exit naturally
-                sess["is_active"] = False
-                keepalive_thread = sess.pop("keepalive_thread", None)
-                if keepalive_thread and keepalive_thread.is_alive():
-                    logger.debug(f"Session {session_id}: Keepalive thread will stop naturally")
-                
-                # clear WS pointer so a new client can connect
+                session_state = sess.get("session_state")
+                if session_state:
+                    # Mark WebSocket as disconnected with grace period
+                    session_state.mark_ws_disconnected(REATTACH_GRACE_SECONDS)
+                    # Store PAUSED status for client polling
+                    session_state.last_status = {"type": "status", "state": "PAUSED", "reason": "network"}
+                    logger.info(f"Session {session_id} marked for reattachment. Grace period until {session_state.reattach_deadline}")
+                else:
+                    # Fallback to old behavior if no session_state
+                    sess["is_active"] = False
+                    logger.warning(f"Session {session_id} has no session_state, falling back to immediate termination")
+
+                # Keep session active but clear WebSocket reference
                 if sess.get("websocket_connection") == ws:
                     sess["websocket_connection"] = None
-                    sess["last_activity_timestamp"] = time.time() # Start the idle timer
-                    logger.debug(f"Session {session_id} WebSocket instance deregistered. Idle cleanup thread will handle finalization if needed.")
+                    sess["last_activity_timestamp"] = time.time()
+                    logger.debug(f"Session {session_id} WebSocket cleared but session kept active for reattachment.")
+
+                # Don't stop keepalive immediately - let it continue for reattachment
+                keepalive_thread = sess.get("keepalive_thread")
+                if keepalive_thread and keepalive_thread.is_alive() and not session_state:
+                    # Only stop keepalive if no session_state (fallback case)
+                    sess["is_active"] = False
+                    logger.debug(f"Session {session_id}: Keepalive thread will stop (fallback mode)")
+
         try:
             ws.close()
         except Exception:
@@ -2039,8 +2091,47 @@ def audio_stream_socket(ws, session_id: str):
 @app.route('/api/recording/status', methods=['GET'])
 def get_recording_status_route():
     session_id_param = request.args.get('session_id')
-    status_data = _get_current_recording_status_snapshot(session_id_param) 
+    status_data = _get_current_recording_status_snapshot(session_id_param)
     return jsonify(status_data), 200
+
+@app.route('/api/session/<session_id>/status', methods=['GET'])
+@supabase_auth_required(agent_required=False)
+def get_session_status(session_id: str):
+    """Get session status including WebSocket connection state and reattachment info."""
+    user = g.user
+
+    with session_locks.get(session_id, threading.Lock()):
+        sess = active_sessions.get(session_id)
+        if not sess:
+            return jsonify({"error": "Session not found"}), 404
+
+        # Check if user owns this session
+        if sess.get("user_id") != user.id:
+            return jsonify({"error": "Access denied"}), 403
+
+        session_state = sess.get("session_state")
+        if session_state and session_state.last_status:
+            # Return the stored status from session_state
+            response_data = {
+                "session_id": session_id,
+                "is_active": sess.get("is_active", False),
+                "has_websocket": sess.get("websocket_connection") is not None,
+                "ws_connected": session_state.ws_connected,
+                "reattach_deadline": session_state.reattach_deadline.isoformat() if session_state.reattach_deadline else None,
+                "is_reattach_expired": session_state.is_reattach_expired() if session_state.reattach_deadline else None,
+                **session_state.last_status
+            }
+        else:
+            # Fallback for sessions without session_state
+            response_data = {
+                "session_id": session_id,
+                "is_active": sess.get("is_active", False),
+                "has_websocket": sess.get("websocket_connection") is not None,
+                "type": "status",
+                "state": "ACTIVE" if sess.get("is_active") else "INACTIVE"
+            }
+
+    return jsonify(response_data), 200
 
 @app.route('/api/index/<string:index_name>/stats', methods=['GET'])
 def get_pinecone_index_stats(index_name: str):
@@ -2775,12 +2866,25 @@ def list_managed_agents(user: SupabaseUser):
     if not client:
         return jsonify({"error": "Database service unavailable"}), 503
     try:
-        response = client.table("agents").select("id, name, description, created_at").or_("is_hidden.is.null,is_hidden.eq.false").order("name", desc=False).execute()
+        response = client.table("agents").select("id, name, description, created_at, workspace_id, workspaces(name)").or_("is_hidden.is.null,is_hidden.eq.false").order("name", desc=False).execute()
         if hasattr(response, 'error') and response.error:
             logger.error(f"Admin Dashboard: Error querying agents: {response.error}")
             return jsonify({"error": "Database error querying agents"}), 500
-        
-        return jsonify(response.data), 200
+
+        # Process the data to flatten workspace name
+        processed_data = []
+        for agent in response.data:
+            processed_agent = {
+                "id": agent["id"],
+                "name": agent["name"],
+                "description": agent["description"],
+                "created_at": agent["created_at"],
+                "workspace_id": agent["workspace_id"],
+                "workspace_name": agent["workspaces"]["name"] if agent.get("workspaces") and agent["workspaces"] else None
+            }
+            processed_data.append(processed_agent)
+
+        return jsonify(processed_data), 200
     except Exception as e:
         logger.error(f"Admin Dashboard: Unexpected error listing agents: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
@@ -2948,6 +3052,54 @@ def create_agent(user: SupabaseUser):
         if 'agent_id' in locals():
             client.table("agents").delete().eq("id", agent_id).execute()
         return jsonify({"error": "An internal server error occurred during agent creation. The operation was rolled back."}), 500
+
+@app.route('/api/agent/<agent_id>/update', methods=['PATCH'])
+@supabase_auth_required(agent_required=False) # Role check is handled by the inner decorator.
+@admin_or_super_user_required
+def update_agent(user: SupabaseUser, agent_id: str):
+    """Updates an agent's basic information (description, etc.)"""
+    data = g.get('json_data', {})
+    if not data:
+        return jsonify({"error": "No JSON data provided"}), 400
+
+    client = get_supabase_client()
+    if not client:
+        return jsonify({"error": "Database service unavailable"}), 503
+
+    try:
+        # Verify agent exists and user has access
+        agent_check = client.table("agents").select("id, name").eq("id", agent_id).execute()
+        if not agent_check.data:
+            return jsonify({"error": "Agent not found"}), 404
+
+        # Build update data from allowed fields
+        update_data = {}
+        if 'description' in data:
+            update_data['description'] = data['description']
+
+        # Add more updateable fields here as needed
+        # if 'name' in data:
+        #     update_data['name'] = data['name']
+
+        if not update_data:
+            return jsonify({"error": "No valid fields to update"}), 400
+
+        # Perform the update
+        result = client.table("agents").update(update_data).eq("id", agent_id).execute()
+
+        if not result.data:
+            return jsonify({"error": "Failed to update agent"}), 500
+
+        logger.info(f"Agent '{agent_id}' updated successfully by user '{user.id}'")
+        return jsonify({
+            "status": "success",
+            "message": "Agent updated successfully",
+            "agent": result.data[0]
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error updating agent '{agent_id}': {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred"}), 500
 
 _WARMUP_INFLIGHT = set()
 _WARMUP_LOCK = threading.Lock()
@@ -4797,12 +4949,18 @@ def cleanup_idle_sessions():
         for session_id, session_data in current_sessions:
             with session_locks[session_id]:
                 # Case 1: Session is active but has lost its WebSocket connection.
-                # This is for unexpected disconnects.
-                if session_data.get("is_active") and \
-                   not session_data.get("is_finalizing") and \
-                   session_data.get("websocket_connection") is None and \
-                   now - session_data.get("last_activity_timestamp", 0) > REATTACH_GRACE_SECONDS: # grace period for reconnect
-                    logger.warning(f"Idle session cleanup: Session {session_id} has been active without a WebSocket for >45s. Marking for finalization.")
+                # Check for reattachment grace period using session state
+                session_state = session_data.get("session_state")
+                if session_state and session_state.reattach_deadline and session_state.is_reattach_expired():
+                    logger.warning(f"Idle session cleanup: Session {session_id} reattachment grace period expired. Marking for finalization.")
+                    sessions_to_finalize.append(session_id)
+                # Fallback for sessions without session_state (legacy behavior)
+                elif not session_state and \
+                     session_data.get("is_active") and \
+                     not session_data.get("is_finalizing") and \
+                     session_data.get("websocket_connection") is None and \
+                     now - session_data.get("last_activity_timestamp", 0) > REATTACH_GRACE_SECONDS:
+                    logger.warning(f"Idle session cleanup: Session {session_id} (legacy mode) has been active without a WebSocket for >{REATTACH_GRACE_SECONDS}s. Marking for finalization.")
                     sessions_to_finalize.append(session_id)
                 
                 # Case 2: Session has been finalized and is waiting for garbage collection.

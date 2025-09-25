@@ -43,6 +43,9 @@ class AppConfig:
     # LLM Max Output Tokens
     llm_max_output_tokens: int = 4096 # Default max tokens for LLM response
 
+    # WebSocket reattachment settings
+    reattach_grace_seconds: int = 120  # Seconds to keep a session reattachable after client WS drops
+
     @classmethod
     def from_env_and_args(cls) -> 'AppConfig':
         """Create configuration from environment variables and command line arguments"""
@@ -110,7 +113,8 @@ class AppConfig:
             index=args.index,
             # Read default model from env, with a hardcoded fallback, for consistency with api_server
             llm_model_name=os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514"),
-            llm_max_output_tokens=llm_max_tokens # Use the determined value
+            llm_max_output_tokens=llm_max_tokens, # Use the determined value
+            reattach_grace_seconds=int(os.getenv("REATTACH_GRACE_SECONDS", "120"))
         )
 
         config.validate()
