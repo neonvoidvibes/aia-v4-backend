@@ -1657,13 +1657,12 @@ def process_audio_segment_and_update_s3(
                     logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
                     delivered_via_ordering = False
 
-                # IMPORTANT: Always append to lines_to_append_to_s3 regardless of ordering system
-                # This ensures transcript persistence works whether ordering succeeds or fails
-                lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
+                # Fallback to direct S3 append if ordering failed or is disabled
                 if not delivered_via_ordering:
+                    lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
                     logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
                 else:
-                    logger.info(f"Session {session_id_for_log}: Added seq={current_seq} to S3 buffer after ordering delivery")
+                    logger.info(f"Session {session_id_for_log}: Successfully delivered seq={current_seq} via ordering system (no S3 buffer needed)")
             else:
                 logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:
