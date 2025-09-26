@@ -1545,7 +1545,47 @@ def process_audio_segment_and_update_s3(
 
     # If transcription fails, exit early.
     if not transcription_result:
-        logger.info(f"Transcription skipped (missing or failed): {temp_segment_wav_path}")
+        failure_error = RuntimeError("transcription returned no result")
+        logger.warning(f"Session {session_id}: No transcription result for seq={current_seq}; queueing for retry")
+
+        if session_state:
+            try:
+                _on_provider_failure(session_state, failure_error)
+            except Exception as notify_err:
+                logger.debug(f"Session {session_id}: Failed to emit provider failure notification: {notify_err}")
+
+        attempt = 1
+        try:
+            if session_lock:
+                with session_lock:
+                    attempts_state = session_data.setdefault("retry_attempts", {})
+                    attempt = attempts_state.get(current_seq, 0) + 1
+                    attempts_state[current_seq] = attempt
+            else:
+                attempts_state = session_data.setdefault("retry_attempts", {})
+                attempt = attempts_state.get(current_seq, 0) + 1
+                attempts_state[current_seq] = attempt
+        except Exception as retry_track_err:
+            logger.debug(f"Session {session_id}: Failed to record retry attempt for seq={current_seq}: {retry_track_err}")
+
+        _emit_session_event(session_id, "retry_attempt", {
+            "seq": current_seq,
+            "attempt": attempt,
+            "error": str(failure_error)
+        })
+
+        if save_for_retry(temp_segment_wav_path, session_data, segment_offset_seconds, current_seq):
+            if os.path.exists(temp_segment_wav_path):
+                try:
+                    os.remove(temp_segment_wav_path)
+                except OSError as e:
+                    logger.error(f"Error removing failed segment file {temp_segment_wav_path}: {e}")
+            if session_id:
+                release_transcription_ref(session_id)
+            _decrement_pending()
+            return True
+
+        logger.error(f"Session {session_id}: Failed to save segment seq={current_seq} for retry after empty result")
         if os.path.exists(temp_segment_wav_path):
             try:
                 os.remove(temp_segment_wav_path)
