@@ -19,13 +19,14 @@ import urllib.parse
 from functools import wraps 
 from typing import Optional, List, Dict, Any, Tuple, Union 
 import uuid 
-from collections import defaultdict
+from collections import defaultdict, deque
 import subprocess 
 import re
 import math # For chunking calculations
 from werkzeug.utils import secure_filename # Added for file uploads
 
 from utils.api_key_manager import get_api_key # Import the new key manager
+from event_bus import set_emitter
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 from openai import OpenAI, APIError as OpenAI_APIError, APIStatusError as OpenAI_APIStatusError, APIConnectionError as OpenAI_APIConnectionError
@@ -340,6 +341,47 @@ sock = Sock(app)
 app.executor = ThreadPoolExecutor(max_workers=(os.cpu_count() or 1) * 2)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 
+
+def push_session_event(session_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    """Record a session-scoped event and fan it out to connected clients."""
+    payload = payload or {}
+    timestamp = datetime.now(timezone.utc).isoformat()
+    event_record = {"type": event_type, "payload": payload, "ts": timestamp}
+
+    ws_to_notify: Optional[Any] = None
+
+    lock = session_locks[session_id]
+    with lock:
+        sess = active_sessions.get(session_id)
+        if not sess:
+            return
+
+        events_buf = sess.setdefault("recent_events", deque(maxlen=200))
+        events_buf.append(event_record)
+
+        if event_type == "provider_fallback":
+            sess["current_provider"] = payload.get("to") or payload.get("provider") or sess.get("current_provider")
+            sess["fallback_active"] = True
+        elif event_type in {"provider_primary_resumed", "provider_probe_recovered"}:
+            sess["current_provider"] = payload.get("provider") or sess.get("current_provider")
+            sess["fallback_active"] = False
+
+        sess["last_event_ts"] = timestamp
+        ws_to_notify = sess.get("websocket_connection")
+
+    if ws_to_notify:
+        message = {"type": "event", "event": event_type, "ts": timestamp}
+        if payload:
+            message.update(payload)
+        try:
+            ws_to_notify.send(json.dumps(message))
+        except Exception as e:
+            logger.debug(f"Session {session_id}: Failed to send event {event_type}: {e}")
+
+
+app.config["SESSION_EVENT_EMITTER"] = push_session_event
+set_emitter(push_session_event)
+
 # Request ID middleware
 @app.before_request
 def add_request_id():
@@ -392,7 +434,6 @@ SEGMENT_GAP_TIMEOUT_SEC = int(os.getenv("SEGMENT_GAP_TIMEOUT_SEC", "120"))
 
 def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
     """Initialize session state for reconnection support with ring buffers."""
-    from collections import deque
     return {
         "reconnect_token": uuid4().hex,
         "last_disconnect_ts": None,
@@ -406,12 +447,63 @@ def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
         "expected_seq": 1,           # Next sequence we expect to deliver
         "pending_seqs": {},          # {seq: transcript_data} waiting for gaps to fill
         "max_delivered_seq": 0,      # Highest sequence sent to client
+        "last_audio_ts": None,
+        "silence_seconds": 0,
+        "recent_events": deque(maxlen=200),
     }
 
 # Job tracking system for async transcription
 transcription_jobs: Dict[str, Dict[str, Any]] = {}
 job_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
 logger.info("Initialized transcription job tracking system.")
+
+
+@app.get("/session/<session_id>/status")
+def get_session_status(session_id: str):
+    """Return authoritative session state for the chat view."""
+    sess = active_sessions.get(session_id)
+    if not sess:
+        return jsonify({"exists": False}), 404
+
+    lock = session_locks[session_id]
+    with lock:
+        seq_state = {
+            "next": sess.get("next_seq", 1),
+            "expected": sess.get("expected_seq", 1),
+            "max_delivered": sess.get("max_delivered_seq", 0),
+            "pending": len(sess.get("pending_seqs") or {}),
+        }
+
+        provider_state = {
+            "name": sess.get("current_provider", "primary"),
+            "fallback_active": bool(sess.get("fallback_active", False)),
+        }
+
+        pending_segments = int(sess.get("pending_segments", 0))
+        max_pending = int(sess.get("max_pending_segments", MAX_PENDING_SEGMENTS))
+
+        grace_deadline = sess.get("grace_deadline")
+        if isinstance(grace_deadline, (int, float)):
+            grace_iso = datetime.fromtimestamp(grace_deadline, tz=timezone.utc).isoformat()
+        else:
+            grace_iso = grace_deadline
+
+        status_payload = {
+            "exists": True,
+            "connected": bool(sess.get("websocket_connection")) and not bool(sess.get("ws_disconnected")),
+            "grace_deadline": grace_iso,
+            "last_audio_ts": sess.get("last_audio_ts"),
+            "silence_seconds": int(sess.get("silence_seconds", 0)),
+            "seq": seq_state,
+            "backlog": {
+                "pending_segments": pending_segments,
+                "max_pending": max_pending,
+            },
+            "provider": provider_state,
+            "reconnect_token": sess.get("reconnect_token"),
+        }
+
+    return jsonify(status_payload), 200
 
 def update_job_progress(job_id: str, **kwargs):
     """Update job progress in a thread-safe manner."""
@@ -1098,6 +1190,7 @@ def start_recording_route(user: SupabaseUser):
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True,
+        "ws_disconnected": False,
         "session_state": session_state,  # Add session state for sticky provider fallback
         "is_finalizing": False,
         "current_segment_raw_bytes": bytearray(),
@@ -1108,6 +1201,10 @@ def start_recording_route(user: SupabaseUser):
         "vad_enabled": False,  # Will be set to True if VAD session is created successfully
         "last_successful_transcript": "", # For providing rolling context to Whisper
         "actual_segment_duration_seconds": 0.0, # To track duration of processed segments
+        "pending_segments": 0,
+        "max_pending_segments": MAX_PENDING_SEGMENTS,
+        "current_provider": get_current_transcription_provider(),
+        "fallback_active": False,
         **reconnect_state  # Add reconnection fields
     }
     logger.info(f"Transcript session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
@@ -1193,6 +1290,7 @@ def start_audio_recording(user: SupabaseUser):
         "websocket_connection": None,
         "last_activity_timestamp": time.time(),
         "is_active": True,
+        "ws_disconnected": False,
         "is_finalizing": False,
         "current_segment_raw_bytes": bytearray(),
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
@@ -1201,6 +1299,13 @@ def start_audio_recording(user: SupabaseUser):
         "is_first_blob_received": False,
         "vad_enabled": False,
         "last_successful_transcript": "",
+        "pending_segments": 0,
+        "max_pending_segments": MAX_PENDING_SEGMENTS,
+        "current_provider": get_current_transcription_provider(),
+        "fallback_active": False,
+        "silence_seconds": 0,
+        "last_audio_ts": None,
+        "recent_events": deque(maxlen=200),
     }
     logger.info(f"Audio recording session {session_id} started for agent {agent_name} by user {user.id}.")
     
@@ -1753,6 +1858,7 @@ def _mark_ws_disconnected(session_id: str):
         sess["websocket_connection"] = None
         sess["last_disconnect_ts"] = time.time()
         sess["grace_deadline"] = sess["last_disconnect_ts"] + REATTACH_GRACE_SECONDS
+        sess["ws_disconnected"] = True
 
         # Update session state
         session_state = sess.get("session_state")
@@ -1924,6 +2030,11 @@ def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, t
 
     except Exception as e:
         logger.error(f"Session {session_id}: Error delivering seq={seq}: {e}")
+    else:
+        try:
+            push_session_event(session_id, "segment_processed", {"seq": seq})
+        except Exception as event_err:
+            logger.debug(f"Session {session_id}: Unable to record segment_processed event: {event_err}")
 
 def _heartbeat_loop():
     """Monitor WebSocket connections and handle grace period expiry."""
@@ -2208,6 +2319,7 @@ def audio_stream_socket(ws, session_id: str):
                     active_sessions[session_id]["websocket_connection"] = ws
                     active_sessions[session_id]["last_activity_timestamp"] = time.time()
                     active_sessions[session_id]["is_active"] = True
+                    active_sessions[session_id]["ws_disconnected"] = False
                     logger.info(f"WebSocket takeover: session {session_id} user {user.id} client {client_id} replaced previous connection.")
             else:
                 logger.warning(f"WebSocket: Duplicate connection for session {session_id}. resume={resume}, same_user={existing_user_id == user.id}. Closing new one.")
@@ -2223,6 +2335,7 @@ def audio_stream_socket(ws, session_id: str):
                 active_sessions[session_id]["websocket_connection"] = ws
                 active_sessions[session_id]["last_activity_timestamp"] = time.time()
                 active_sessions[session_id]["is_active"] = True
+                active_sessions[session_id]["ws_disconnected"] = False
                 logger.info(f"WebSocket for session {session_id} (user {user.id}) successfully reattached within grace period.")
                 # Send RESUMED status to client
                 try:
@@ -2237,6 +2350,7 @@ def audio_stream_socket(ws, session_id: str):
                 active_sessions[session_id]["websocket_connection"] = ws
                 active_sessions[session_id]["last_activity_timestamp"] = time.time()
                 active_sessions[session_id]["is_active"] = True
+                active_sessions[session_id]["ws_disconnected"] = False
                 logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
     # Server-side keepalive using threading
@@ -2286,16 +2400,61 @@ def audio_stream_socket(ws, session_id: str):
     keepalive_thread.start()
     active_sessions[session_id]["keepalive_thread"] = keepalive_thread
 
+    try:
+        ws.send(json.dumps({"type": "hello", "session_id": session_id}))
+    except Exception as e:
+        logger.debug(f"Session {session_id}: Failed to send hello on WebSocket connect: {e}")
+
+    PING_INTERVAL_SECONDS = 5
+    MAX_MISSED_PONGS = 3
+    last_ping_sent = time.time()
+    awaiting_pong = False
+    missed_pongs = 0
+
     AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15 
 
     try:
         while True:
-            # The timeout here is for receiving a message. It doesn't keep the connection alive by itself.
-            # The main timeout logic is now handled in the finally block with a grace period.
-            message = ws.receive(timeout=5) # Increased timeout slightly
+            now = time.time()
+            if now - last_ping_sent >= PING_INTERVAL_SECONDS:
+                try:
+                    ws.send(json.dumps({"type": "ping", "ts": int(now)}))
+                    last_ping_sent = now
+                    if awaiting_pong:
+                        missed_pongs += 1
+                    else:
+                        missed_pongs = 0
+                    awaiting_pong = True
+                except ConnectionClosed:
+                    raise
+                except Exception as ping_error:
+                    logger.warning(f"Session {session_id}: Failed to send ping: {ping_error}")
+                    break
 
-            if message is None: 
-                # Secondary inactivity guard: only enforce when not paused
+                if missed_pongs >= MAX_MISSED_PONGS:
+                    logger.warning(f"Session {session_id}: Missed {missed_pongs} pong responses, closing WebSocket.")
+                    try:
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess is not None:
+                                sess["ws_disconnected"] = True
+                                sess["last_disconnect_ts"] = time.time()
+                                sess["grace_deadline"] = sess["last_disconnect_ts"] + REATTACH_GRACE_SECONDS
+                    except Exception as state_err:
+                        logger.debug(f"Session {session_id}: failed to set disconnect state: {state_err}")
+                    break
+
+            try:
+                message = ws.receive(timeout=1)
+            except TimeoutError:
+                continue
+            except ConnectionClosed:
+                raise
+            except Exception as receive_error:
+                logger.warning(f"Session {session_id}: WebSocket receive error: {receive_error}")
+                break
+
+            if message is None:
                 sess = active_sessions.get(session_id)
                 if sess:
                     last_ts = sess.get("last_activity_timestamp", 0)
@@ -2303,7 +2462,7 @@ def audio_stream_socket(ws, session_id: str):
                     if not paused and (time.time() - last_ts > 70):
                         logger.warning(f"WebSocket for session {session_id} timed out due to inactivity (loop check). Closing.")
                         break
-                continue 
+                continue
 
             if session_id not in active_sessions or not active_sessions[session_id].get("is_active"):
                 logger.info(f"WebSocket session {session_id}: Session seems to have been stopped/cleaned up. Closing WS.")
@@ -2315,6 +2474,16 @@ def audio_stream_socket(ws, session_id: str):
                 try:
                     control_msg = json.loads(message)
                     action = control_msg.get("action")
+                    msg_type = control_msg.get("type")
+
+                    if msg_type == "pong" or action == "pong":
+                        awaiting_pong = False
+                        missed_pongs = 0
+                        continue
+
+                    if msg_type == "ping" and action is None:
+                        ws.send(json.dumps({"type": "pong"}))
+                        continue
 
                     # Check if this is an audio header (mobile recording)
                     if not action and all(key in control_msg for key in ['contentType', 'rate', 'channels']):
@@ -2371,11 +2540,30 @@ def audio_stream_socket(ws, session_id: str):
                     logger.error(f"WebSocket session {session_id}: Error processing control message '{message}': {e}")
 
             elif isinstance(message, bytes):
+                backlog_message = None
+                backlog_ws = None
+                drop_chunk = False
                 with session_locks[session_id]:
                     if session_id not in active_sessions:
                         logger.warning(f"WebSocket {session_id}: Session disappeared after acquiring lock. Aborting message processing.")
                         break
                     session_data = active_sessions[session_id]
+
+                    pending = int(session_data.get("pending_segments", 0))
+                    max_pending = int(session_data.get("max_pending_segments", MAX_PENDING_SEGMENTS))
+                    if pending >= max_pending:
+                        # HARD ADMISSION CONTROL: do not enqueue, tell client to retry later
+                        event_payload = {"pending": pending, "max": max_pending, "retry_after_ms": 1500}
+                        event_ts = datetime.now(timezone.utc).isoformat()
+                        session_data.setdefault("recent_events", deque(maxlen=200)).append({
+                            "type": "backpressure_reject",
+                            "payload": event_payload,
+                            "ts": event_ts,
+                        })
+                        backlog_message = {"type": "event", "event": "backpressure_reject", "ts": event_ts, **event_payload}
+                        backlog_ws = session_data.get("websocket_connection")
+                        # Drop this audio chunk (no enqueue)
+                        drop_chunk = True
 
                     if session_data.get("is_backend_processing_paused", False):
                         logger.debug(f"Session {session_id} is paused. Discarding {len(message)} audio bytes.")
@@ -2582,7 +2770,7 @@ def audio_stream_socket(ws, session_id: str):
                                         else:
                                             logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration.")
                                             s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
-                                    
+
                                     success_transcribe = process_audio_segment_and_update_s3(
                                         temp_segment_wav_path=wav_path,
                                         session_data=s_data_ref,
@@ -2598,6 +2786,11 @@ def audio_stream_socket(ws, session_id: str):
                                 finally:
                                     pass
                             
+                            try:
+                                session_data["pending_segments"] = int(session_data.get("pending_segments", 0)) + 1
+                            except Exception as pending_err:
+                                logger.debug(f"Session {session_id}: Unable to increment pending segments before transcription: {pending_err}")
+
                             processing_thread = threading.Thread(
                                 target=process_segment_in_thread,
                                 args=(
@@ -2612,7 +2805,18 @@ def audio_stream_socket(ws, session_id: str):
                             )
                             processing_thread.start()
                             logger.info(f"Session {session_id}: Started processing thread for segment {segment_uuid_thread}")
-            
+                if 'drop_chunk' in locals() and drop_chunk:
+                    try:
+                        backlog_ws and backlog_ws.send(json.dumps(backlog_message))
+                    except Exception as backlog_err:
+                        logger.debug(f"Session {session_id}: Failed to send backpressure reject: {backlog_err}")
+                    continue
+                if backlog_message and backlog_ws:
+                    try:
+                        backlog_ws.send(json.dumps(backlog_message))
+                    except Exception as backlog_err:
+                        logger.debug(f"Session {session_id}: Failed to send backpressure event: {backlog_err}")
+
             if session_id not in active_sessions:
                 logger.info(f"WebSocket session {session_id}: Session was externally stopped during message processing. Closing connection.")
                 if ws.fileno() != -1: 

@@ -138,6 +138,16 @@ class VADIntegrationBridge:
                 # Try cleanup - this will only succeed if no pending transcriptions
                 maybe_cleanup_session(session_id)
 
+                try:
+                    from pathlib import Path
+                    retry_dir = Path("tmp/retry_segments") / session_id
+                    if retry_dir.exists():
+                        import shutil
+                        shutil.rmtree(retry_dir)
+                        logger.info(f"Session {session_id}: Cleaned retry queue artifacts during VAD teardown")
+                except Exception as cleanup_err:
+                    logger.warning(f"Session {session_id}: Failed to clean retry queue artifacts: {cleanup_err}")
+
                 # Clean up local references
                 del self.session_metadata[session_id]
 

@@ -16,11 +16,17 @@ import subprocess # For ffprobe fallback
 import mimetypes # Import the mimetypes library
 import math # For chunking calculations
 import concurrent.futures # For parallel processing
+from event_bus import emit as emit_event
 
 from utils.hallucination_detector import DetectorState, Word, maybe_trim_repetition
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+def _emit_session_event(session_id: Optional[str], event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    if session_id:
+        emit_event(session_id, event_type, payload or {})
 
 # Import session state model
 from models.session_state import SessionState
@@ -190,6 +196,7 @@ def _mark_deepgram_failure(state: SessionState):
         state.provider_fallback_at = now
         state.provider_retry_after = now + state.provider_cooldown_sec
         logger.info(f"Session {state.id}: Switched to Whisper fallback, retry after {state.provider_retry_after}")
+        _emit_session_event(state.id, "provider_fallback", {"from": "deepgram", "to": "whisper"})
 
 def _maybe_probe_deepgram(state: SessionState) -> bool:
     """Check if we should probe Deepgram for availability."""
@@ -212,6 +219,7 @@ def _complete_probe(state: SessionState, success: bool):
         state.provider_fallback_at = None
         state.provider_retry_after = None
         logger.info(f"Session {state.id}: Deepgram probe successful, switched back to Deepgram")
+        _emit_session_event(state.id, "provider_primary_resumed", {"provider": "deepgram"})
     else:
         # push retry window forward (exponential-ish backoff)
         state.provider_retry_after = time.time() + min(state.provider_cooldown_sec, 1800)
@@ -1376,6 +1384,25 @@ def process_audio_segment_and_update_s3(
     from session_cleanup import session_id_from_path, release_transcription_ref
     import time
 
+    pending_decremented = False
+
+    def _decrement_pending(lock_already_held: bool = False):
+        nonlocal pending_decremented
+        if pending_decremented:
+            return
+        try:
+            if lock_already_held:
+                session_data["pending_segments"] = max(0, int(session_data.get("pending_segments", 1)) - 1)
+            elif session_lock:
+                with session_lock:
+                    session_data["pending_segments"] = max(0, int(session_data.get("pending_segments", 1)) - 1)
+            else:
+                session_data["pending_segments"] = max(0, int(session_data.get("pending_segments", 1)) - 1)
+        except Exception as pending_err:
+            logger.debug(f"Session {session_data.get('session_id')}: Failed to decrement pending segments: {pending_err}")
+        finally:
+            pending_decremented = True
+
     # Guard: if the producer handed us a path, it must exist.
     session_id = session_data.get("session_id")
     if not os.path.exists(temp_segment_wav_path):
@@ -1386,6 +1413,7 @@ def process_audio_segment_and_update_s3(
                 break
         else:
             logger.warning(f"Transcription skipped; file missing: {temp_segment_wav_path}")
+            _decrement_pending()
             if session_id:
                 release_transcription_ref(session_id)  # decrement refcount
             return False
@@ -1425,12 +1453,14 @@ def process_audio_segment_and_update_s3(
         if temp_segment_wav_path and os.path.exists(temp_segment_wav_path):
              try: os.remove(temp_segment_wav_path)
              except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path} after pre-check fail: {e_del}")
+        _decrement_pending()
         if session_id:
             release_transcription_ref(session_id)
         return False
 
     if not openai_api_key:
         logger.error("OpenAI API key was not provided to process_audio_segment_and_update_s3. Cannot transcribe.")
+        _decrement_pending()
         return False
         
     # Assign sequence number for this segment (before transcription)
@@ -1471,16 +1501,38 @@ def process_audio_segment_and_update_s3(
         if is_transient_provider_error(e):
             logger.warning(f"Session {session_id}: Transient transcription error for seq={current_seq}: {e}")
 
+            attempt = 1
+            try:
+                if session_lock:
+                    with session_lock:
+                        attempts_state = session_data.setdefault("retry_attempts", {})
+                        attempt = attempts_state.get(current_seq, 0) + 1
+                        attempts_state[current_seq] = attempt
+                else:
+                    attempts_state = session_data.setdefault("retry_attempts", {})
+                    attempt = attempts_state.get(current_seq, 0) + 1
+                    attempts_state[current_seq] = attempt
+            except Exception as retry_track_err:
+                logger.debug(f"Session {session_id}: Failed to record retry attempt for seq={current_seq}: {retry_track_err}")
+
+            _emit_session_event(session_id, "retry_attempt", {
+                "seq": current_seq,
+                "attempt": attempt,
+                "error": str(e)
+            })
+
             # Save segment for retry
             if save_for_retry(temp_segment_wav_path, session_data, segment_offset_seconds, current_seq):
                 # Return success - segment will be processed by retry worker
                 if session_id:
                     release_transcription_ref(session_id)
+                _decrement_pending()
                 return True
             else:
                 logger.error(f"Session {session_id}: Failed to save segment seq={current_seq} for retry")
 
         # Re-raise for permanent errors or retry save failures
+        _decrement_pending()
         raise
 
     # If transcription fails, exit early.
@@ -1493,6 +1545,7 @@ def process_audio_segment_and_update_s3(
                 logger.error(f"Error removing failed segment file {temp_segment_wav_path}: {e}")
         if session_id:
             release_transcription_ref(session_id)
+        _decrement_pending()
         return False
 
     # Pre-process segments that don't depend on the atomic offset
@@ -1524,6 +1577,10 @@ def process_audio_segment_and_update_s3(
     with session_lock:
         session_id_for_log = session_data.get("session_id", "FALLBACK_UNKNOWN_SESSION")
         logger.debug(f"SESSION_LOCK_ACQUIRED for session {session_id_for_log}")
+
+        retry_attempts = session_data.get("retry_attempts")
+        if retry_attempts and current_seq in retry_attempts:
+            retry_attempts.pop(current_seq, None)
 
         # CRITICAL FIX: Update duration BEFORE timestamp calculation to fix frozen timestamps
         # Use the duration calculated at the start of this function. This is the key fix.
@@ -1692,6 +1749,7 @@ def process_audio_segment_and_update_s3(
         except OSError as e_del: logger.error(f"Error deleting temp WAV {temp_segment_wav_path}: {e_del}")
 
     # Release the transcription reference count and try cleanup
+    _decrement_pending()
     if session_id:
         from session_cleanup import release_transcription_ref, maybe_cleanup_session
         release_transcription_ref(session_id)

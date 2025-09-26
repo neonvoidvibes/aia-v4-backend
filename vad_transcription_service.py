@@ -13,6 +13,7 @@ import uuid
 import time
 import threading
 import subprocess
+from datetime import datetime, timezone
 from typing import Dict, Any, Tuple, Optional
 import wave
 import numpy as np
@@ -20,6 +21,7 @@ from collections import deque
 
 import webrtcvad
 from flask import current_app
+from event_bus import emit as emit_event
 
 # Try to import audio processing libraries
 try:
@@ -31,6 +33,10 @@ except ImportError:
     logging.warning("scipy not available - audio enhancement will be skipped.")
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_session_event(session_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    emit_event(session_id, event_type, payload or {})
 
 class VADTranscriptionService:
     """
@@ -112,7 +118,8 @@ class VADTranscriptionService:
         voiced_frames = []
         silent_frames_count = 0
         triggered = False
-        
+        submitted_segment = False
+
         frames = self._frame_generator(audio_data_np)
 
         for frame, is_speech in frames:
@@ -142,6 +149,7 @@ class VADTranscriptionService:
                     if len(speech_segment_bytes) >= (min_speech_duration_ms / 1000 * self.sample_rate * 2):
                         logger.info(f"Submitting voiced segment of {len(speech_segment_bytes)} bytes due to silence timeout.")
                         self._submit_voiced_segment(speech_segment_bytes, session_id, temp_dir, session_data, session_lock)
+                        submitted_segment = True
 
                     # Reset for the next speech segment
                     triggered = False
@@ -157,6 +165,9 @@ class VADTranscriptionService:
             if len(speech_segment_bytes) >= (min_speech_duration_ms / 1000 * self.sample_rate * 2):
                 logger.info(f"Submitting final buffered audio segment of {len(speech_segment_bytes)} bytes at end of chunk.")
                 self._submit_voiced_segment(speech_segment_bytes, session_id, temp_dir, session_data, session_lock)
+                submitted_segment = True
+
+        return submitted_segment
 
     def _frame_generator(self, audio_data: np.ndarray):
         """Generator that yields audio frames and VAD decision."""
@@ -183,6 +194,8 @@ class VADTranscriptionService:
         segment_id = uuid.uuid4().hex
         final_path = Path(temp_dir) / f"clean_speech_{segment_id}.wav"
 
+        pending_incremented = False
+
         try:
             # Atomic write: temp file, fsync, then replace
             with tempfile.NamedTemporaryFile(dir=temp_dir, delete=False, suffix='.wav') as tf:
@@ -205,6 +218,13 @@ class VADTranscriptionService:
             openai_key = session_data.get("openai_api_key")
             anthropic_key = session_data.get("anthropic_api_key")
 
+            try:
+                with session_lock:
+                    session_data["pending_segments"] = int(session_data.get("pending_segments", 0)) + 1
+                    pending_incremented = True
+            except Exception as pending_err:
+                logger.debug(f"Session {session_id}: Failed to increment pending segments: {pending_err}")
+
             from transcription_service import process_audio_segment_and_update_s3
             current_app.executor.submit(
                 process_audio_segment_and_update_s3,
@@ -216,6 +236,12 @@ class VADTranscriptionService:
             )
         except Exception as e:
             logger.error(f"Session {session_id}: Failed to save and submit voiced segment: {e}", exc_info=True)
+            if pending_incremented:
+                try:
+                    with session_lock:
+                        session_data["pending_segments"] = max(0, int(session_data.get("pending_segments", 1)) - 1)
+                except Exception as pending_err:
+                    logger.debug(f"Session {session_id}: Failed to decrement pending after submit error: {pending_err}")
             if os.path.exists(final_path):
                 try: os.remove(final_path)
                 except Exception as del_e: logger.error(f"Failed to clean up failed segment file {final_path}: {del_e}")
@@ -233,25 +259,45 @@ class VADTranscriptionService:
         Process a single audio segment: convert, analyze, and submit.
         """
         processing_start_time = time.time()
-        
+        silence_seconds = None
+
         # Convert entire blob to raw PCM data
         audio_data_np = self.process_webm_to_wav(webm_blob_bytes)
         if audio_data_np is None:
             logger.error(f"Session {session_id}: Failed to convert WebM to WAV, skipping segment.")
             return
 
+        chunk_duration = 0.0
+        try:
+            chunk_duration = max(0.0, len(audio_data_np) / float(self.sample_rate))
+        except Exception:
+            chunk_duration = 0.0
+
         # The duration of the full webm blob is no longer used to increment the total session duration.
         # Instead, the precise duration of each voiced WAV segment will be calculated in the
         # transcription_service and used to update the total duration there, ensuring timestamp accuracy.
         
         # Segment the audio based on voice activity and submit to workers
-        self.segment_and_submit_audio(
+        submitted_segment = self.segment_and_submit_audio(
             audio_data_np,
             session_id,
             temp_dir,
             session_data,
             session_lock
         )
+
+        now_iso = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+        with session_lock:
+            session_data["last_audio_ts"] = now_iso
+            if submitted_segment:
+                session_data["silence_seconds"] = 0
+            else:
+                increment = max(1, int(round(chunk_duration))) if chunk_duration > 0 else 1
+                session_data["silence_seconds"] = int(session_data.get("silence_seconds", 0)) + increment
+                silence_seconds = int(session_data["silence_seconds"])
+
+        if not submitted_segment and silence_seconds is not None:
+            _emit_session_event(session_id, "silence_tick", {"seconds": silence_seconds})
 
         logger.debug(f"Session {session_id}: Full segment processing completed in {(time.time() - processing_start_time)*1000:.1f}ms.")
 
