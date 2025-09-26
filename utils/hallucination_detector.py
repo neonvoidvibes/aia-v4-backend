@@ -10,13 +10,10 @@ from collections import deque
 import re
 
 # Configuration constants
-_MIN_OVERLAP_TOKENS = 4      # tighten overlap to avoid false matches
-_MAX_CTX_TOKENS = 15         # compare last/first N tokens around boundary
-_HEAD_DEDUP_N = 3            # up to 3 tokens considered a "head"
-_HEAD_CACHE_K = 6            # remember recent heads to dampen repeats
-_HEAD_DEDUP_MIN_TOKENS = 12  # guard: don't dedup very short segments
-_SHORT_SEGMENT_DURATION_S = 8.0
-_SHORT_SEGMENT_CTX_FACTOR = 0.5
+_MIN_OVERLAP_TOKENS = 12
+_MAX_CONTEXT_TOKENS = 50
+_MIN_SEGMENT_TOKENS = 6
+_OVERLAP_RATIO = 0.60
 
 # Regex patterns for normalization
 _ws_re = re.compile(r"\s+")
@@ -49,12 +46,31 @@ def _lcs_len(a: List[str], b: List[str]) -> int:
                 dp[i][j] = max(dp[i-1][j], dp[i][j-1])
     return dp[m][n]
 
+def _lcs_suffix_prefix_overlap(tail: List[str], head: List[str]) -> int:
+    """Compute overlap between context suffix and current head."""
+    if not tail or not head:
+        return 0
+
+    # Find longest matching contiguous overlap
+    max_overlap = 0
+    k = min(len(tail), len(head))
+    for i in range(1, k + 1):
+        if tail[-i:] == head[:i]:
+            max_overlap = i
+    return max_overlap
+
 @dataclass
 class Word:
     text: str
     start: float  # seconds
     end: float    # seconds
     conf: float   # 0..1
+
+    @property
+    def norm(self) -> str:
+        """Normalized token for overlap comparison (single token or '')."""
+        toks = _normalize_tokens(self.text)
+        return toks[0] if toks else ""
 
 @dataclass
 class DetectorState:
@@ -67,109 +83,52 @@ class DetectorState:
 
     def __init__(self):
         self.last_tokens = []
-        self.recent_heads = deque(maxlen=_HEAD_CACHE_K)
+        self.recent_heads = deque(maxlen=6)
+
+    def tail_tokens(self, limit: int) -> List[str]:
+        """Return last N tokens from context."""
+        return self.last_tokens[-limit:] if self.last_tokens else []
 
 def maybe_trim_repetition(
+    words: List[Word],
     state: DetectorState,
-    stream_time_s: float,
-    prev_delivered_words: List[Word],
-    curr_words: List[Word],
-    curr_text_raw: str
-) -> Tuple[str, str, float]:
+    *,
+    min_overlap_tokens: int = _MIN_OVERLAP_TOKENS,
+    max_context_tokens: int = _MAX_CONTEXT_TOKENS,
+    min_segment_tokens: int = _MIN_SEGMENT_TOKENS,
+    overlap_ratio: float = _OVERLAP_RATIO,
+) -> Tuple[List[Word], Optional[str], int]:
     """
-    Strict subtractive stitcher - ONLY removes overlap, never prepends.
-    Includes seed-head repeat dampener to prevent chant loops.
-    Returns (text, reason, cut_s). cut_s < 0 => no trim.
+    Pure function: if the head of `words` overlaps with the tail of prior context,
+    trim only the overlapped head.
+    Returns (possibly_trimmed_words, reason, cut_word_count).
+    Tunables are explicit and defaulted; call-sites can pass overrides for A/B.
     """
-    import logging
-    logger = logging.getLogger(__name__)
+    if not words or len(words) < min_segment_tokens:
+        return words, None, 0
 
-    new_tokens = _normalize_tokens(curr_text_raw)
-    if not new_tokens:
-        return curr_text_raw, "", -1.0
+    ctx_tail = state.tail_tokens(limit=max_context_tokens)
+    seg_head = [w.norm for w in words]
 
-    # 1) Trim overlap strictly (subtractive only)
-    max_ctx_tokens = _MAX_CTX_TOKENS
-    min_overlap_tokens = _MIN_OVERLAP_TOKENS
-    if curr_words:
-        segment_duration = max(curr_words[-1].end - curr_words[0].start, 0.0)
-        if segment_duration <= _SHORT_SEGMENT_DURATION_S:
-            max_ctx_tokens = max(2, int(_MAX_CTX_TOKENS * _SHORT_SEGMENT_CTX_FACTOR))
-            min_overlap_tokens = max(2, min(_MIN_OVERLAP_TOKENS, max_ctx_tokens))
+    if not ctx_tail or not seg_head:
+        return words, None, 0
 
-    tail = state.last_tokens[-max_ctx_tokens:]
-    head = new_tokens[:max_ctx_tokens]
-    cut_idx = 0
+    # Compute suffix-prefix overlap length (context suffix vs current head).
+    overlap = _lcs_suffix_prefix_overlap(ctx_tail, seg_head)
+    threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
+    if overlap >= threshold:
+        cut = min(overlap, len(words))
+        trimmed = words[cut:]
+        reason = f"trimmed_overlap:{overlap}"
+        # update rolling context with the tokens we will KEEP
+        kept_norm = [w.norm for w in trimmed if w.norm]
+        state.last_tokens = (state.last_tokens + kept_norm)[-200:]
+        return trimmed, reason, cut
 
-    if tail and head:
-        l = _lcs_len(tail, head)
-        if l >= min_overlap_tokens:
-            # Find the longest matching contiguous prefix
-            k = min(len(head), len(tail))
-            for i in range(k, 0, -1):
-                if head[:i] == tail[-i:]:
-                    cut_idx = i
-                    break
-
-            if cut_idx >= min_overlap_tokens:
-                new_tokens = new_tokens[cut_idx:]
-                logger.info(f"overlap_trim removed {cut_idx} tokens from head")
-
-    # 2) Seed-head repeat dampener (don't allow repeated heads)
-    original_tokens = new_tokens[:]
-    dedup_guard_reason = ""
-    if new_tokens:
-        head_tuple = tuple(new_tokens[:_HEAD_DEDUP_N])
-        token_count = len(new_tokens)
-        should_guard = (
-            token_count <= _HEAD_DEDUP_N or
-            token_count < _HEAD_DEDUP_MIN_TOKENS or
-            (_HEAD_DEDUP_N / max(token_count, 1)) > 0.5
-        )
-
-        if head_tuple in state.recent_heads and not should_guard:
-            # drop exact repeated head once
-            new_tokens = new_tokens[_HEAD_DEDUP_N:]
-            logger.info(f"head_dedup removed repeated {_HEAD_DEDUP_N} tokens: {head_tuple}")
-        elif head_tuple in state.recent_heads and should_guard:
-            dedup_guard_reason = "head_guard"
-            logger.debug(
-                "head_dedup guard prevented removal: tokens=%s", token_count
-            )
-
-        # Update head cache AFTER potential drop (or guard)
-        if new_tokens:
-            state.recent_heads.append(tuple(new_tokens[:_HEAD_DEDUP_N]))
-
-    restored_original = False
-    if not new_tokens and original_tokens:
-        logger.info("segment trimming produced empty tokens; restoring original text")
-        new_tokens = original_tokens
-        cut_idx = 0
-        dedup_guard_reason = dedup_guard_reason or "restored_original"
-        restored_original = True
-
-    # Calculate cut boundary for word-level trimming
-    cut_s = -1.0
-    if not restored_original and len(original_tokens) > len(new_tokens) and curr_words:
-        # Find the word boundary where we cut
-        words_cut = len(original_tokens) - len(new_tokens)
-        if words_cut < len(curr_words):
-            cut_s = curr_words[words_cut - 1].end if words_cut > 0 else curr_words[0].start
-
-    final_text = " ".join(new_tokens)
-
-    # Update rolling context
-    state.last_tokens = (state.last_tokens + new_tokens)[-200:]
-
-    reason = ""
-    if restored_original:
-        reason = dedup_guard_reason or "restored_original"
-    elif cut_idx > 0 or len(original_tokens) > len(new_tokens):
-        reason = "overlap_trimmed"
-    elif dedup_guard_reason:
-        reason = dedup_guard_reason
-    return final_text, reason, cut_s
+    # no trim; still advance context with head (bounded)
+    head_norm = [w.norm for w in words if w.norm]
+    state.last_tokens = (state.last_tokens + head_norm)[-200:]
+    return words, None, 0
 
 # Backward compatibility functions for existing code
 class LegacyHallucinationManager:

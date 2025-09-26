@@ -387,92 +387,11 @@ def format_timestamp_range(
     end_time_str = _format_time_delta(end_seconds_delta, base_datetime_utc)
     return f"[{start_time_str} - {end_time_str} {timezone_name}]"
 
-def detect_repetition_hallucination(text: str, threshold: float = 0.7) -> bool:
-    """Detect if text is likely a hallucination based on repetition patterns"""
-    words = text.split()
-    if len(words) < 3:
-        return False
-    
-    # Check for phrase repetition within the text
-    word_count = len(words)
-    for phrase_len in range(2, min(word_count // 2 + 1, 6)):  # Check 2-5 word phrases
-        phrases = [' '.join(words[i:i+phrase_len]) for i in range(word_count - phrase_len + 1)]
-        unique_phrases = set(phrases)
-        repetition_ratio = 1 - (len(unique_phrases) / len(phrases))
-        if repetition_ratio > threshold:
-            logger.debug(f"Detected repetition hallucination in text: '{text[:100]}...' (ratio: {repetition_ratio:.2f})")
-            return True
-    
-    return False
+# Removed naive repetition detector in favor of strict subtractive stitcher (maybe_trim_repetition).
 
-def detect_cross_segment_repetition(segments: List[Dict], window_size: int = 10) -> List[Dict]:
-    """Filter out segments that repeat recent content"""
-    filtered_segments = []
-    recent_texts = []
-    
-    for segment in segments:
-        text = segment.get('text', '').strip()
-        
-        # Check if this text appeared recently
-        if text in recent_texts[-window_size:]:
-            logger.debug(f"Filtering repetitive segment: '{text}'")
-            continue
-            
-        filtered_segments.append(segment)
-        recent_texts.append(text)
-        
-        # Keep only recent history
-        if len(recent_texts) > window_size:
-            recent_texts.pop(0)
-    
-    return filtered_segments
+# Removed cross-segment repetition heuristic; stitching handles overlap without false drops.
 
-def detect_single_word_loops(segments: List[Dict], session_data: Dict[str, Any], segment_offset_seconds: float) -> List[Dict]:
-    """Filter out single words that appear too frequently in loops (like 'Okej' repeating)"""
-    filtered_segments = []
-    
-    # Get persistent word frequency tracker from session data
-    if 'word_frequency_tracker' not in session_data:
-        session_data['word_frequency_tracker'] = {}
-    word_frequency_tracker = session_data['word_frequency_tracker']
-    
-    max_single_word_frequency = 3  # Allow 3 occurrences, filter 4th+
-    time_window_minutes = 3.0  # 3-minute sliding window
-    
-    for segment in segments:
-        text = segment.get('text', '').strip()
-        # Calculate absolute timestamp relative to session start
-        absolute_timestamp = segment_offset_seconds + segment.get('start', 0.0)
-        
-        # Normalize text for comparison (remove punctuation, convert to lowercase)
-        normalized_text = re.sub(r'[^\w\s]', '', text.lower()).strip()
-        
-        # Only apply this filter to single words (no spaces = single word)
-        if normalized_text and ' ' not in normalized_text:
-            # Clean up old entries outside the time window
-            cutoff_time = absolute_timestamp - (time_window_minutes * 60)
-            if normalized_text in word_frequency_tracker:
-                word_frequency_tracker[normalized_text] = [
-                    timestamp for timestamp in word_frequency_tracker[normalized_text] 
-                    if timestamp > cutoff_time
-                ]
-            
-            # Count current occurrences within the time window
-            current_count = len(word_frequency_tracker.get(normalized_text, []))
-            
-            # Filter if we already have max occurrences
-            if current_count >= max_single_word_frequency:
-                logger.debug(f"Filtering looping single word: '{text}' (would be occurrence #{current_count + 1} in last {time_window_minutes} minutes)")
-                continue
-            
-            # Track this occurrence
-            if normalized_text not in word_frequency_tracker:
-                word_frequency_tracker[normalized_text] = []
-            word_frequency_tracker[normalized_text].append(absolute_timestamp)
-        
-        filtered_segments.append(segment)
-    
-    return filtered_segments
+# Removed single-word loop heuristic; avoid false positives on backchannels and fillers.
 
 def transcribe_chunk_wrapper(args):
     """Wrapper function for parallel chunk transcription."""
@@ -571,10 +490,11 @@ def _transcribe_chunks_parallel(chunk_paths, openai_api_key, language_setting, r
     # Prepare arguments for parallel processing
     chunk_args = []
     for i, chunk_path in enumerate(chunk_paths):
-        # Use minimal context to avoid hallucinations in parallel processing
-        chunk_context = rolling_context_prompt if i == 0 else ""
+        # Disable cross-chunk context to avoid prompt-induced drift/hallucinations.
+        # We keep the model stateless per chunk.
+        chunk_context = ""
         chunk_args.append((
-            chunk_path, i, len(chunk_paths), openai_api_key, 
+            chunk_path, i, len(chunk_paths), openai_api_key,
             language_setting, chunk_context, progress_callback
         ))
     
@@ -680,9 +600,9 @@ def _transcribe_chunks_sequential(chunk_paths, openai_api_key, language_setting,
                 progress_callback(i, len(chunk_paths), f"Processing chunk {i+1}/{len(chunk_paths)}")
             
             logger.info(f"Transcribing chunk {i+1}/{len(chunk_paths)}: {os.path.basename(chunk_path)}")
-            
-            # Use context from previous chunk for continuity
-            chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
+
+            # Disable cross-chunk context here as well; rely on timestamps for continuity.
+            chunk_context = ""
             
             # Use the parallel wrapper for consistency
             chunk_args = (chunk_path, i, len(chunk_paths), openai_api_key, language_setting, chunk_context, progress_callback)
@@ -1210,8 +1130,8 @@ def transcribe_large_audio_file(
             progress_pct = ((i + 1) / len(chunk_paths)) * 100
             logger.info(f"Transcribing chunk {i+1}/{len(chunk_paths)} ({progress_pct:.1f}%): {os.path.basename(chunk_path)}")
             
-            # Use context from previous chunk for continuity
-            chunk_context = rolling_context_prompt if i == 0 else " ".join(combined_text_parts[-1:])
+            # Use minimal context: first chunk only to avoid seed carry-over
+            chunk_context = rolling_context_prompt if i == 0 else ""
             
             # Smart chunk retry with improved error handling
             chunk_max_retries = 4  # Increased for better reliability
@@ -1604,7 +1524,6 @@ def process_audio_segment_and_update_s3(
         
         # These filters don't depend on session state/offset.
         filtered_segments_pre_lock = analyze_silence_gaps(raw_segments)
-        filtered_segments_pre_lock = detect_cross_segment_repetition(filtered_segments_pre_lock)
         filtered_segments_pre_lock = [s for s in filtered_segments_pre_lock if filter_by_duration_and_confidence(s)]
 
     # Instantiate a transient PII client if PII filtering is enabled
@@ -1647,7 +1566,7 @@ def process_audio_segment_and_update_s3(
             logger.warning(f"Session {session_id_for_log}: actual_segment_duration was 0. Timestamps might not advance.")
         
         # Run filters that depend on session state/offset
-        final_filtered_segments = detect_single_word_loops(filtered_segments_pre_lock, session_data, segment_offset_seconds)
+        final_filtered_segments = filtered_segments_pre_lock
         logger.debug(f"After all filtering, {len(final_filtered_segments)} segments remain for processing.")
 
         # --- NEW: Combine segments into a single block before writing ---
@@ -1676,28 +1595,25 @@ def process_audio_segment_and_update_s3(
                 session_data['prev_delivered_words'] = []
                 session_data['stream_time_s'] = 0.0
 
-            # Apply strict subtractive overlap trimming (no gap guard needed)
-            trimmed_text, reason, cut_s = maybe_trim_repetition(
-                state=session_data['hallu_state'],
-                stream_time_s=session_data['stream_time_s'],
-                prev_delivered_words=session_data['prev_delivered_words'],
-                curr_words=curr_words,
-                curr_text_raw=curr_text_raw,
+            # Apply strict subtractive overlap trimming
+            stitched_words, stitch_reason, cut_word_count = maybe_trim_repetition(
+                curr_words,
+                session_data['hallu_state']
             )
-            final_text_for_s3 = trimmed_text
-            if reason:
-                logger.warning(f"hallucination_trim reason={reason} orig={curr_text_raw[:120]!r} kept={final_text_for_s3[:120]!r}")
+            final_text_for_s3 = " ".join(w.text for w in stitched_words)
+            if stitch_reason:
+                logger.warning("hallucination_trim reason=%s orig=%r kept=%r",
+                               stitch_reason, (curr_text_raw or "")[:120], final_text_for_s3[:120])
                 # Track metrics
                 try:
                     from metrics import HALLU_TRIMS
                     provider = session_data.get("session_state", {}).get("provider_current", "unknown")
-                    HALLU_TRIMS.labels(reason=reason, provider=provider).inc()
+                    HALLU_TRIMS.labels(reason=stitch_reason, provider=provider).inc()
                 except Exception as e:
                     logger.debug(f"Failed to record hallucination trim metric: {e}")
 
-            # Update rolling tail using delivered words (not raw)
-            # small epsilon avoids jitter re-emission on boundary
-            delivered_words = curr_words if cut_s < 0 else [w for w in curr_words if w.end > cut_s + 1e-3]
+            # Update rolling tail using delivered words (stitched words)
+            delivered_words = stitched_words
             session_data['prev_delivered_words'] = (session_data['prev_delivered_words'] + delivered_words)[-200:]
             session_data['stream_time_s'] = delivered_words[-1].end if delivered_words else session_data['stream_time_s']
             original_text_for_decision = curr_text_raw or combined_text
@@ -1766,6 +1682,7 @@ def process_audio_segment_and_update_s3(
                 )
             else:
                 final_text_for_s3 = decision.final_text
+                assert final_text_for_s3.strip(), "post-ASR contract breached: empty text about to append"
 
                 # Create a single timestamp from the first segment's start to the last segment's end
                 first_segment = final_filtered_segments[0]
