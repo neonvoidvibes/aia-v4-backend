@@ -2123,8 +2123,8 @@ def _retry_worker():
         load_retry_segment, cleanup_retry_files, transcribe_chunk_with_sticky_fallback,
         _transcribe_audio_segment_openai, format_timestamp_range, is_valid_transcription
     )
-from utils.hallucination_detector import get_hallucination_manager
-from utils.transcript_format import format_transcript_line
+    from utils.hallucination_detector import get_hallucination_manager
+    from utils.transcript_format import format_transcript_line
     from utils.pii_filter import anonymize_transcript_chunk
 
     while True:
