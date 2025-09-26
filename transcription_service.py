@@ -19,6 +19,14 @@ import concurrent.futures # For parallel processing
 from event_bus import emit as emit_event
 
 from utils.hallucination_detector import DetectorState, Word, maybe_trim_repetition
+from utils.feature_flags import feature_enabled
+from utils.transcript_format import format_transcript_line
+from services.post_asr_pipeline import (
+    FeatureToggles,
+    decide_transcript_candidate,
+    DROP_NONE,
+    DROP_ASR_EMPTY,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1652,14 +1660,73 @@ def process_audio_segment_and_update_s3(
             delivered_words = curr_words if cut_s < 0 else [w for w in curr_words if w.end > cut_s + 1e-3]
             session_data['prev_delivered_words'] = (session_data['prev_delivered_words'] + delivered_words)[-200:]
             session_data['stream_time_s'] = delivered_words[-1].end if delivered_words else session_data['stream_time_s']
+            original_text_for_decision = curr_text_raw or combined_text
 
-            # Apply PII filtering to the final, corrected, combined text
-            if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
-                lang_hint = language_setting_from_client if language_setting_from_client != 'any' else language_hint_fallback
-                model_name_pii = os.getenv("PII_REDACTION_MODEL_NAME", "claude-3-haiku-20240307")
-                final_text_for_s3 = anonymize_transcript_chunk(final_text_for_s3, pii_llm_client_for_service, model_name_pii, language_hint=lang_hint)
+            pii_enabled = os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true'
+            lang_hint = language_setting_from_client if language_setting_from_client != 'any' else language_hint_fallback
+            model_name_pii = os.getenv("PII_REDACTION_MODEL_NAME", "claude-3-haiku-20240307")
 
-            if is_valid_transcription(final_text_for_s3):
+            def run_pii_stage(candidate_text: str) -> str:
+                if not pii_enabled:
+                    return candidate_text
+                return anonymize_transcript_chunk(candidate_text, pii_llm_client_for_service, model_name_pii, language_hint=lang_hint)
+
+            toggles = FeatureToggles(
+                never_empty_contract=feature_enabled('transcript.never_empty_contract', True),
+                min_size_guard=feature_enabled('transcript.min_size_guard', True),
+            )
+
+            decision = decide_transcript_candidate(
+                original_text=original_text_for_decision,
+                filtered_text=final_text_for_s3,
+                run_pii=run_pii_stage,
+                validator=is_valid_transcription,
+                toggles=toggles,
+                min_tokens=2,
+                min_chars=6,
+            )
+
+            try:
+                from metrics import (
+                    PIPELINE_ASR_EMPTY,
+                    PIPELINE_DROPS,
+                    PIPELINE_FALLBACK_USED,
+                    PIPELINE_PII_DECISIONS,
+                    PIPELINE_ZERO_AFTER_DEDUP,
+                )
+                if decision.stats.get("pre_len_tokens", 0) > 0 and decision.stats.get("post_dedup_tokens", 0) == 0:
+                    PIPELINE_ZERO_AFTER_DEDUP.labels(source=decision.metadata.get("candidate_source", "unknown")).inc()
+                if decision.used_fallback:
+                    PIPELINE_FALLBACK_USED.labels(reason=decision.metadata.get("fallback_reason", "unknown")).inc()
+                PIPELINE_PII_DECISIONS.labels(result="pass" if decision.pii_pass else "fail").inc()
+                if decision.drop_reason == DROP_ASR_EMPTY:
+                    PIPELINE_ASR_EMPTY.labels().inc()
+                if decision.drop_reason and decision.drop_reason != DROP_NONE:
+                    PIPELINE_DROPS.labels(reason=decision.drop_reason).inc()
+            except Exception as metric_e:
+                logger.debug(f"Failed to record post-ASR metrics: {metric_e}")
+
+            logger.info(
+                "Session %s: post-ASR stats seq=%s pre_tokens=%s post_trim_tokens=%s fallback=%s low_conf=%s drop=%s",
+                session_id_for_log,
+                current_seq,
+                decision.stats.get("pre_len_tokens"),
+                decision.stats.get("post_trim_tokens"),
+                decision.used_fallback,
+                decision.low_confidence,
+                decision.drop_reason,
+            )
+
+            if decision.drop_reason != DROP_NONE:
+                logger.warning(
+                    "Session %s: Dropped seq=%s after post-ASR pipeline. Reason=%s",
+                    session_id_for_log,
+                    current_seq,
+                    decision.drop_reason,
+                )
+            else:
+                final_text_for_s3 = decision.final_text
+
                 # Create a single timestamp from the first segment's start to the last segment's end
                 first_segment = final_filtered_segments[0]
                 last_segment = final_filtered_segments[-1]
@@ -1672,9 +1739,25 @@ def process_audio_segment_and_update_s3(
                 # Update context with this new valid line
                 session_data["last_successful_transcript"] = final_text_for_s3
 
+                delivery_metadata = {
+                    "low_confidence": decision.low_confidence,
+                    "used_fallback": decision.used_fallback,
+                    "drop_reason": decision.drop_reason,
+                    "fallback_reason": decision.metadata.get("fallback_reason"),
+                    "candidate_source": decision.metadata.get("candidate_source"),
+                    "pii_pass": decision.pii_pass,
+                    "stats": decision.stats,
+                }
+
                 # Try ordered delivery first, fallback to direct S3 append
                 delivered_via_ordering = False
-                logger.info(f"Session {session_id_for_log}: Processing transcript for seq={current_seq}, text='{final_text_for_s3[:50]}...'")
+                logger.info(
+                    "Session %s: Processing transcript for seq=%s, text='%s...', low_conf=%s",
+                    session_id_for_log,
+                    current_seq,
+                    final_text_for_s3[:50],
+                    decision.low_confidence,
+                )
                 try:
                     # Import the ordering function from api_server
                     from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
@@ -1686,7 +1769,8 @@ def process_audio_segment_and_update_s3(
                             seq=current_seq,
                             transcript_text=final_text_for_s3,
                             timestamp_str=timestamp_str,
-                            session_lock=session_lock
+                            session_lock=session_lock,
+                            metadata=delivery_metadata,
                         )
                         delivered_via_ordering = True
                         logger.info(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
@@ -1697,12 +1781,11 @@ def process_audio_segment_and_update_s3(
 
                 # Fallback to direct S3 append if ordering failed or is disabled
                 if not delivered_via_ordering:
-                    lines_to_append_to_s3.append(f"{timestamp_str} {final_text_for_s3}")
+                    formatted_line = format_transcript_line(timestamp_str, final_text_for_s3, delivery_metadata)
+                    lines_to_append_to_s3.append(formatted_line)
                     logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
                 else:
                     logger.info(f"Session {session_id_for_log}: Successfully delivered seq={current_seq} via ordering system (no S3 buffer needed)")
-            else:
-                logger.warning(f"Session {session_id_for_log}: Combined text was invalid after PII filtering. Final text: '{final_text_for_s3}'")
         else:
             logger.info(f"Session {session_id_for_log}: No valid segments remained after filtering, nothing to append.")
         # --- END: New segment combination logic ---

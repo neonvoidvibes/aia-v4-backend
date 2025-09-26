@@ -1872,11 +1872,18 @@ def _mark_ws_disconnected(session_id: str):
 
         logger.info(f"WebSocket disconnected for session {session_id}. Grace period until {sess['grace_deadline']}")
 
-def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str, timestamp_str: str, session_lock: threading.Lock = None) -> None:
+def try_deliver_ordered_results(
+    session_id: str,
+    seq: int,
+    transcript_text: str,
+    timestamp_str: str,
+    session_lock: threading.Lock = None,
+    metadata: Optional[dict] = None,
+) -> None:
     """Deliver transcript results in perfect order, handling gaps gracefully."""
     if not SEGMENT_RETRY_ENABLED:
         # Fallback to direct delivery if gap recovery disabled
-        _deliver_to_client_and_s3(session_id, seq, transcript_text, timestamp_str)
+        _deliver_to_client_and_s3(session_id, seq, transcript_text, timestamp_str, metadata)
         return
 
     lock_to_use = session_lock or session_locks.get(session_id, threading.Lock())
@@ -1893,7 +1900,7 @@ def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str,
 
         if seq == expected_seq:
             # Perfect order - deliver immediately
-            _deliver_to_client_and_s3(session_id, seq, transcript_text, timestamp_str)
+            _deliver_to_client_and_s3(session_id, seq, transcript_text, timestamp_str, metadata)
             sess["expected_seq"] = seq + 1
             sess["max_delivered_seq"] = seq
 
@@ -1903,7 +1910,8 @@ def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str,
                 pending_data = pending_seqs.pop(next_seq)
                 _deliver_to_client_and_s3(session_id, next_seq,
                                         pending_data["text"],
-                                        pending_data["timestamp_str"])
+                                        pending_data["timestamp_str"],
+                                        pending_data.get("metadata"))
                 sess["expected_seq"] = next_seq + 1
                 sess["max_delivered_seq"] = next_seq
 
@@ -1914,6 +1922,7 @@ def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str,
             pending_seqs[seq] = {
                 "text": transcript_text,
                 "timestamp_str": timestamp_str,
+                "metadata": metadata or {},
                 "received_at": time.time()
             }
             sess["pending_seqs"] = pending_seqs
@@ -1928,7 +1937,8 @@ def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str,
                 gap_marker = f"[Gap: Missing segments {expected_seq}-{oldest_seq-1}]"
                 _deliver_to_client_and_s3(session_id, oldest_seq,
                                         gap_marker + " " + oldest_data["text"],
-                                        oldest_data["timestamp_str"])
+                                        oldest_data["timestamp_str"],
+                                        oldest_data.get("metadata"))
 
                 sess["expected_seq"] = oldest_seq + 1
                 sess["max_delivered_seq"] = oldest_seq
@@ -1953,10 +1963,11 @@ def try_deliver_ordered_results(session_id: str, seq: int, transcript_text: str,
             gap_marker = f"[Delayed segment seq={expired_seq}]"
             _deliver_to_client_and_s3(session_id, expired_seq,
                                     gap_marker + " " + expired_data["text"],
-                                    expired_data["timestamp_str"])
+                                    expired_data["timestamp_str"],
+                                    expired_data.get("metadata"))
             logger.warning(f"Session {session_id}: Delivered expired seq={expired_seq} after timeout")
 
-def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, timestamp_str: str) -> None:
+def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, timestamp_str: str, metadata: Optional[dict] = None) -> None:
     """Deliver transcript to both client and S3."""
     try:
         sess = active_sessions.get(session_id)
@@ -1965,6 +1976,8 @@ def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, t
 
         # Append to S3 (reuse existing S3 logic)
         s3_transcript_key = sess.get('s3_transcript_key')
+        metadata = metadata or {}
+
         if s3_transcript_key:
             from utils.s3_utils import get_s3_client
             s3 = get_s3_client()
@@ -1991,7 +2004,8 @@ def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, t
                         existing_content += "\n"
 
                     # Append new line
-                    new_line = f"{timestamp_str} {transcript_text}\n"
+                    formatted_line = format_transcript_line(timestamp_str, transcript_text, metadata)
+                    new_line = f"{formatted_line}\n"
                     updated_content = existing_content + new_line
 
                     # Write back to S3
@@ -2013,6 +2027,15 @@ def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, t
                 "timestamp_str": timestamp_str,
                 "segment_seq": seq  # Include segment sequence for debugging
             }
+            result_data["low_confidence"] = bool(metadata.get("low_confidence"))
+            result_data["used_fallback"] = bool(metadata.get("used_fallback"))
+            result_data["drop_reason"] = metadata.get("drop_reason", "NONE")
+            if metadata.get("fallback_reason"):
+                result_data["fallback_reason"] = metadata["fallback_reason"]
+            if metadata.get("stats"):
+                result_data["postprocess_stats"] = metadata["stats"]
+            if metadata.get("pii_pass") is not None:
+                result_data["pii_pass"] = metadata["pii_pass"]
             recent_results.append(result_data)
             sess["next_seq"] = next_ws_seq + 1
 
@@ -2100,7 +2123,8 @@ def _retry_worker():
         load_retry_segment, cleanup_retry_files, transcribe_chunk_with_sticky_fallback,
         _transcribe_audio_segment_openai, format_timestamp_range, is_valid_transcription
     )
-    from utils.hallucination_detector import get_hallucination_manager
+from utils.hallucination_detector import get_hallucination_manager
+from utils.transcript_format import format_transcript_line
     from utils.pii_filter import anonymize_transcript_chunk
 
     while True:
