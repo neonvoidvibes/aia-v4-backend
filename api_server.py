@@ -2410,10 +2410,7 @@ def audio_stream_socket(ws, session_id: str):
         logger.debug(f"Session {session_id}: Failed to send hello on WebSocket connect: {e}")
 
     PING_INTERVAL_SECONDS = 5
-    MAX_MISSED_PONGS = 3
     last_ping_sent = time.time()
-    awaiting_pong = False
-    missed_pongs = 0
 
     AUDIO_SEGMENT_DURATION_SECONDS_TARGET = 15 
 
@@ -2424,28 +2421,10 @@ def audio_stream_socket(ws, session_id: str):
                 try:
                     ws.send(json.dumps({"type": "ping", "ts": int(now)}))
                     last_ping_sent = now
-                    if awaiting_pong:
-                        missed_pongs += 1
-                    else:
-                        missed_pongs = 0
-                    awaiting_pong = True
                 except ConnectionClosed:
                     raise
                 except Exception as ping_error:
                     logger.warning(f"Session {session_id}: Failed to send ping: {ping_error}")
-                    break
-
-                if missed_pongs >= MAX_MISSED_PONGS:
-                    logger.warning(f"Session {session_id}: Missed {missed_pongs} pong responses, closing WebSocket.")
-                    try:
-                        with session_locks[session_id]:
-                            sess = active_sessions.get(session_id)
-                            if sess is not None:
-                                sess["ws_disconnected"] = True
-                                sess["last_disconnect_ts"] = time.time()
-                                sess["grace_deadline"] = sess["last_disconnect_ts"] + REATTACH_GRACE_SECONDS
-                    except Exception as state_err:
-                        logger.debug(f"Session {session_id}: failed to set disconnect state: {state_err}")
                     break
 
             try:
@@ -2481,8 +2460,6 @@ def audio_stream_socket(ws, session_id: str):
                     msg_type = control_msg.get("type")
 
                     if msg_type == "pong" or action == "pong":
-                        awaiting_pong = False
-                        missed_pongs = 0
                         continue
 
                     if msg_type == "ping" and action is None:
