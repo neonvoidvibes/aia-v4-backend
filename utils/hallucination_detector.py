@@ -5,7 +5,7 @@ Includes seed-head repeat dampener to prevent chant loops.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Deque
+from typing import List, Tuple, Deque, Optional
 from collections import deque
 import re
 
@@ -105,12 +105,21 @@ def maybe_trim_repetition(
     Tunables are explicit and defaulted; call-sites can pass overrides for A/B.
     """
     if not words or len(words) < min_segment_tokens:
+        # Still update context even for short segments
+        if words:
+            head_norm = [w.norm for w in words if w.norm]
+            state.last_tokens = (state.last_tokens + head_norm)[-200:]
         return words, None, 0
 
     ctx_tail = state.tail_tokens(limit=max_context_tokens)
-    seg_head = [w.norm for w in words]
+    seg_head = [w.norm for w in words if w.norm]
 
     if not ctx_tail or not seg_head:
+        # Still update context even if no overlap detection
+        head_norm = [w.norm for w in words if w.norm]
+        # DEBUG: print(f'Early return: ctx_tail={ctx_tail}, seg_head={seg_head}, head_norm={head_norm}')
+        state.last_tokens = (state.last_tokens + head_norm)[-200:]
+        # DEBUG: print(f'Context after update: {state.last_tokens}')
         return words, None, 0
 
     # Compute suffix-prefix overlap length (context suffix vs current head).
