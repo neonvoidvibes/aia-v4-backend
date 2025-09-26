@@ -46,6 +46,7 @@ from langchain_core.documents import Document
 from utils.retrieval_handler import RetrievalHandler
 from utils.prompt_builder import prompt_builder
 from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder, list_saved_transcripts
+from utils.transcript_format import format_transcript_line
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, get_event_docs, parse_event_doc_key, save_chat_to_s3, format_chat_history, get_s3_client,
