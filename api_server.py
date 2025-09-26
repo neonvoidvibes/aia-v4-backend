@@ -2,6 +2,10 @@ import os
 from dotenv import load_dotenv
 load_dotenv() # Load environment variables at the very top
 
+# Ensure module is accessible as "api_server" even when executed as __main__
+import sys as _sys
+_sys.modules.setdefault("api_server", _sys.modules[__name__])
+
 # Quiet gRPC/absl noise unless explicitly overridden
 os.environ.setdefault('GRPC_VERBOSITY', 'ERROR')
 os.environ.setdefault('GRPC_LOG_SEVERITY_LEVEL', 'ERROR')
