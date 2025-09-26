@@ -2871,45 +2871,6 @@ def get_recording_status_route():
     status_data = _get_current_recording_status_snapshot(session_id_param)
     return jsonify(status_data), 200
 
-@app.route('/api/session/<session_id>/status', methods=['GET'])
-@supabase_auth_required(agent_required=False)
-def get_session_status(session_id: str):
-    """Get session status including WebSocket connection state and reattachment info."""
-    user = g.user
-
-    with session_locks.get(session_id, threading.Lock()):
-        sess = active_sessions.get(session_id)
-        if not sess:
-            return jsonify({"error": "Session not found"}), 404
-
-        # Check if user owns this session
-        if sess.get("user_id") != user.id:
-            return jsonify({"error": "Access denied"}), 403
-
-        session_state = sess.get("session_state")
-        if session_state and session_state.last_status:
-            # Return the stored status from session_state
-            response_data = {
-                "session_id": session_id,
-                "is_active": sess.get("is_active", False),
-                "has_websocket": sess.get("websocket_connection") is not None,
-                "ws_connected": session_state.ws_connected,
-                "reattach_deadline": session_state.reattach_deadline.isoformat() if session_state.reattach_deadline else None,
-                "is_reattach_expired": session_state.is_reattach_expired() if session_state.reattach_deadline else None,
-                **session_state.last_status
-            }
-        else:
-            # Fallback for sessions without session_state
-            response_data = {
-                "session_id": session_id,
-                "is_active": sess.get("is_active", False),
-                "has_websocket": sess.get("websocket_connection") is not None,
-                "type": "status",
-                "state": "ACTIVE" if sess.get("is_active") else "INACTIVE"
-            }
-
-    return jsonify(response_data), 200
-
 @app.route('/api/index/<string:index_name>/stats', methods=['GET'])
 def get_pinecone_index_stats(index_name: str):
     logger.info(f"Request received for stats of index: {index_name}")
