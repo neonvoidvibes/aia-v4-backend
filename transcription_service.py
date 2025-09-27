@@ -1681,7 +1681,9 @@ def process_audio_segment_and_update_s3(
                     metrics_collector.track_empty_after_trim(provider=provider, language=language)
 
             # Track context length for capacity monitoring
-            metrics_collector.track_context_length(len(session_data['hallu_state'].last_tokens), provider=provider, language=language)
+            hallu_state = session_data.get('hallu_state')
+            if hallu_state:
+                metrics_collector.track_context_length(len(hallu_state.last_tokens), provider=provider, language=language)
 
             # Track first utterance patterns (low-cardinality)
             if curr_words:
@@ -1733,7 +1735,7 @@ def process_audio_segment_and_update_s3(
                     min_chars=6,
                     provider=provider,
                     language=language,
-                    detector_state=session_data['hallu_state'],
+                    detector_state=session_data.get('hallu_state'),
                 )
 
             try:

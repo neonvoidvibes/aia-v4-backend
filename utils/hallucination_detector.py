@@ -9,6 +9,18 @@ from typing import List, Tuple, Deque, Optional
 from collections import deque
 import re
 import time
+import logging
+
+# Setup logger
+logger = logging.getLogger(__name__)
+
+# Feature flag for debug logging (can be set via environment or config)
+ENABLE_DETECTOR_DEBUG = False
+try:
+    from utils.feature_flags import feature_enabled
+    ENABLE_DETECTOR_DEBUG = feature_enabled('hallucination.detector_debug', False)
+except ImportError:
+    pass
 
 try:
     from .hallucination_metrics_v2 import metrics_collector
@@ -92,7 +104,8 @@ def _lcs_suffix_prefix_overlap(tail: List[str], head: List[str]) -> int:
             if match_len >= 3:  # Minimum meaningful overlap
                 max_overlap = max(max_overlap, match_len)
 
-    print(f"OVERLAP_DEBUG: _lcs_overlap result={max_overlap} (suffix-prefix or sliding window)")
+    if ENABLE_DETECTOR_DEBUG:
+        logger.debug(f"_lcs_overlap result={max_overlap} (suffix-prefix or sliding window)")
     return max_overlap
 
 @dataclass
@@ -178,12 +191,13 @@ def maybe_trim_repetition(
     seg_head = [w.norm for w in words if w.norm]
 
     # DEBUG: Log overlap detection details
-    print(f"OVERLAP_DEBUG: ctx_tail={ctx_tail[-10:] if ctx_tail else []}, seg_head={seg_head[:10]}")
-    print(f"OVERLAP_DEBUG: context_len={len(state.last_tokens)}, seg_head_len={len(seg_head)}")
+    if ENABLE_DETECTOR_DEBUG:
+        logger.debug(f"ctx_tail={ctx_tail[-10:] if ctx_tail else []}, seg_head={seg_head[:10]}")
+        logger.debug(f"context_len={len(state.last_tokens)}, seg_head_len={len(seg_head)}")
 
     # Check for n-gram loops before processing overlap
     if seg_head and state.check_ngram_loops(seg_head):
-        print(f"NGRAM_LOOP_DEBUG: detected repeating n-gram pattern, trimming entire segment")
+        logger.warning(f"detected repeating n-gram pattern, trimming entire segment")
         # Trim the entire segment as it's a detected loop
         state.last_tokens = (state.last_tokens + seg_head)[-200:]  # Still update context
         return [], "ngram_loop_detected", len(words)
@@ -194,7 +208,8 @@ def maybe_trim_repetition(
         state.last_tokens = (state.last_tokens + head_norm)[-200:]
         # Track n-grams from processed tokens
         _track_ngrams_from_tokens(state, head_norm)
-        print(f"OVERLAP_DEBUG: No ctx_tail or seg_head, updated context to len={len(state.last_tokens)}")
+        if ENABLE_DETECTOR_DEBUG:
+            logger.debug(f"No ctx_tail or seg_head, updated context to len={len(state.last_tokens)}")
         return words, None, 0
 
     # Track trim attempt with phase detection
@@ -203,7 +218,8 @@ def maybe_trim_repetition(
 
     # Compute suffix-prefix overlap length (context suffix vs current head).
     overlap = _lcs_suffix_prefix_overlap(ctx_tail, seg_head)
-    print(f"OVERLAP_DEBUG: suffix-prefix overlap={overlap} between ctx_tail={ctx_tail} and seg_head={seg_head}")
+    if ENABLE_DETECTOR_DEBUG:
+        logger.debug(f"suffix-prefix overlap={overlap} between ctx_tail={ctx_tail} and seg_head={seg_head}")
 
     # Bootstrap: in the first few tokens of context, use a relaxed threshold so
     # immediate repeats of the greeting are trimmed cleanly.
@@ -212,12 +228,15 @@ def maybe_trim_repetition(
         boot_min = 2
         boot_ratio = 0.50
         threshold = max(boot_min, int(len(seg_head) * boot_ratio))
-        print(f"OVERLAP_DEBUG: BOOTSTRAP mode - threshold={threshold} (boot_min={boot_min}, seg_head_len*{boot_ratio}={int(len(seg_head) * boot_ratio)})")
+        if ENABLE_DETECTOR_DEBUG:
+            logger.debug(f"BOOTSTRAP mode - threshold={threshold} (boot_min={boot_min}, seg_head_len*{boot_ratio}={int(len(seg_head) * boot_ratio)})")
     else:
         threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
-        print(f"OVERLAP_DEBUG: NORMAL mode - threshold={threshold} (min_tokens={min_overlap_tokens}, seg_head_len*{overlap_ratio}={int(len(seg_head) * overlap_ratio)})")
+        if ENABLE_DETECTOR_DEBUG:
+            logger.debug(f"NORMAL mode - threshold={threshold} (min_tokens={min_overlap_tokens}, seg_head_len*{overlap_ratio}={int(len(seg_head) * overlap_ratio)})")
 
-    print(f"OVERLAP_DEBUG: overlap={overlap} vs threshold={threshold}, will_trim={overlap >= threshold}")
+    if ENABLE_DETECTOR_DEBUG:
+        logger.debug(f"overlap={overlap} vs threshold={threshold}, will_trim={overlap >= threshold}")
     if overlap >= threshold:
         cut = min(overlap, len(words))
         trimmed = words[cut:]
@@ -227,7 +246,8 @@ def maybe_trim_repetition(
         if not trimmed:
             # For streaming mode: prefer empty result over restoring original repetitive text
             # This prevents "chant resurrection" - return empty with reason instead
-            print(f"TRIM_DEBUG: full trim resulted in empty, blocking original restore with reason=restored_original_blocked")
+            if ENABLE_DETECTOR_DEBUG:
+                logger.debug(f"full trim resulted in empty, blocking original restore with reason=restored_original_blocked")
             # Note: provider/language passed from call site via thread-local or params
             pass  # Will be tracked at call site
 
@@ -318,7 +338,7 @@ def detect_repetition_in_text(text: str, state: DetectorState) -> bool:
 
     # Convert text to normalized tokens
     tokens = _normalize_tokens(text)
-    if len(tokens) < 3:
+    if len(tokens) < 6:  # Performance guard: skip short sequences
         return False
 
     # Check for immediate repetition patterns using n-gram similarity
@@ -336,17 +356,25 @@ def detect_repetition_in_text(text: str, state: DetectorState) -> bool:
         head_tokens = tokens[:min(15, len(tokens))]  # Increased head window
 
         if len(ctx_tail) >= 3 and len(head_tokens) >= 3:
-            # Check n-gram similarity for different n values
+            # Check traditional overlap first (faster)
+            overlap = _lcs_suffix_prefix_overlap(ctx_tail, head_tokens)
+            if overlap >= 3:  # Minimum meaningful repetition - early exit
+                return True
+
+            # Only do expensive Jaccard if traditional overlap didn't find it
+            overlapping_ngrams = 0
             for n in range(2, min(5, len(head_tokens) + 1, len(ctx_tail) + 1)):
                 jaccard = _compute_ngram_jaccard(ctx_tail, head_tokens, n)
-                # Threshold: 0.6 or higher indicates significant similarity
-                if jaccard >= 0.6:
-                    print(f"REPETITION_DEBUG: detected cross-segment repetition n={n} jaccard={jaccard:.3f}")
-                    return True
+                # Progressive thresholds: more strict for longer n-grams
+                threshold = 0.5 if n == 2 else (0.6 if n == 3 else 0.7)
+                if jaccard >= threshold:
+                    overlapping_ngrams += 1
+                    if ENABLE_DETECTOR_DEBUG:
+                        logger.debug(f"n={n} jaccard={jaccard:.3f} >= {threshold}")
 
-        # Fallback to traditional suffix-prefix overlap for edge cases
-        overlap = _lcs_suffix_prefix_overlap(ctx_tail, head_tokens)
-        if overlap >= 3:  # Minimum meaningful repetition
-            return True
+            # Require at least 2 different n-gram sizes to match to reduce false positives
+            if overlapping_ngrams >= 2:
+                logger.warning(f"detected cross-segment repetition with {overlapping_ngrams} matching n-gram sizes")
+                return True
 
     return False
