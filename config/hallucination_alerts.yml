@@ -1,0 +1,259 @@
+---
+# Hallucination filtering system alert configuration
+# These alerts monitor the health and performance of the refactored system
+
+groups:
+  - name: hallucination_filtering_safety
+    rules:
+      - alert: HallucinationFalseDropsHigh
+        expr: |
+          (
+            increase(hallucination_false_drops_total[5m]) /
+            increase(hallucination_segments_processed_total[5m])
+          ) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+          component: hallucination_filtering
+          type: safety
+        annotations:
+          summary: "False drop rate above 1% - {{ $value | humanizePercentage }}"
+          description: |
+            The hallucination filter is dropping {{ $value | humanizePercentage }} of segments
+            for reasons other than ASR_EMPTY. This may indicate over-aggressive filtering.
+            Target: <0.5%. Current: {{ $value | humanizePercentage }}
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+      - alert: HallucinationEmptyAfterTrim
+        expr: increase(hallucination_empty_after_trim_total[10m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          component: hallucination_filtering
+          type: bug
+        annotations:
+          summary: "Segments becoming empty after trimming - bug indicator"
+          description: |
+            {{ $value }} segments became empty after overlap trimming in the last 10 minutes.
+            This should be ~0% and indicates a bug in the trimming logic.
+
+      - alert: HallucinationFallbackPressureHigh
+        expr: |
+          (
+            increase(hallucination_fallback_usage_total[10m]) /
+            increase(hallucination_segments_processed_total[10m])
+          ) > 0.08
+        for: 5m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: quality
+        annotations:
+          summary: "Fallback pressure above 8% - {{ $value | humanizePercentage }}"
+          description: |
+            The system is falling back to original text in {{ $value | humanizePercentage }} of cases.
+            Target: 2-5% steady. Current: {{ $value | humanizePercentage }}
+            This may indicate aggressive filtering or poor ASR quality.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+  - name: hallucination_filtering_efficiency
+    rules:
+      - alert: HallucinationTrimEfficiencyEarlyLow
+        expr: |
+          (
+            rate(hallucination_trim_efficiency_trimmed_total{session_age_bucket="0-5s"}[10m]) /
+            rate(hallucination_trim_efficiency_total{session_age_bucket="0-5s"}[10m])
+          ) < 0.10
+        for: 10m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: efficiency
+        annotations:
+          summary: "Early session trim efficiency below 10% - {{ $value | humanizePercentage }}"
+          description: |
+            Bootstrap trimming is only catching {{ $value | humanizePercentage }} of segments
+            in the first 5 seconds. Target: 10-30%. This may indicate the bootstrap
+            thresholds need adjustment.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+      - alert: HallucinationTrimEfficiencyLateHigh
+        expr: |
+          (
+            rate(hallucination_trim_efficiency_trimmed_total{session_age_bucket="30s+"}[10m]) /
+            rate(hallucination_trim_efficiency_total{session_age_bucket="30s+"}[10m])
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: efficiency
+        annotations:
+          summary: "Late session trim rate above 5% - {{ $value | humanizePercentage }}"
+          description: |
+            Overlap trimming is still occurring in {{ $value | humanizePercentage }} of segments
+            after 30+ seconds. Target: <5%. This may indicate ongoing repetition issues.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+      - alert: HallucinationFirstUtteranceDuplicatesHigh
+        expr: |
+          (
+            increase(hallucination_first_utterance_duplicates_total[1h]) /
+            increase(hallucination_first_utterance_sessions_total[1h])
+          ) > 0.03
+        for: 15m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: quality
+        annotations:
+          summary: "First utterance duplicate rate above 3% - {{ $value | humanizePercentage }}"
+          description: |
+            {{ $value | humanizePercentage }} of sessions have duplicate first utterances
+            in the first 3 segments. Target: <3% after bootstrap changes.
+            This indicates the bootstrap fix may not be working as expected.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+  - name: hallucination_filtering_performance
+    rules:
+      - alert: HallucinationPostASRLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            rate(hallucination_post_asr_decision_duration_seconds_bucket[5m])
+          ) * 1000 > 3
+        for: 5m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: performance
+        annotations:
+          summary: "Post-ASR decision P95 latency above 3ms - {{ $value }}ms"
+          description: |
+            Post-ASR decision pipeline P95 latency is {{ $value }}ms.
+            Budget: ≤3ms P95. This may impact real-time processing.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+      - alert: HallucinationSegmentLatencyRegression
+        expr: |
+          (
+            histogram_quantile(0.95,
+              rate(hallucination_segment_processing_duration_seconds_bucket[5m])
+            ) -
+            histogram_quantile(0.95,
+              rate(hallucination_segment_processing_duration_seconds_bucket[1h] offset 1d)
+            )
+          ) / histogram_quantile(0.95,
+            rate(hallucination_segment_processing_duration_seconds_bucket[1h] offset 1d)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: performance
+        annotations:
+          summary: "Segment processing latency regression >5%"
+          description: |
+            End-to-end segment processing P95 latency has regressed by >5% compared to yesterday.
+            Current P95: {{ $value }}s. No regression >5% allowed.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+  - name: hallucination_filtering_health
+    rules:
+      - alert: HallucinationContextResets
+        expr: increase(hallucination_context_resets_total[10m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: health
+        annotations:
+          summary: "Context resets detected - {{ $value }} in last 10m"
+          description: |
+            {{ $value }} context resets occurred in the last 10 minutes.
+            Target: ~0%. This may indicate session restarts or errors.
+            Reason: {{ $labels.reason }}, Provider: {{ $labels.provider }}
+
+      - alert: HallucinationValidatorFailureHigh
+        expr: |
+          (
+            increase(hallucination_validator_outcomes_total{outcome="fail"}[10m]) /
+            increase(hallucination_validator_outcomes_total[10m])
+          ) > 0.003
+        for: 5m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: quality
+        annotations:
+          summary: "Validator failure rate above 0.3% - {{ $value | humanizePercentage }}"
+          description: |
+            Text validator is failing {{ $value | humanizePercentage }} of segments.
+            Target: <0.3%. This may indicate text quality issues.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+      - alert: HallucinationPIIErrors
+        expr: |
+          (
+            increase(hallucination_pii_outcomes_total{outcome="error"}[10m]) /
+            increase(hallucination_pii_outcomes_total[10m])
+          ) > 0.001
+        for: 2m
+        labels:
+          severity: critical
+          component: hallucination_filtering
+          type: integration
+        annotations:
+          summary: "PII processing error rate above 0.1% - {{ $value | humanizePercentage }}"
+          description: |
+            PII processing is failing in {{ $value | humanizePercentage }} of cases.
+            Target: ~0%. This may indicate PII service issues.
+            Provider: {{ $labels.provider }}, Language: {{ $labels.language }}
+
+# SLO definitions for dashboard and long-term monitoring
+slos:
+  - name: hallucination_filtering_reliability
+    description: "System reliability and safety metrics"
+    objectives:
+      - metric: false_drop_rate
+        target: 0.005  # 0.5%
+        critical: 0.01  # 1%
+      - metric: empty_after_trim_rate
+        target: 0.0  # 0%
+        critical: 0.001  # Any spike
+      - metric: fallback_rate
+        target_min: 0.02  # 2%
+        target_max: 0.05  # 5%
+        investigate: 0.08  # 8%
+
+  - name: hallucination_filtering_efficiency
+    description: "Trimming efficiency by session phase"
+    objectives:
+      - metric: early_trim_rate
+        target_min: 0.10  # 10%
+        target_max: 0.30  # 30%
+        session_age: "0-5s"
+      - metric: late_trim_rate
+        target: 0.05  # <5%
+        session_age: "30s+"
+      - metric: first_utterance_duplicate_rate
+        target: 0.03  # <3%
+
+  - name: hallucination_filtering_performance
+    description: "Latency and performance targets"
+    objectives:
+      - metric: post_asr_decision_p95
+        target: 0.003  # 3ms
+        unit: seconds
+      - metric: segment_processing_regression
+        target: 0.05  # <5% regression
+        comparison: daily
+
+  - name: hallucination_filtering_quality
+    description: "Content and integration quality"
+    objectives:
+      - metric: validator_fail_rate
+        target: 0.003  # 0.3%
+      - metric: pii_error_rate
+        target: 0.0  # ~0%
+      - metric: context_reset_rate
+        target: 0.0  # ~0%

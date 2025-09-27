@@ -1,8 +1,43 @@
 """Post-ASR text selection and fallback logic."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
+
+try:
+    from utils.hallucination_metrics_v2 import (
+        metrics_collector, DropReason, FallbackReason, OutcomeType
+    )
+except ImportError:
+    # Fallback if metrics not available
+    class NullMetricsCollector:
+        def track_post_asr_decision(self, *args, **kwargs): pass
+        def track_drop(self, *args, **kwargs): pass
+        def track_fallback(self, *args, **kwargs): pass
+        def track_validator_outcome(self, *args, **kwargs): pass
+        def track_pii_outcome(self, *args, **kwargs): pass
+        def time_post_asr_decision(self, *args, **kwargs):
+            class NullTimer:
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+            return NullTimer()
+    metrics_collector = NullMetricsCollector()
+    # Enum fallbacks
+    class DropReason:
+        ASR_EMPTY = "asr_empty"
+        FILTER_EMPTY = "filter_empty"
+        PII_ERROR = "pii_error"
+        PII_BLOCKED = "pii_blocked"
+    class FallbackReason:
+        PIPELINE_EMPTY = "pipeline_empty"
+        MIN_SIZE = "min_size"
+        PII_INVALID = "pii_invalid"
+    class OutcomeType:
+        PASS = "pass"
+        FAIL = "fail"
+        ERROR = "error"
+        REDACT = "redact"
 
 
 def _count_tokens(text: str) -> int:
@@ -48,8 +83,31 @@ def decide_transcript_candidate(
     toggles: FeatureToggles,
     min_tokens: int = 2,
     min_chars: int = 6,
+    provider: str = "unknown",
+    language: str = "unknown",
 ) -> PostAsrDecision:
     """Select the transcript candidate to append, applying fallbacks when needed."""
+    with metrics_collector.time_post_asr_decision(provider=provider, language=language):
+        return _decide_transcript_candidate_impl(
+            original_text, filtered_text, run_pii, validator,
+            toggles=toggles, min_tokens=min_tokens, min_chars=min_chars,
+            provider=provider, language=language
+        )
+
+
+def _decide_transcript_candidate_impl(
+    original_text: str,
+    filtered_text: str,
+    run_pii: Callable[[str], str],
+    validator: Callable[[str], bool],
+    *,
+    toggles: FeatureToggles,
+    min_tokens: int = 2,
+    min_chars: int = 6,
+    provider: str = "unknown",
+    language: str = "unknown",
+) -> PostAsrDecision:
+    """Implementation with metrics tracking."""
     original = (original_text or "").strip()
     filtered = (filtered_text or "").strip()
 
@@ -63,7 +121,7 @@ def decide_transcript_candidate(
 
     # Early exit when ASR produced nothing
     if not original:
-        return PostAsrDecision(
+        decision = PostAsrDecision(
             final_text="",
             low_confidence=False,
             used_fallback=False,
@@ -72,6 +130,8 @@ def decide_transcript_candidate(
             stats=stats,
             metadata={"candidate_source": "none"},
         )
+        # Don't track ASR_EMPTY as false drop
+        return decision
 
     candidate = filtered
     candidate_source = "filtered"
@@ -97,7 +157,7 @@ def decide_transcript_candidate(
 
     if not candidate:
         # No candidate even after fallback (likely because toggles disabled)
-        return PostAsrDecision(
+        decision = PostAsrDecision(
             final_text="",
             low_confidence=False,
             used_fallback=used_fallback,
@@ -109,16 +169,26 @@ def decide_transcript_candidate(
                 "fallback_reason": fallback_reason,
             },
         )
+        # Track drop
+        metrics_collector.track_post_asr_decision("dropped", provider=provider, language=language)
+        metrics_collector.track_drop(DropReason.FILTER_EMPTY, provider=provider, language=language)
+        return decision
 
     def _run_pii_candidate(text: str) -> Optional[str]:
         try:
-            return run_pii(text)
+            result = run_pii(text)
+            if result != text:
+                metrics_collector.track_pii_outcome(OutcomeType.REDACT, provider=provider, language=language)
+            else:
+                metrics_collector.track_pii_outcome(OutcomeType.PASS, provider=provider, language=language)
+            return result
         except Exception:
+            metrics_collector.track_pii_outcome(OutcomeType.ERROR, provider=provider, language=language)
             return None
 
     pii_result = _run_pii_candidate(candidate)
     if pii_result is None:
-        return PostAsrDecision(
+        decision = PostAsrDecision(
             final_text="",
             low_confidence=low_confidence,
             used_fallback=used_fallback,
@@ -130,6 +200,10 @@ def decide_transcript_candidate(
                 "fallback_reason": fallback_reason,
             },
         )
+        # Track drop
+        metrics_collector.track_post_asr_decision("dropped", provider=provider, language=language)
+        metrics_collector.track_drop(DropReason.PII_ERROR, provider=provider, language=language)
+        return decision
 
     if validator(pii_result):
         stats["pii_pass"] = 1
@@ -138,7 +212,7 @@ def decide_transcript_candidate(
             "fallback_reason": fallback_reason,
             "final_source": candidate_source,
         }
-        return PostAsrDecision(
+        decision = PostAsrDecision(
             final_text=pii_result,
             low_confidence=low_confidence,
             used_fallback=used_fallback,
@@ -147,6 +221,19 @@ def decide_transcript_candidate(
             stats=stats,
             metadata=metadata,
         )
+        # Track validator pass
+        metrics_collector.track_validator_outcome(OutcomeType.PASS, provider=provider, language=language)
+        # Track successful processing or fallback
+        if used_fallback:
+            metrics_collector.track_post_asr_decision("fallback", provider=provider, language=language)
+            # Map fallback reason to enum
+            if fallback_reason == FALLBACK_PIPELINE_EMPTY:
+                metrics_collector.track_fallback(FallbackReason.PIPELINE_EMPTY, provider=provider, language=language)
+            elif fallback_reason == FALLBACK_MIN_SIZE:
+                metrics_collector.track_fallback(FallbackReason.MIN_SIZE, provider=provider, language=language)
+        else:
+            metrics_collector.track_post_asr_decision("kept", provider=provider, language=language)
+        return decision
 
     # PII rejected the filtered candidate; attempt fallback to original if allowed
     if toggles.never_empty_contract and candidate_source != "original" and original:
@@ -175,7 +262,7 @@ def decide_transcript_candidate(
 
     # Final failure path: record PII rejection
     stats["pii_pass"] = 0
-    return PostAsrDecision(
+    decision = PostAsrDecision(
         final_text="",
         low_confidence=low_confidence,
         used_fallback=used_fallback,
@@ -188,3 +275,8 @@ def decide_transcript_candidate(
             "final_source": "none",
         },
     )
+    # Track validator fail and drop
+    metrics_collector.track_validator_outcome(OutcomeType.FAIL, provider=provider, language=language)
+    metrics_collector.track_post_asr_decision("dropped", provider=provider, language=language)
+    metrics_collector.track_drop(DropReason.PII_BLOCKED, provider=provider, language=language)
+    return decision

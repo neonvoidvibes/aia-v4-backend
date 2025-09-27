@@ -8,11 +8,25 @@ from dataclasses import dataclass
 from typing import List, Tuple, Deque, Optional
 from collections import deque
 import re
+import time
+
+try:
+    from .hallucination_metrics_v2 import metrics_collector
+except ImportError:
+    # Fallback if metrics not available
+    class NullMetricsCollector:
+        def track_trim_attempt(self, *args, **kwargs): pass
+        def track_trim_applied(self, *args, **kwargs): pass
+        def track_empty_after_trim(self, *args, **kwargs): pass
+        def track_context_length(self, *args, **kwargs): pass
+    metrics_collector = NullMetricsCollector()
 
 # Configuration constants
-_MIN_OVERLAP_TOKENS = 12
+# Lower minimum so early repeats like "hallå nu testar jag" are trimmed.
+_MIN_OVERLAP_TOKENS = 3
 _MAX_CONTEXT_TOKENS = 50
 _MIN_SEGMENT_TOKENS = 6
+# Keep ratio; bootstrap will relax it briefly.
 _OVERLAP_RATIO = 0.60
 
 # Regex patterns for normalization
@@ -117,26 +131,45 @@ def maybe_trim_repetition(
     if not ctx_tail or not seg_head:
         # Still update context even if no overlap detection
         head_norm = [w.norm for w in words if w.norm]
-        # DEBUG: print(f'Early return: ctx_tail={ctx_tail}, seg_head={seg_head}, head_norm={head_norm}')
         state.last_tokens = (state.last_tokens + head_norm)[-200:]
-        # DEBUG: print(f'Context after update: {state.last_tokens}')
         return words, None, 0
+
+    # Track trim attempt with phase detection
+    context_len = len(state.last_tokens)
+    # Note: metrics_collector handles provider/language from call site
 
     # Compute suffix-prefix overlap length (context suffix vs current head).
     overlap = _lcs_suffix_prefix_overlap(ctx_tail, seg_head)
-    threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
+
+    # Bootstrap: in the first few tokens of context, use a relaxed threshold so
+    # immediate repeats of the greeting are trimmed cleanly.
+    # This avoids needing time-based logic and keeps trimming purely boundary-based.
+    if context_len < 8:
+        boot_min = 2
+        boot_ratio = 0.50
+        threshold = max(boot_min, int(len(seg_head) * boot_ratio))
+    else:
+        threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
     if overlap >= threshold:
         cut = min(overlap, len(words))
         trimmed = words[cut:]
         reason = f"trimmed_overlap:{overlap}"
+
+        # Track empty-after-trim sentinel (bug detector)
+        if not trimmed:
+            # Note: provider/language passed from call site via thread-local or params
+            pass  # Will be tracked at call site
+
         # update rolling context with the tokens we will KEEP
         kept_norm = [w.norm for w in trimmed if w.norm]
         state.last_tokens = (state.last_tokens + kept_norm)[-200:]
+
         return trimmed, reason, cut
 
     # no trim; still advance context with head (bounded)
     head_norm = [w.norm for w in words if w.norm]
     state.last_tokens = (state.last_tokens + head_norm)[-200:]
+
     return words, None, 0
 
 # Backward compatibility functions for existing code

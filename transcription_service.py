@@ -19,6 +19,7 @@ import concurrent.futures # For parallel processing
 from event_bus import emit as emit_event
 
 from utils.hallucination_detector import DetectorState, Word, maybe_trim_repetition
+from utils.hallucination_metrics_v2 import metrics_collector
 from utils.feature_flags import feature_enabled
 from utils.transcript_format import format_transcript_line
 from services.post_asr_pipeline import (
@@ -1596,11 +1597,40 @@ def process_audio_segment_and_update_s3(
                 session_data['stream_time_s'] = 0.0
 
             # Apply strict subtractive overlap trimming
+            provider = session_data.get("session_state", {}).get("provider_current", "unknown")
+            language = session_data.get("language_setting_from_client", "unknown")
+            session_duration_s = session_data.get("accumulated_session_audio_seconds", 0.0)
+
+            # Track segment processing
+            metrics_collector.track_segment_processing(provider=provider, language=language)
+
+            # Track trim attempt
+            context_len = len(session_data['hallu_state'].last_tokens)
+            metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
+
             stitched_words, stitch_reason, cut_word_count = maybe_trim_repetition(
                 curr_words,
                 session_data['hallu_state']
             )
             final_text_for_s3 = " ".join(w.text for w in stitched_words)
+
+            # Track metrics for trimming results
+            if stitch_reason:
+                # Track successful trim
+                metrics_collector.track_trim_applied(context_len, cut_word_count, provider=provider, language=language)
+
+                # Track empty-after-trim bug detector
+                if not stitched_words:
+                    metrics_collector.track_empty_after_trim(provider=provider, language=language)
+
+            # Track context length for capacity monitoring
+            metrics_collector.track_context_length(len(session_data['hallu_state'].last_tokens), provider=provider, language=language)
+
+            # Track first utterance patterns (low-cardinality)
+            if curr_words:
+                session_id = session_data.get("session_id", "unknown")
+                segment_tokens = [w.text.lower() for w in curr_words]
+                metrics_collector.track_first_utterance(session_id, segment_tokens, provider=provider, language=language)
             if stitch_reason:
                 logger.warning("hallucination_trim reason=%s orig=%r kept=%r",
                                stitch_reason, (curr_text_raw or "")[:120], final_text_for_s3[:120])
@@ -1632,15 +1662,19 @@ def process_audio_segment_and_update_s3(
                 min_size_guard=feature_enabled('transcript.min_size_guard', True),
             )
 
-            decision = decide_transcript_candidate(
-                original_text=original_text_for_decision,
-                filtered_text=final_text_for_s3,
-                run_pii=run_pii_stage,
-                validator=is_valid_transcription,
-                toggles=toggles,
-                min_tokens=2,
-                min_chars=6,
-            )
+            # Time the post-ASR decision with segment processing timer
+            with metrics_collector.time_segment_processing(provider=provider, language=language):
+                decision = decide_transcript_candidate(
+                    original_text=original_text_for_decision,
+                    filtered_text=final_text_for_s3,
+                    run_pii=run_pii_stage,
+                    validator=is_valid_transcription,
+                    toggles=toggles,
+                    min_tokens=2,
+                    min_chars=6,
+                    provider=provider,
+                    language=language,
+                )
 
             try:
                 from metrics import (

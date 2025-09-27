@@ -1,0 +1,324 @@
+---
+# Production-grade hallucination filtering alerts
+# Low-cardinality metrics with multi-burn rate SLO alerts
+
+groups:
+  - name: hallucination_filtering_slo_fast_burn
+    interval: 30s
+    rules:
+      - alert: HallucinationEmptyAfterTrimFastBurn
+        expr: |
+          (
+            sum(rate(hallucination_empty_after_trim_total[5m]))
+            /
+            sum(rate(hallucination_segments_processed_total[5m]))
+          ) > 0.002
+        for: 2m
+        labels:
+          severity: critical
+          component: hallucination_filtering
+          slo: empty_after_trim
+          burn_rate: fast
+        annotations:
+          summary: "Empty after trim rate >0.2% (5m window) - {{ $value | humanizePercentage }}"
+          description: |
+            CRITICAL BUG: {{ $value | humanizePercentage }} of segments became empty after trimming.
+            This indicates a bug in the overlap trimming logic that must be fixed immediately.
+            Fast burn rate detected over 5-minute window.
+
+      - alert: HallucinationFalseDropsFastBurn
+        expr: |
+          (
+            sum(rate(hallucination_drops_total{reason!="asr_empty"}[5m]))
+            /
+            sum(rate(hallucination_segments_processed_total[5m]))
+          ) > 0.02
+        for: 2m
+        labels:
+          severity: critical
+          component: hallucination_filtering
+          slo: false_drops
+          burn_rate: fast
+        annotations:
+          summary: "False drop rate >2% (5m window) - {{ $value | humanizePercentage }}"
+          description: |
+            CRITICAL: Fast burn rate for false drops detected.
+            {{ $value | humanizePercentage }} of segments are being dropped incorrectly.
+            Immediate investigation required - consider rollback.
+
+      - alert: HallucinationDecisionLatencyFastBurn
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(hallucination_post_asr_decision_duration_seconds_bucket[5m])) by (le)
+          ) * 1000 > 5
+        for: 2m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          slo: latency
+          burn_rate: fast
+        annotations:
+          summary: "Decision latency P95 >5ms (5m window) - {{ $value }}ms"
+          description: |
+            Post-ASR decision processing is taking {{ $value }}ms at P95.
+            Performance budget exceeded - investigate performance regression.
+
+  - name: hallucination_filtering_slo_slow_burn
+    interval: 5m
+    rules:
+      - alert: HallucinationEmptyAfterTrimSlowBurn
+        expr: |
+          (
+            sum(rate(hallucination_empty_after_trim_total[30m]))
+            /
+            sum(rate(hallucination_segments_processed_total[30m]))
+          ) > 0.0005
+        for: 15m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          slo: empty_after_trim
+          burn_rate: slow
+        annotations:
+          summary: "Empty after trim rate >0.05% (30m window) - {{ $value | humanizePercentage }}"
+          description: |
+            Slow burn detected: {{ $value | humanizePercentage }} empty-after-trim rate.
+            Lower threshold but sustained over 30-minute window indicates systematic issue.
+
+      - alert: HallucinationFallbackPressureSlowBurn
+        expr: |
+          (
+            sum(rate(hallucination_fallbacks_total[30m]))
+            /
+            sum(rate(hallucination_segments_processed_total[30m]))
+          ) > 0.08
+        for: 30m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          slo: fallback_pressure
+          burn_rate: slow
+        annotations:
+          summary: "Fallback rate >8% (30m window) - {{ $value | humanizePercentage }}"
+          description: |
+            Sustained high fallback pressure: {{ $value | humanizePercentage }}
+            Indicates poor filtering quality or aggressive thresholds.
+            Investigation recommended.
+
+      - alert: HallucinationTrimInNormalPhaseHigh
+        expr: |
+          (
+            sum(rate(hallucination_trim_applied_total{phase="normal"}[30m]))
+            /
+            sum(rate(hallucination_trim_attempts_total{phase="normal"}[30m]))
+          ) > 0.10
+        for: 30m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          slo: trim_efficiency
+          burn_rate: slow
+        annotations:
+          summary: "Normal phase trim rate >10% (30m window) - {{ $value | humanizePercentage }}"
+          description: |
+            High trimming rate in normal phase: {{ $value | humanizePercentage }}
+            Suggests over-trimming after bootstrap period.
+            May indicate threshold tuning needed.
+
+  - name: hallucination_filtering_efficiency
+    interval: 5m
+    rules:
+      - alert: HallucinationBootstrapEfficiencyLow
+        expr: |
+          (
+            sum(rate(hallucination_trim_applied_total{phase="bootstrap"}[10m]))
+            /
+            sum(rate(hallucination_trim_attempts_total{phase="bootstrap"}[10m]))
+          ) < 0.05
+        for: 15m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: efficiency
+        annotations:
+          summary: "Bootstrap trim efficiency <5% - {{ $value | humanizePercentage }}"
+          description: |
+            Bootstrap phase is only trimming {{ $value | humanizePercentage }} of attempts.
+            Expected: 10-30%. May indicate bootstrap thresholds need adjustment.
+
+      - alert: HallucinationFirstUtteranceDuplicatesHigh
+        expr: |
+          (
+            sum(rate(hallucination_first_utterance_duplicates_total[1h]))
+            /
+            sum(rate(hallucination_first_utterance_sessions_total[1h]))
+          ) > 0.03
+        for: 30m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: quality
+        annotations:
+          summary: "First utterance duplicate rate >3% - {{ $value | humanizePercentage }}"
+          description: |
+            {{ $value | humanizePercentage }} of sessions have duplicate first utterances.
+            Bootstrap fix may not be working as expected.
+
+  - name: hallucination_filtering_capacity
+    interval: 2m
+    rules:
+      - alert: HallucinationContextLengthHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(hallucination_context_length_bucket[10m])) by (le)
+          ) > 200
+        for: 10m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: capacity
+        annotations:
+          summary: "Context length P95 >200 tokens - {{ $value }}"
+          description: |
+            Context length P95 is {{ $value }} tokens.
+            Approaching the 200-token cap - may indicate memory pressure.
+
+      - alert: HallucinationValidatorFailureHigh
+        expr: |
+          (
+            sum(rate(hallucination_validator_outcomes_total{outcome="fail"}[10m]))
+            /
+            sum(rate(hallucination_validator_outcomes_total[10m]))
+          ) > 0.005
+        for: 10m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: integration
+        annotations:
+          summary: "Validator failure rate >0.5% - {{ $value | humanizePercentage }}"
+          description: |
+            Text validator failing {{ $value | humanizePercentage }} of segments.
+            May indicate text quality degradation.
+
+      - alert: HallucinationPIIErrorsHigh
+        expr: |
+          (
+            sum(rate(hallucination_pii_outcomes_total{outcome="error"}[10m]))
+            /
+            sum(rate(hallucination_pii_outcomes_total[10m]))
+          ) > 0.001
+        for: 5m
+        labels:
+          severity: critical
+          component: hallucination_filtering
+          type: integration
+        annotations:
+          summary: "PII error rate >0.1% - {{ $value | humanizePercentage }}"
+          description: |
+            PII processing errors at {{ $value | humanizePercentage }}.
+            May indicate PII service degradation.
+
+  - name: hallucination_filtering_capacity_utilization
+    interval: 10m
+    rules:
+      - alert: HallucinationSessionTrackerCapacity
+        expr: hallucination_session_tracker_sessions > 8000
+        for: 5m
+        labels:
+          severity: warning
+          component: hallucination_filtering
+          type: capacity
+        annotations:
+          summary: "Session tracker at {{ $value }}/10k capacity"
+          description: |
+            Session tracker approaching capacity limit.
+            Current: {{ $value }} sessions, Limit: 10,000
+            Consider increasing cleanup frequency or capacity.
+
+# SLO error budgets (30-day rolling windows)
+  - name: hallucination_filtering_error_budgets
+    interval: 1h
+    rules:
+      - record: hallucination:slo:false_drops_error_budget_remaining
+        expr: |
+          1 - (
+            sum(increase(hallucination_drops_total{reason!="asr_empty"}[30d]))
+            /
+            sum(increase(hallucination_segments_processed_total[30d]))
+          ) / 0.005
+
+      - record: hallucination:slo:empty_after_trim_error_budget_remaining
+        expr: |
+          1 - (
+            sum(increase(hallucination_empty_after_trim_total[30d]))
+            /
+            sum(increase(hallucination_segments_processed_total[30d]))
+          ) / 0.0001
+
+      - record: hallucination:slo:fallback_pressure_error_budget_remaining
+        expr: |
+          1 - (
+            sum(increase(hallucination_fallbacks_total[30d]))
+            /
+            sum(increase(hallucination_segments_processed_total[30d]))
+          ) / 0.08
+
+      - alert: HallucinationSLOErrorBudgetExhausted
+        expr: |
+          (
+            hallucination:slo:false_drops_error_budget_remaining < 0.1
+            or
+            hallucination:slo:empty_after_trim_error_budget_remaining < 0.1
+            or
+            hallucination:slo:fallback_pressure_error_budget_remaining < 0.1
+          )
+        for: 0m
+        labels:
+          severity: critical
+          component: hallucination_filtering
+          type: slo
+        annotations:
+          summary: "Hallucination filtering SLO error budget <10% remaining"
+          description: |
+            One or more SLO error budgets are critically low:
+            False drops: {{ $labels.false_drops_budget }}%
+            Empty after trim: {{ $labels.empty_after_trim_budget }}%
+            Fallback pressure: {{ $labels.fallback_pressure_budget }}%
+
+# Recording rules for dashboard efficiency
+  - name: hallucination_filtering_aggregations
+    interval: 30s
+    rules:
+      - record: hallucination:segments_per_second
+        expr: sum(rate(hallucination_segments_processed_total[5m])) by (provider, language)
+
+      - record: hallucination:false_drops_rate
+        expr: |
+          sum(rate(hallucination_drops_total{reason!="asr_empty"}[5m])) by (provider, language)
+          /
+          sum(rate(hallucination_segments_processed_total[5m])) by (provider, language)
+
+      - record: hallucination:trim_efficiency_bootstrap
+        expr: |
+          sum(rate(hallucination_trim_applied_total{phase="bootstrap"}[5m])) by (provider, language)
+          /
+          sum(rate(hallucination_trim_attempts_total{phase="bootstrap"}[5m])) by (provider, language)
+
+      - record: hallucination:trim_efficiency_normal
+        expr: |
+          sum(rate(hallucination_trim_applied_total{phase="normal"}[5m])) by (provider, language)
+          /
+          sum(rate(hallucination_trim_attempts_total{phase="normal"}[5m])) by (provider, language)
+
+      - record: hallucination:decision_latency_p95
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(hallucination_post_asr_decision_duration_seconds_bucket[5m])) by (le, provider, language)
+          ) * 1000
+
+      - record: hallucination:context_length_p95
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(hallucination_context_length_bucket[5m])) by (le, provider, language)
+          )

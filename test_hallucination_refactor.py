@@ -229,6 +229,58 @@ class TestPostASRContract:
         assert decision.pii_pass
 
 
+class TestBootstrapThresholds:
+    """Test bootstrap thresholds for early session context."""
+
+    def test_bootstrap_trims_early_repeats(self):
+        """Test that bootstrap mode trims greeting repeats at session start."""
+        state = DetectorState()
+
+        # First segment: establish context
+        words1 = [
+            Word("hallå", 0.0, 1.0, 0.9),
+            Word("nu", 1.0, 2.0, 0.9),
+            Word("testar", 2.0, 3.0, 0.9),
+            Word("jag", 3.0, 4.0, 0.9),
+        ]
+
+        result1, reason1, cut1 = maybe_trim_repetition(words1, state, min_segment_tokens=1)
+        assert len(result1) == 4
+        assert reason1 is None
+        assert len(state.last_tokens) == 4  # Context established
+
+        # Second segment: same greeting should be trimmed by bootstrap
+        words2 = [
+            Word("hallå", 4.0, 5.0, 0.9),
+            Word("nu", 5.0, 6.0, 0.9),
+            Word("testar", 6.0, 7.0, 0.9),
+            Word("jag", 7.0, 8.0, 0.9),
+        ]
+
+        result2, reason2, cut2 = maybe_trim_repetition(words2, state, min_segment_tokens=1)
+        assert len(result2) == 0  # Completely trimmed
+        assert reason2 == "trimmed_overlap:4"
+        assert len(state.last_tokens) == 4  # Context unchanged (all trimmed)
+
+    def test_bootstrap_transitions_to_normal_mode(self):
+        """Test that bootstrap transitions to normal mode after 8 tokens."""
+        state = DetectorState()
+        # Set up context with 9 tokens (beyond bootstrap)
+        state.last_tokens = ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+
+        # Small overlap that bootstrap would catch but normal mode ignores
+        words = [
+            Word("i", 0.0, 1.0, 0.9),  # 1-token overlap
+            Word("new", 1.0, 2.0, 0.9),
+            Word("content", 2.0, 3.0, 0.9),
+        ]
+
+        result, reason, cut = maybe_trim_repetition(words, state, min_segment_tokens=1)
+        assert len(result) == 3  # No trimming in normal mode
+        assert reason is None
+        assert "new" in [w.text for w in result]
+
+
 class TestParameterizedTunables:
     """Test that overlap detection can be tuned."""
 

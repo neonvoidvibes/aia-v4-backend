@@ -1,0 +1,364 @@
+{
+  "dashboard": {
+    "title": "Hallucination Filtering - Production Monitoring",
+    "description": "RED view + capacity monitoring for hallucination filtering system",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "provider",
+          "type": "query",
+          "query": "label_values(hallucination_segments_processed_total, provider)",
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*"
+        },
+        {
+          "name": "language",
+          "type": "query",
+          "query": "label_values(hallucination_segments_processed_total{provider=~\"$provider\"}, language)",
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "title": "RED Overview",
+        "type": "row",
+        "collapsed": false
+      },
+      {
+        "title": "Rate - Segments/sec",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum(hallucination:segments_per_second{provider=~\"$provider\", language=~\"$language\"}) by (provider)",
+            "legendFormat": "{{provider}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "custom": {
+              "axisLabel": "Segments/sec"
+            }
+          }
+        }
+      },
+      {
+        "title": "Errors - Drops (excl ASR_EMPTY)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "hallucination:false_drops_rate{provider=~\"$provider\", language=~\"$language\"} * 100",
+            "legendFormat": "{{provider}}/{{language}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "custom": {
+              "thresholdsStyle": {
+                "mode": "line"
+              }
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 0.5},
+                {"color": "red", "value": 1.0}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Duration - Decision Latency P95",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "hallucination:decision_latency_p95{provider=~\"$provider\", language=~\"$language\"}",
+            "legendFormat": "{{provider}}/{{language}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "custom": {
+              "thresholdsStyle": {
+                "mode": "line"
+              }
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 3},
+                {"color": "red", "value": 5}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Capacity & Health",
+        "type": "row",
+        "collapsed": false
+      },
+      {
+        "title": "Context Length P95",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "hallucination:context_length_p95{provider=~\"$provider\", language=~\"$language\"}",
+            "legendFormat": "{{provider}}/{{language}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "custom": {
+              "axisLabel": "Tokens",
+              "thresholdsStyle": {
+                "mode": "area"
+              }
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 150},
+                {"color": "red", "value": 200}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Trim Efficiency by Phase",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "hallucination:trim_efficiency_bootstrap{provider=~\"$provider\", language=~\"$language\"} * 100",
+            "legendFormat": "Bootstrap - {{provider}}/{{language}}",
+            "refId": "A"
+          },
+          {
+            "expr": "hallucination:trim_efficiency_normal{provider=~\"$provider\", language=~\"$language\"} * 100",
+            "legendFormat": "Normal - {{provider}}/{{language}}",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "custom": {
+              "axisLabel": "Trim Rate %"
+            }
+          }
+        }
+      },
+      {
+        "title": "Cut Word Distribution",
+        "type": "heatmap",
+        "targets": [
+          {
+            "expr": "sum(rate(hallucination_cut_word_count_bucket{provider=~\"$provider\", language=~\"$language\"}[5m])) by (le)",
+            "legendFormat": "{{le}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "hideFrom": {
+                "legend": false,
+                "tooltip": false,
+                "vis": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "title": "Quality Metrics",
+        "type": "row",
+        "collapsed": false
+      },
+      {
+        "title": "Fallback Pressure",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum(rate(hallucination_fallbacks_total{provider=~\"$provider\", language=~\"$language\"}[10m])) by (provider, reason) / sum(rate(hallucination_segments_processed_total{provider=~\"$provider\", language=~\"$language\"}[10m])) by (provider) * 100",
+            "legendFormat": "{{provider}} - {{reason}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "custom": {
+              "thresholdsStyle": {
+                "mode": "area"
+              }
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "green", "value": 2},
+                {"color": "yellow", "value": 5},
+                {"color": "red", "value": 8}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "First Utterance Duplicates",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(hallucination_first_utterance_duplicates_total{provider=~\"$provider\", language=~\"$language\"}[1h])) / sum(rate(hallucination_first_utterance_sessions_total{provider=~\"$provider\", language=~\"$language\"}[1h])) * 100",
+            "legendFormat": "Duplicate Rate",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 2.5},
+                {"color": "red", "value": 3.0}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Validator & PII Health",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum(rate(hallucination_validator_outcomes_total{outcome=\"fail\", provider=~\"$provider\", language=~\"$language\"}[10m])) / sum(rate(hallucination_validator_outcomes_total{provider=~\"$provider\", language=~\"$language\"}[10m])) * 100",
+            "legendFormat": "Validator Fail Rate",
+            "refId": "A"
+          },
+          {
+            "expr": "sum(rate(hallucination_pii_outcomes_total{outcome=\"error\", provider=~\"$provider\", language=~\"$language\"}[10m])) / sum(rate(hallucination_pii_outcomes_total{provider=~\"$provider\", language=~\"$language\"}[10m])) * 100",
+            "legendFormat": "PII Error Rate",
+            "refId": "B"
+          },
+          {
+            "expr": "sum(rate(hallucination_pii_outcomes_total{outcome=\"redact\", provider=~\"$provider\", language=~\"$language\"}[10m])) / sum(rate(hallucination_pii_outcomes_total{provider=~\"$provider\", language=~\"$language\"}[10m])) * 100",
+            "legendFormat": "PII Redaction Rate",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 0.3},
+                {"color": "red", "value": 0.5}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "SLO Error Budgets (30d)",
+        "type": "row",
+        "collapsed": true
+      },
+      {
+        "title": "Error Budget Remaining",
+        "type": "bargauge",
+        "targets": [
+          {
+            "expr": "hallucination:slo:false_drops_error_budget_remaining * 100",
+            "legendFormat": "False Drops SLO",
+            "refId": "A"
+          },
+          {
+            "expr": "hallucination:slo:empty_after_trim_error_budget_remaining * 100",
+            "legendFormat": "Empty After Trim SLO",
+            "refId": "B"
+          },
+          {
+            "expr": "hallucination:slo:fallback_pressure_error_budget_remaining * 100",
+            "legendFormat": "Fallback Pressure SLO",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 10},
+                {"color": "green", "value": 50}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Session Tracker Capacity",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "hallucination_session_tracker_sessions",
+            "legendFormat": "Active Sessions",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "min": 0,
+            "max": 10000,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 7500},
+                {"color": "red", "value": 9000}
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "annotations": {
+      "list": [
+        {
+          "name": "Hallucination Alerts",
+          "enable": true,
+          "iconColor": "rgba(255, 96, 96, 1)",
+          "query": "ALERTS{alertname=~\"Hallucination.*\"}"
+        },
+        {
+          "name": "Deployments",
+          "enable": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "query": "ALERTS{alertname=~\".*Deploy.*\"}"
+        }
+      ]
+    }
+  }
+}
