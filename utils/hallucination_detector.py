@@ -128,10 +128,15 @@ def maybe_trim_repetition(
     ctx_tail = state.tail_tokens(limit=max_context_tokens)
     seg_head = [w.norm for w in words if w.norm]
 
+    # DEBUG: Log overlap detection details
+    print(f"OVERLAP_DEBUG: ctx_tail={ctx_tail[-10:] if ctx_tail else []}, seg_head={seg_head[:10]}")
+    print(f"OVERLAP_DEBUG: context_len={len(state.last_tokens)}, seg_head_len={len(seg_head)}")
+
     if not ctx_tail or not seg_head:
         # Still update context even if no overlap detection
         head_norm = [w.norm for w in words if w.norm]
         state.last_tokens = (state.last_tokens + head_norm)[-200:]
+        print(f"OVERLAP_DEBUG: No ctx_tail or seg_head, updated context to len={len(state.last_tokens)}")
         return words, None, 0
 
     # Track trim attempt with phase detection
@@ -140,6 +145,7 @@ def maybe_trim_repetition(
 
     # Compute suffix-prefix overlap length (context suffix vs current head).
     overlap = _lcs_suffix_prefix_overlap(ctx_tail, seg_head)
+    print(f"OVERLAP_DEBUG: suffix-prefix overlap={overlap} between ctx_tail={ctx_tail} and seg_head={seg_head}")
 
     # Bootstrap: in the first few tokens of context, use a relaxed threshold so
     # immediate repeats of the greeting are trimmed cleanly.
@@ -148,8 +154,12 @@ def maybe_trim_repetition(
         boot_min = 2
         boot_ratio = 0.50
         threshold = max(boot_min, int(len(seg_head) * boot_ratio))
+        print(f"OVERLAP_DEBUG: BOOTSTRAP mode - threshold={threshold} (boot_min={boot_min}, seg_head_len*{boot_ratio}={int(len(seg_head) * boot_ratio)})")
     else:
         threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
+        print(f"OVERLAP_DEBUG: NORMAL mode - threshold={threshold} (min_tokens={min_overlap_tokens}, seg_head_len*{overlap_ratio}={int(len(seg_head) * overlap_ratio)})")
+
+    print(f"OVERLAP_DEBUG: overlap={overlap} vs threshold={threshold}, will_trim={overlap >= threshold}")
     if overlap >= threshold:
         cut = min(overlap, len(words))
         trimmed = words[cut:]
