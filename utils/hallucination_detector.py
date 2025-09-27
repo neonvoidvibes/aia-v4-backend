@@ -5,12 +5,13 @@ Includes seed-head repeat dampener to prevent chant loops.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Deque, Optional
-from collections import deque
+from typing import List, Tuple, Deque, Optional, Dict
+from collections import deque, Counter
 import re
 import time
 import logging
 import threading
+import math
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -123,6 +124,95 @@ class Word:
         return toks[0] if toks else ""
 
 @dataclass
+class SessionHeadModel:
+    """
+    Tracks repeated patterns at segment starts for adaptive blocking.
+    Uses exponential decay to prioritize recent patterns.
+    """
+    counts: Dict[Tuple[str, ...], float]
+    last_seen: Dict[Tuple[str, ...], float]
+    session_start_time: float
+    _lock: threading.Lock
+
+    def __init__(self):
+        self.counts = {}
+        self.last_seen = {}
+        self.session_start_time = time.time()
+        self._lock = threading.Lock()
+
+    def update_head_pattern(self, tokens: List[str], now: float = None) -> None:
+        """Update head pattern counts with exponential decay."""
+        if now is None:
+            now = time.time()
+
+        # Extract 2-4 gram heads from segment start
+        with self._lock:
+            for n in range(2, min(5, len(tokens) + 1)):
+                if len(tokens) >= n:
+                    head = tuple(tokens[:n])
+
+                    # Apply exponential decay to existing count
+                    old_count = self.counts.get(head, 0.0)
+                    last_time = self.last_seen.get(head, now)
+                    decay_factor = math.exp(-(now - last_time) / 30.0)  # τ = 30s
+
+                    # Update count and timestamp
+                    self.counts[head] = old_count * decay_factor + 1.0
+                    self.last_seen[head] = now
+
+            # Keep only top-K patterns by weight (K=8)
+            if len(self.counts) > 8:
+                sorted_items = sorted(self.counts.items(), key=lambda x: x[1], reverse=True)
+                self.counts = dict(sorted_items[:8])
+                # Clean up last_seen for removed items
+                self.last_seen = {k: v for k, v in self.last_seen.items() if k in self.counts}
+
+    def should_strip_head(self, tokens: List[str], now: float = None) -> Tuple[bool, Optional[Tuple[str, ...]]]:
+        """Check if head should be stripped based on recent patterns."""
+        if now is None:
+            now = time.time()
+
+        if len(tokens) < 2:
+            return False, None
+
+        with self._lock:
+            best_match = None
+            best_score = 0.0
+
+            for head_pattern, weight in self.counts.items():
+                # Skip patterns not seen recently (>60s)
+                if now - self.last_seen.get(head_pattern, now) > 60:
+                    continue
+
+                k = len(head_pattern)
+                if len(tokens) >= k:
+                    # Exact prefix match
+                    if tuple(tokens[:k]) == head_pattern:
+                        # Check activation rule: ≥2 occurrences or within 15s of session start
+                        if weight >= 2.0 or (now - self.session_start_time <= 15.0):
+                            return True, head_pattern
+
+                    # Strong Jaccard match for near-matches
+                    if k <= len(tokens):
+                        tokens_k = tokens[:k]
+                        # Simple token-level Jaccard for head matching
+                        set1 = set(head_pattern)
+                        set2 = set(tokens_k)
+                        if set1 and set2:
+                            jaccard = len(set1 & set2) / len(set1 | set2)
+                            if jaccard > best_score:
+                                best_match = head_pattern
+                                best_score = jaccard
+
+            # Strong match threshold (≥0.8) for near-matches
+            if best_match and best_score >= 0.8:
+                weight = self.counts.get(best_match, 0.0)
+                if weight >= 2.0 or (now - self.session_start_time <= 15.0):
+                    return True, best_match
+
+            return False, None
+
+@dataclass
 class DetectorState:
     """
     Strict subtractive stitcher that ONLY removes overlap.
@@ -132,12 +222,14 @@ class DetectorState:
     last_tokens: List[str]
     recent_heads: Deque[Tuple[str, ...]]
     recent_ngrams: Deque[Tuple[Tuple[str, ...], float]]  # (ngram, timestamp)
+    head_model: SessionHeadModel  # Track segment-start patterns
     _lock: threading.Lock
 
     def __init__(self):
         self.last_tokens = []
         self.recent_heads = deque(maxlen=10)
         self.recent_ngrams = deque(maxlen=50)  # Track more n-grams with timestamps
+        self.head_model = SessionHeadModel()
         self._lock = threading.Lock()
 
     def tail_tokens(self, limit: int) -> List[str]:
@@ -172,6 +264,45 @@ class DetectorState:
 
         return False
 
+def strip_repeated_head_at_start(
+    words: List[Word],
+    state: DetectorState,
+    segment_position: int = 0
+) -> Tuple[List[Word], Optional[str], int]:
+    """
+    Strip repeated head patterns at segment start.
+    Returns (trimmed_words, reason, stripped_count).
+    """
+    if segment_position != 0:  # Only apply at segment start
+        return words, None, 0
+
+    if not words:
+        return words, None, 0
+
+    # Get normalized tokens from words
+    tokens = [w.norm for w in words if w.norm]
+    if len(tokens) < 2:
+        return words, None, 0
+
+    # Check if head should be stripped
+    should_strip, matched_pattern = state.head_model.should_strip_head(tokens)
+
+    if should_strip and matched_pattern:
+        strip_len = len(matched_pattern)
+        # Don't strip more than we have
+        strip_len = min(strip_len, len(words))
+
+        # Strip the matched head pattern
+        trimmed_words = words[strip_len:]
+        reason = f"segment_head_blocked:{matched_pattern}"
+
+        if ENABLE_DETECTOR_DEBUG:
+            logger.debug(f"stripped segment head pattern {matched_pattern}, kept {len(trimmed_words)}/{len(words)} words")
+
+        return trimmed_words, reason, strip_len
+
+    return words, None, 0
+
 def maybe_trim_repetition(
     words: List[Word],
     state: DetectorState,
@@ -180,6 +311,8 @@ def maybe_trim_repetition(
     max_context_tokens: int = _MAX_CONTEXT_TOKENS,
     min_segment_tokens: int = _MIN_SEGMENT_TOKENS,
     overlap_ratio: float = _OVERLAP_RATIO,
+    segment_position: int = 0,  # 0 for segment start, >0 for continuation
+    feature_enabled_head_blocker: bool = True,
 ) -> Tuple[List[Word], Optional[str], int]:
     """
     Pure function: if the head of `words` overlaps with the tail of prior context,
@@ -187,11 +320,36 @@ def maybe_trim_repetition(
     Returns (possibly_trimmed_words, reason, cut_word_count).
     Tunables are explicit and defaulted; call-sites can pass overrides for A/B.
     """
+    # Step 1: Try segment-start head blocker first (runs before other logic)
+    if feature_enabled_head_blocker and segment_position == 0:
+        head_blocked_words, head_reason, head_cut = strip_repeated_head_at_start(
+            words, state, segment_position
+        )
+        if head_reason:
+            # Update head model with original tokens before returning
+            original_tokens = [w.norm for w in words if w.norm]
+            if original_tokens:
+                state.head_model.update_head_pattern(original_tokens)
+
+            # Update context with kept tokens only
+            if head_blocked_words:
+                kept_tokens = [w.norm for w in head_blocked_words if w.norm]
+                with state._lock:
+                    state.last_tokens = (state.last_tokens + kept_tokens)[-200:]
+            return head_blocked_words, head_reason, head_cut
+
+    # Update head model for segment start (even if not blocked)
+    if segment_position == 0:
+        original_tokens = [w.norm for w in words if w.norm]
+        if original_tokens:
+            state.head_model.update_head_pattern(original_tokens)
+
     if not words or len(words) < min_segment_tokens:
         # Still update context even for short segments
         if words:
             head_norm = [w.norm for w in words if w.norm]
-            state.last_tokens = (state.last_tokens + head_norm)[-200:]
+            with state._lock:
+                state.last_tokens = (state.last_tokens + head_norm)[-200:]
         return words, None, 0
 
     ctx_tail = state.tail_tokens(limit=max_context_tokens)
@@ -240,6 +398,12 @@ def maybe_trim_repetition(
         threshold = max(boot_min, int(len(seg_head) * boot_ratio))
         if ENABLE_DETECTOR_DEBUG:
             logger.debug(f"BOOTSTRAP mode - threshold={threshold} (boot_min={boot_min}, seg_head_len*{boot_ratio}={int(len(seg_head) * boot_ratio)})")
+    elif segment_position == 0:
+        # Start-only aggressive thresholding: lower threshold for segment start
+        start_min = 2  # Lower minimum for segment start
+        threshold = max(start_min, int(len(seg_head) * overlap_ratio))
+        if ENABLE_DETECTOR_DEBUG:
+            logger.debug(f"SEGMENT_START mode - threshold={threshold} (start_min={start_min}, seg_head_len*{overlap_ratio}={int(len(seg_head) * overlap_ratio)})")
     else:
         threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
         if ENABLE_DETECTOR_DEBUG:
@@ -432,10 +596,20 @@ def detect_repetition_in_text(text: str, state: DetectorState) -> bool:
                     if ENABLE_DETECTOR_DEBUG:
                         logger.debug(f"strong n={n} match jaccard={jaccard:.3f} >= {strong_threshold}")
 
-            # Match if either: 2+ different sizes cross thresholds, or single strong trigram+
-            if overlapping_ngrams >= 2 or strong_match:
+            # Match conditions:
+            # - Normal: 2+ different sizes cross thresholds, or single strong trigram+
+            # - Segment start: single trigram ≥0.8 is sufficient (bypass "2 sizes" rule)
+            start_match = segment_position == 0 and strong_match
+            normal_match = overlapping_ngrams >= 2 or strong_match
+
+            if start_match or normal_match:
                 if ENABLE_DETECTOR_DEBUG:
-                    reason = f"{overlapping_ngrams} matching n-gram sizes" if overlapping_ngrams >= 2 else "single strong match"
+                    if start_match and not normal_match:
+                        reason = "single strong match at segment start"
+                    elif overlapping_ngrams >= 2:
+                        reason = f"{overlapping_ngrams} matching n-gram sizes"
+                    else:
+                        reason = "single strong match"
                     logger.debug(f"detected cross-segment repetition with {reason}")
                 return True
 

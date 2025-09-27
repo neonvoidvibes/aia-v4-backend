@@ -176,6 +176,19 @@ pii_outcomes_total = Counter(
     ['provider', 'language', 'outcome']  # pass/error/redact
 )
 
+# 12. Head blocker metrics
+head_blocker_fired_total = Counter(
+    'hallucination_head_blocker_fired_total',
+    'Head blocker activations by segment position',
+    ['provider', 'language', 'segment_position']  # early/normal
+)
+
+early_phase_allowance_total = Counter(
+    'hallucination_early_phase_allowance_total',
+    'Early phase empty allowances granted',
+    ['provider', 'language']
+)
+
 
 class SessionTracker:
     """Lock-free per-session tracking for first utterance analysis."""
@@ -317,6 +330,16 @@ class HallucinationMetricsCollector:
         """Get current tracked session count."""
         return self._session_tracker.get_session_count()
 
+    def track_head_blocker_fired(self, segment_position: str, provider: str = "unknown", language: str = "unknown"):
+        """Track head blocker activation by segment position."""
+        head_blocker_fired_total.labels(
+            provider=provider, language=language, segment_position=segment_position
+        ).inc()
+
+    def track_early_phase_allowance(self, provider: str = "unknown", language: str = "unknown"):
+        """Track early phase empty allowance granted."""
+        early_phase_allowance_total.labels(provider=provider, language=language).inc()
+
     def track_pre_stitch_drop(self, provider: str = "unknown", reason: str = "unknown"):
         """Track pre-stitch segment drops by provider and reason."""
         # Map to existing drop tracking with provider context
@@ -356,5 +379,7 @@ def get_metric_cardinality_estimate() -> Dict[str, int]:
         "context_length_histogram": base_cardinality * 9,  # × buckets
         "validator_outcomes_total": base_cardinality * 2,  # × outcome
         "pii_outcomes_total": base_cardinality * 3,  # × outcome
-        "total_estimated": base_cardinality * 60  # Conservative estimate
+        "head_blocker_fired_total": base_cardinality * 2,  # × segment_position
+        "early_phase_allowance_total": base_cardinality,
+        "total_estimated": base_cardinality * 65  # Conservative estimate
     }

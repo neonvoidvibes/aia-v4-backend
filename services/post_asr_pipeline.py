@@ -62,6 +62,8 @@ class FeatureToggles:
     """Runtime feature toggles controlling fallback behaviour."""
     never_empty_contract: bool = True
     min_size_guard: bool = True
+    head_blocker_enabled: bool = True
+    early_phase_empty_allowance: bool = True
 
 
 @dataclass
@@ -100,13 +102,15 @@ def decide_transcript_candidate(
     provider: str = "unknown",
     language: str = "unknown",
     detector_state: Optional[DetectorState] = None,
+    segment_count: int = 0,  # Track segment number for early-phase logic
 ) -> PostAsrDecision:
     """Select the transcript candidate to append, applying fallbacks when needed."""
     with metrics_collector.time_post_asr_decision(provider=provider, language=language):
         return _decide_transcript_candidate_impl(
             original_text, filtered_text, run_pii, validator,
             toggles=toggles, min_tokens=min_tokens, min_chars=min_chars,
-            provider=provider, language=language, detector_state=detector_state
+            provider=provider, language=language, detector_state=detector_state,
+            segment_count=segment_count
         )
 
 
@@ -122,10 +126,26 @@ def _decide_transcript_candidate_impl(
     provider: str = "unknown",
     language: str = "unknown",
     detector_state: Optional[DetectorState] = None,
+    segment_count: int = 0,
 ) -> PostAsrDecision:
     """Implementation with metrics tracking."""
     original = (original_text or "").strip()
     filtered = (filtered_text or "").strip()
+
+    # Early-phase detection: first 2 segments or head blocker activity
+    is_early_phase = segment_count < 2
+    head_blocker_fired = False
+
+    # Check if head blocker fired by examining if filtered is significantly shorter than original
+    # This is a heuristic - in practice, the head blocker would set a specific flag/reason
+    if (toggles.head_blocker_enabled and
+        detector_state and hasattr(detector_state, 'head_model') and detector_state.head_model):
+        # If original has content but filtered is much shorter, head blocker likely fired
+        if original and len(filtered) < len(original) * 0.5:  # 50% reduction heuristic
+            head_blocker_fired = True
+            # Track head blocker activation
+            segment_position = "early" if is_early_phase else "normal"
+            metrics_collector.track_head_blocker_fired(segment_position, provider=provider, language=language)
 
     stats: Dict[str, int] = {
         "pre_len_chars": len(original),
@@ -133,6 +153,8 @@ def _decide_transcript_candidate_impl(
         "post_trim_chars": len(filtered),
         "post_trim_tokens": _count_tokens(filtered),
         "post_dedup_tokens": _count_tokens(filtered),
+        "early_phase": 1 if is_early_phase else 0,
+        "head_blocker_fired": 1 if head_blocker_fired else 0,
     }
 
     # Early exit when ASR produced nothing
@@ -156,7 +178,11 @@ def _decide_transcript_candidate_impl(
     low_confidence = False
     repetition_blocked_fallback = False
 
-    if toggles.never_empty_contract and not candidate:
+    # Early-phase empty allowance: skip never_empty_contract if head blocker fired in early phase
+    early_phase_empty_allowed = (toggles.early_phase_empty_allowance and
+                                is_early_phase and head_blocker_fired)
+
+    if toggles.never_empty_contract and not candidate and not early_phase_empty_allowed:
         # Check if original text contains repetition before falling back
         if detector_state and detect_repetition_in_text(original, detector_state):
             # Don't fall back to repetitive original text
@@ -174,7 +200,7 @@ def _decide_transcript_candidate_impl(
             used_fallback = True
             low_confidence = True
 
-    if toggles.min_size_guard and candidate:
+    if toggles.min_size_guard and candidate and not early_phase_empty_allowed:
         tokens = _count_tokens(candidate)
         if tokens < min_tokens or len(candidate) < min_chars:
             # Check if original text contains repetition before falling back
@@ -194,6 +220,9 @@ def _decide_transcript_candidate_impl(
                 fallback_reason = FALLBACK_MIN_SIZE
                 used_fallback = True
                 low_confidence = True
+    elif early_phase_empty_allowed and candidate:
+        # In early phase with head blocker, keep the filtered candidate even if small
+        stats["early_phase_kept_small"] = 1
 
     if not candidate:
         # No candidate even after fallback (likely because toggles disabled or repetition blocked)
@@ -256,6 +285,8 @@ def _decide_transcript_candidate_impl(
             "candidate_source": candidate_source,
             "fallback_reason": fallback_reason,
             "final_source": candidate_source,
+            "early_phase_empty_allowed": early_phase_empty_allowed,
+            "head_blocker_fired": head_blocker_fired,
         }
         decision = PostAsrDecision(
             final_text=pii_result,
@@ -268,6 +299,12 @@ def _decide_transcript_candidate_impl(
         )
         # Track validator pass
         metrics_collector.track_validator_outcome(OutcomeType.PASS, provider=provider, language=language)
+
+        # Special tracking for early-phase repetition blocking
+        if early_phase_empty_allowed:
+            metrics_collector.track_validator_outcome(OutcomeType.REPETITION_BLOCKED, provider=provider, language=language)
+            metrics_collector.track_early_phase_allowance(provider=provider, language=language)
+
         # Track successful processing or fallback
         if used_fallback:
             metrics_collector.track_post_asr_decision("fallback", provider=provider, language=language)
