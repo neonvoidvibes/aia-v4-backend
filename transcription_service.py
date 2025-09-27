@@ -675,22 +675,31 @@ def _should_use_fallback_strategy(consecutive_failures, file_size_mb, processing
     
     return False, None
 
-def filter_by_duration_and_confidence(segment: Dict) -> bool:
+def filter_by_duration_and_confidence(segment: Dict, provider: str = "unknown") -> bool:
     """Filter segments that are too short or have low confidence"""
+    # DEBUG: Log segment schema to confirm Deepgram vs Whisper differences
+    segment_keys = list(segment.keys())
+    logger.info(f"SEGMENT_FILTER_DEBUG: provider={provider}, keys={segment_keys}, text='{segment.get('text', '')[:50]}'")
+
     duration = segment.get('end', 0) - segment.get('start', 0)
     avg_logprob = segment.get('avg_logprob', 0)
     no_speech_prob = segment.get('no_speech_prob', 0)
-    
-    # Filter very short segments with low confidence
+
+    # IMMEDIATE MITIGATION: Disable filtering for Deepgram since it doesn't have Whisper confidence fields
+    if provider.lower() == "deepgram":
+        logger.info(f"FILTER_BYPASS: Allowing Deepgram segment (duration={duration:.2f}s)")
+        return True
+
+    # Filter very short segments with low confidence (Whisper only)
     if duration < 1.0 and (avg_logprob < -0.5 or no_speech_prob > 0.3):
         logger.debug(f"Filtering short low-confidence segment: duration={duration:.2f}s, logprob={avg_logprob:.2f}, no_speech={no_speech_prob:.2f}")
         return False
-    
-    # Filter segments that are likely silent
+
+    # Filter segments that are likely silent (Whisper only)
     if no_speech_prob > 0.8:
         logger.debug(f"Filtering likely silent segment: no_speech_prob={no_speech_prob:.2f}")
         return False
-        
+
     return True
 
 def analyze_silence_gaps(segments: List[Dict]) -> List[Dict]:
@@ -1522,10 +1531,17 @@ def process_audio_segment_and_update_s3(
     if transcription_result and transcription_result.get('segments'):
         raw_segments = transcription_result['segments']
         logger.debug(f"Raw transcription returned {len(raw_segments)} segments for {temp_segment_wav_path}")
-        
+
+        # Get provider info for schema-aware filtering
+        current_provider = "unknown"
+        try:
+            current_provider = session_data.get("session_state", {}).get("provider_current", "unknown")
+        except:
+            pass
+
         # These filters don't depend on session state/offset.
         filtered_segments_pre_lock = analyze_silence_gaps(raw_segments)
-        filtered_segments_pre_lock = [s for s in filtered_segments_pre_lock if filter_by_duration_and_confidence(s)]
+        filtered_segments_pre_lock = [s for s in filtered_segments_pre_lock if filter_by_duration_and_confidence(s, current_provider)]
 
     # Instantiate a transient PII client if PII filtering is enabled
     pii_llm_client_for_service = None
