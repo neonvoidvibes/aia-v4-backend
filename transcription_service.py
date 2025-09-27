@@ -1567,9 +1567,13 @@ def process_audio_segment_and_update_s3(
         # Get provider info for schema-aware filtering
         current_provider = "unknown"
         try:
-            session_state = session_data.get("session_state", {})
-            current_provider = session_state.get("provider_current", "unknown")
-            logger.info(f"PROVIDER_DEBUG: session_state keys={list(session_state.keys())}, provider_current={current_provider}")
+            session_state = session_data.get("session_state")
+            if session_state:
+                # session_state is a SessionState object (Pydantic model), not a dict
+                current_provider = getattr(session_state, "provider_current", "unknown")
+                logger.info(f"PROVIDER_DEBUG: session_state type={type(session_state)}, provider_current={current_provider}")
+            else:
+                logger.warning("PROVIDER_DEBUG: No session_state found in session_data")
         except Exception as e:
             logger.warning(f"PROVIDER_DEBUG: Failed to get provider from session_data: {e}")
             pass
@@ -1648,7 +1652,9 @@ def process_audio_segment_and_update_s3(
                 session_data['stream_time_s'] = 0.0
 
             # Apply strict subtractive overlap trimming
-            provider = session_data.get("session_state", {}).get("provider_current", "unknown")
+            # Get provider from SessionState object (not dict)
+            session_state = session_data.get("session_state")
+            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
             language = session_data.get("language_setting_from_client", "unknown")
             session_duration_s = session_data.get("accumulated_session_audio_seconds", 0.0)
 
@@ -1688,7 +1694,9 @@ def process_audio_segment_and_update_s3(
                 # Track metrics
                 try:
                     from metrics import HALLU_TRIMS
-                    provider = session_data.get("session_state", {}).get("provider_current", "unknown")
+                    # Get provider from SessionState object (not dict)
+            session_state = session_data.get("session_state")
+            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
                     HALLU_TRIMS.labels(reason=stitch_reason, provider=provider).inc()
                 except Exception as e:
                     logger.debug(f"Failed to record hallucination trim metric: {e}")
