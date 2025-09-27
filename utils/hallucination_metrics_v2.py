@@ -48,6 +48,7 @@ class DropReason(Enum):
     FILTER_EMPTY = "filter_empty"
     PII_ERROR = "pii_error"
     PII_BLOCKED = "pii_blocked"
+    REPETITION_BLOCKED = "repetition_blocked"
     VALIDATOR_FAILED = "validator_failed"
 
 
@@ -64,6 +65,7 @@ class OutcomeType(Enum):
     FAIL = "fail"
     ERROR = "error"
     REDACT = "redact"
+    REPETITION_BLOCKED = "repetition_blocked"
 
 
 # Core metrics with low cardinality labels only

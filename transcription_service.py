@@ -1723,6 +1723,10 @@ def process_audio_segment_and_update_s3(
                 min_size_guard=feature_enabled('transcript.min_size_guard', True),
             )
 
+            # Ensure detector state is initialized for repetition-aware fallbacks
+            if 'hallu_state' not in session_data:
+                session_data['hallu_state'] = DetectorState()
+
             # Time the post-ASR decision with segment processing timer
             with metrics_collector.time_segment_processing(provider=provider, language=language):
                 decision = decide_transcript_candidate(
@@ -1735,7 +1739,7 @@ def process_audio_segment_and_update_s3(
                     min_chars=6,
                     provider=provider,
                     language=language,
-                    detector_state=session_data.get('hallu_state'),
+                    detector_state=session_data['hallu_state'],
                 )
 
             try:

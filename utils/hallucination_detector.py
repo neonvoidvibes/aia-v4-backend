@@ -10,6 +10,7 @@ from collections import deque
 import re
 import time
 import logging
+import threading
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -126,25 +127,30 @@ class DetectorState:
     """
     Strict subtractive stitcher that ONLY removes overlap.
     Never prepends/carries seed words. Includes repeat dampener with n-gram tracking.
+    Thread-safe with light locking for concurrent segment processing.
     """
     last_tokens: List[str]
     recent_heads: Deque[Tuple[str, ...]]
     recent_ngrams: Deque[Tuple[Tuple[str, ...], float]]  # (ngram, timestamp)
+    _lock: threading.Lock
 
     def __init__(self):
         self.last_tokens = []
         self.recent_heads = deque(maxlen=10)
         self.recent_ngrams = deque(maxlen=50)  # Track more n-grams with timestamps
+        self._lock = threading.Lock()
 
     def tail_tokens(self, limit: int) -> List[str]:
         """Return last N tokens from context."""
-        return self.last_tokens[-limit:] if self.last_tokens else []
+        with self._lock:
+            return self.last_tokens[-limit:] if self.last_tokens else []
 
     def add_ngram_pattern(self, ngram: Tuple[str, ...], timestamp: float = None) -> None:
         """Add n-gram pattern to recent tracking with timestamp."""
         if timestamp is None:
             timestamp = time.time()
-        self.recent_ngrams.append((ngram, timestamp))
+        with self._lock:
+            self.recent_ngrams.append((ngram, timestamp))
 
     def check_ngram_loops(self, tokens: List[str], lookback_seconds: float = 10.0) -> bool:
         """Check if current tokens contain repeating n-gram patterns within time window."""
@@ -158,10 +164,11 @@ class DetectorState:
                 gram = tuple(tokens[i:i+n])
 
                 # Check against recent n-grams within time window
-                for recent_gram, timestamp in self.recent_ngrams:
-                    if current_time - timestamp <= lookback_seconds:
-                        if recent_gram == gram:
-                            return True
+                with self._lock:
+                    for recent_gram, timestamp in self.recent_ngrams:
+                        if current_time - timestamp <= lookback_seconds:
+                            if recent_gram == gram:
+                                return True
 
         return False
 
@@ -197,15 +204,18 @@ def maybe_trim_repetition(
 
     # Check for n-gram loops before processing overlap
     if seg_head and state.check_ngram_loops(seg_head):
-        logger.warning(f"detected repeating n-gram pattern, trimming entire segment")
+        if ENABLE_DETECTOR_DEBUG:
+            logger.debug(f"detected repeating n-gram pattern, trimming entire segment")
         # Trim the entire segment as it's a detected loop
-        state.last_tokens = (state.last_tokens + seg_head)[-200:]  # Still update context
+        with state._lock:
+            state.last_tokens = (state.last_tokens + seg_head)[-200:]  # Still update context
         return [], "ngram_loop_detected", len(words)
 
     if not ctx_tail or not seg_head:
         # Still update context even if no overlap detection
         head_norm = [w.norm for w in words if w.norm]
-        state.last_tokens = (state.last_tokens + head_norm)[-200:]
+        with state._lock:
+            state.last_tokens = (state.last_tokens + head_norm)[-200:]
         # Track n-grams from processed tokens
         _track_ngrams_from_tokens(state, head_norm)
         if ENABLE_DETECTOR_DEBUG:
@@ -253,7 +263,8 @@ def maybe_trim_repetition(
 
         # update rolling context with the tokens we will KEEP
         kept_norm = [w.norm for w in trimmed if w.norm]
-        state.last_tokens = (state.last_tokens + kept_norm)[-200:]
+        with state._lock:
+            state.last_tokens = (state.last_tokens + kept_norm)[-200:]
 
         # Track n-grams from kept tokens
         _track_ngrams_from_tokens(state, kept_norm)
@@ -262,7 +273,8 @@ def maybe_trim_repetition(
 
     # no trim; still advance context with head (bounded)
     head_norm = [w.norm for w in words if w.norm]
-    state.last_tokens = (state.last_tokens + head_norm)[-200:]
+    with state._lock:
+        state.last_tokens = (state.last_tokens + head_norm)[-200:]
 
     # Track n-grams from all tokens
     _track_ngrams_from_tokens(state, head_norm)
@@ -338,8 +350,29 @@ def detect_repetition_in_text(text: str, state: DetectorState) -> bool:
 
     # Convert text to normalized tokens
     tokens = _normalize_tokens(text)
-    if len(tokens) < 6:  # Performance guard: skip short sequences
+    if len(tokens) < 2:  # Need at least 2 tokens for repetition
         return False
+
+    # Special case: check for short bigram chants like "hi hi" before performance guard
+    if len(tokens) < 6:
+        # Check for immediate bigram repetition in short sequences
+        for i in range(len(tokens) - 1):
+            bigram = tuple(tokens[i:i+2])
+            # Check if this bigram appears again later
+            for j in range(i+2, len(tokens)):
+                if j+1 < len(tokens) and tuple(tokens[j:j+2]) == bigram:
+                    if ENABLE_DETECTOR_DEBUG:
+                        logger.debug(f"detected short bigram repetition: {bigram}")
+                    return True
+
+        # Also check for direct adjacent token repetition
+        for i in range(len(tokens) - 1):
+            if tokens[i] == tokens[i + 1]:
+                if ENABLE_DETECTOR_DEBUG:
+                    logger.debug(f"detected adjacent token repetition: {tokens[i]}")
+                return True
+
+        return False  # No repetition found in short sequence
 
     # Check for immediate repetition patterns using n-gram similarity
     for n in range(2, min(5, len(tokens) + 1)):
@@ -362,19 +395,48 @@ def detect_repetition_in_text(text: str, state: DetectorState) -> bool:
                 return True
 
             # Only do expensive Jaccard if traditional overlap didn't find it
-            overlapping_ngrams = 0
+            # Pre-compute n-gram sets to avoid rebuilding in the loop
+            ctx_ngram_sets = {}
+            head_ngram_sets = {}
             for n in range(2, min(5, len(head_tokens) + 1, len(ctx_tail) + 1)):
-                jaccard = _compute_ngram_jaccard(ctx_tail, head_tokens, n)
+                if len(ctx_tail) >= n:
+                    ctx_ngram_sets[n] = set(tuple(ctx_tail[i:i+n]) for i in range(len(ctx_tail) - n + 1))
+                if len(head_tokens) >= n:
+                    head_ngram_sets[n] = set(tuple(head_tokens[i:i+n]) for i in range(len(head_tokens) - n + 1))
+
+            overlapping_ngrams = 0
+            strong_match = False
+            for n in range(2, min(5, len(head_tokens) + 1, len(ctx_tail) + 1)):
+                # Use cached sets for Jaccard computation
+                if n not in ctx_ngram_sets or n not in head_ngram_sets:
+                    continue
+
+                ngrams1 = ctx_ngram_sets[n]
+                ngrams2 = head_ngram_sets[n]
+                intersection = len(ngrams1 & ngrams2)
+                union = len(ngrams1 | ngrams2)
+                jaccard = intersection / union if union > 0 else 0.0
+
                 # Progressive thresholds: more strict for longer n-grams
                 threshold = 0.5 if n == 2 else (0.6 if n == 3 else 0.7)
+                strong_threshold = 0.8  # Strong evidence threshold
+
                 if jaccard >= threshold:
                     overlapping_ngrams += 1
                     if ENABLE_DETECTOR_DEBUG:
                         logger.debug(f"n={n} jaccard={jaccard:.3f} >= {threshold}")
 
-            # Require at least 2 different n-gram sizes to match to reduce false positives
-            if overlapping_ngrams >= 2:
-                logger.warning(f"detected cross-segment repetition with {overlapping_ngrams} matching n-gram sizes")
+                # Allow single strong match for trigrams or higher
+                if n >= 3 and jaccard >= strong_threshold:
+                    strong_match = True
+                    if ENABLE_DETECTOR_DEBUG:
+                        logger.debug(f"strong n={n} match jaccard={jaccard:.3f} >= {strong_threshold}")
+
+            # Match if either: 2+ different sizes cross thresholds, or single strong trigram+
+            if overlapping_ngrams >= 2 or strong_match:
+                if ENABLE_DETECTOR_DEBUG:
+                    reason = f"{overlapping_ngrams} matching n-gram sizes" if overlapping_ngrams >= 2 else "single strong match"
+                    logger.debug(f"detected cross-segment repetition with {reason}")
                 return True
 
     return False

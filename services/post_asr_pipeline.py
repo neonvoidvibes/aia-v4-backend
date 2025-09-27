@@ -40,6 +40,7 @@ except ImportError:
         FILTER_EMPTY = "filter_empty"
         PII_ERROR = "pii_error"
         PII_BLOCKED = "pii_blocked"
+        REPETITION_BLOCKED = "repetition_blocked"
     class FallbackReason:
         PIPELINE_EMPTY = "pipeline_empty"
         MIN_SIZE = "min_size"
@@ -49,6 +50,7 @@ except ImportError:
         FAIL = "fail"
         ERROR = "error"
         REDACT = "redact"
+        REPETITION_BLOCKED = "repetition_blocked"
 
 
 def _count_tokens(text: str) -> int:
@@ -177,15 +179,15 @@ def _decide_transcript_candidate_impl(
         if tokens < min_tokens or len(candidate) < min_chars:
             # Check if original text contains repetition before falling back
             if detector_state and detect_repetition_in_text(original, detector_state):
-                # Don't fall back to repetitive original text
-                repetition_blocked_fallback = True
-                candidate = ""  # Clear candidate to force drop path
-                # Track that we blocked a fallback due to repetition
+                # Don't fall back to repetitive original text - keep small filtered text
+                # Track that we kept filtered text due to repetition blocking fallback
                 try:
+                    # Add metadata to track this decision for analytics
+                    stats["kept_filtered_small_due_to_repetition_block"] = 1
                     # Could add custom metric here: FALLBACK_BLOCKED_REPETITION.labels(reason="MIN_SIZE").inc()
-                    pass
                 except:
                     pass
+                # Don't clear candidate - keep the small filtered text instead of dropping
             else:
                 candidate = original
                 candidate_source = "original"
@@ -212,11 +214,7 @@ def _decide_transcript_candidate_impl(
         # Track drop
         metrics_collector.track_post_asr_decision("dropped", provider=provider, language=language)
         if repetition_blocked_fallback:
-            # Use existing enum or fall back to filter empty
-            try:
-                metrics_collector.track_drop(DropReason.FILTER_EMPTY, provider=provider, language=language)
-            except:
-                pass
+            metrics_collector.track_drop(DropReason.REPETITION_BLOCKED, provider=provider, language=language)
         else:
             metrics_collector.track_drop(DropReason.FILTER_EMPTY, provider=provider, language=language)
         return decision
@@ -289,8 +287,8 @@ def _decide_transcript_candidate_impl(
             # Don't fall back to repetitive original text - skip PII fallback
             # Track that we blocked a PII fallback due to repetition
             try:
+                metrics_collector.track_pii_outcome(OutcomeType.REPETITION_BLOCKED, provider=provider, language=language)
                 # Could add custom metric here: FALLBACK_BLOCKED_REPETITION.labels(reason="PII_INVALID").inc()
-                pass
             except:
                 pass
         else:
