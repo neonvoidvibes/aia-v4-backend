@@ -1695,8 +1695,8 @@ def process_audio_segment_and_update_s3(
                 try:
                     from metrics import HALLU_TRIMS
                     # Get provider from SessionState object (not dict)
-            session_state = session_data.get("session_state")
-            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
+                    session_state = session_data.get("session_state")
+                    provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
                     HALLU_TRIMS.labels(reason=stitch_reason, provider=provider).inc()
                 except Exception as e:
                     logger.debug(f"Failed to record hallucination trim metric: {e}")
