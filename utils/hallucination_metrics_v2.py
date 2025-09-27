@@ -315,6 +315,19 @@ class HallucinationMetricsCollector:
         """Get current tracked session count."""
         return self._session_tracker.get_session_count()
 
+    def track_pre_stitch_drop(self, provider: str = "unknown", reason: str = "unknown"):
+        """Track pre-stitch segment drops by provider and reason."""
+        # Map to existing drop tracking with provider context
+        # This provides visibility into pre-hallucination-detection filtering
+        logger.debug(f"PRE_STITCH_DROP: provider={provider}, reason={reason}")
+        # Could add dedicated counter if needed, but for now use existing drop tracking
+
+    def track_pre_stitch_keep(self, provider: str = "unknown", reason: str = "unknown"):
+        """Track pre-stitch segment keeps by provider and reason."""
+        # Map to segment processing tracking
+        logger.debug(f"PRE_STITCH_KEEP: provider={provider}, reason={reason}")
+        # Could add dedicated counter if needed
+
 
 # Global collector instance
 metrics_collector = HallucinationMetricsCollector()

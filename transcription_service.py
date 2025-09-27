@@ -677,29 +677,61 @@ def _should_use_fallback_strategy(consecutive_failures, file_size_mb, processing
 
 def filter_by_duration_and_confidence(segment: Dict, provider: str = "unknown") -> bool:
     """Filter segments that are too short or have low confidence"""
-    # DEBUG: Log segment schema to confirm Deepgram vs Whisper differences
+    import logging
+
+    # Schema trace at INFO without text; preview at DEBUG only
     segment_keys = list(segment.keys())
-    logger.info(f"SEGMENT_FILTER_DEBUG: provider={provider}, keys={segment_keys}, text='{segment.get('text', '')[:50]}'")
+    logger.info("SEGMENT_FILTER_DEBUG provider=%s keys=%s", provider, segment_keys)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("SEGMENT_FILTER_DEBUG preview=%r", (segment.get("text") or "")[:80])
 
     duration = segment.get('end', 0) - segment.get('start', 0)
-    avg_logprob = segment.get('avg_logprob', 0)
-    no_speech_prob = segment.get('no_speech_prob', 0)
+    avg_logprob = segment.get('avg_logprob', None)
+    no_speech_prob = segment.get('no_speech_prob', None)
 
-    # IMMEDIATE MITIGATION: Disable filtering for Deepgram since it doesn't have Whisper confidence fields
-    if provider.lower() == "deepgram":
-        logger.info(f"FILTER_BYPASS: Allowing Deepgram segment (duration={duration:.2f}s)")
-        return True
+    # Capability detection: Whisper-style scores present?
+    whisper_like = (avg_logprob is not None) or (no_speech_prob is not None)
 
-    # Filter very short segments with low confidence (Whisper only)
-    if duration < 1.0 and (avg_logprob < -0.5 or no_speech_prob > 0.3):
-        logger.debug(f"Filtering short low-confidence segment: duration={duration:.2f}s, logprob={avg_logprob:.2f}, no_speech={no_speech_prob:.2f}")
+    # Minimal gates for any provider
+    text_ok = bool((segment.get('text') or '').strip())
+    if duration < 0.3 or not text_ok:
+        logger.debug("PRE_STITCH_DROP reason=%s duration=%.2f text_ok=%s",
+                     "too_short" if duration < 0.3 else "empty_text", duration, text_ok)
+        try:
+            from utils.hallucination_metrics_v2 import metrics_collector
+            metrics_collector.track_pre_stitch_drop(provider=provider, reason="short_or_empty")
+        except Exception:
+            pass
         return False
 
-    # Filter segments that are likely silent (Whisper only)
-    if no_speech_prob > 0.8:
-        logger.debug(f"Filtering likely silent segment: no_speech_prob={no_speech_prob:.2f}")
+    # Whisper-only confidence gates
+    if whisper_like and duration < 1.0 and ((avg_logprob is not None and avg_logprob < -0.5)
+                                            or (no_speech_prob is not None and no_speech_prob > 0.3)):
+        logger.debug(f"Filtering short low-confidence segment: duration={duration:.2f}s, "
+                     f"logprob={avg_logprob}, no_speech={no_speech_prob}")
+        try:
+            from utils.hallucination_metrics_v2 import metrics_collector
+            metrics_collector.track_pre_stitch_drop(provider=provider, reason="low_conf")
+        except Exception:
+            pass
         return False
 
+    # Whisper-only silence gate
+    if whisper_like and (no_speech_prob is not None and no_speech_prob > 0.8):
+        logger.debug(f"Filtering likely silent segment: no_speech_prob={no_speech_prob}")
+        try:
+            from utils.hallucination_metrics_v2 import metrics_collector
+            metrics_collector.track_pre_stitch_drop(provider=provider, reason="silent")
+        except Exception:
+            pass
+        return False
+
+    try:
+        from utils.hallucination_metrics_v2 import metrics_collector
+        reason = "kept_whisper" if whisper_like else "kept_generic"
+        metrics_collector.track_pre_stitch_keep(provider=provider, reason=reason)
+    except Exception:
+        pass
     return True
 
 def analyze_silence_gaps(segments: List[Dict]) -> List[Dict]:
@@ -1535,8 +1567,11 @@ def process_audio_segment_and_update_s3(
         # Get provider info for schema-aware filtering
         current_provider = "unknown"
         try:
-            current_provider = session_data.get("session_state", {}).get("provider_current", "unknown")
-        except:
+            session_state = session_data.get("session_state", {})
+            current_provider = session_state.get("provider_current", "unknown")
+            logger.info(f"PROVIDER_DEBUG: session_state keys={list(session_state.keys())}, provider_current={current_provider}")
+        except Exception as e:
+            logger.warning(f"PROVIDER_DEBUG: Failed to get provider from session_data: {e}")
             pass
 
         # These filters don't depend on session state/offset.
