@@ -112,18 +112,45 @@ class Word:
 class DetectorState:
     """
     Strict subtractive stitcher that ONLY removes overlap.
-    Never prepends/carries seed words. Includes repeat dampener.
+    Never prepends/carries seed words. Includes repeat dampener with n-gram tracking.
     """
     last_tokens: List[str]
     recent_heads: Deque[Tuple[str, ...]]
+    recent_ngrams: Deque[Tuple[Tuple[str, ...], float]]  # (ngram, timestamp)
 
     def __init__(self):
         self.last_tokens = []
-        self.recent_heads = deque(maxlen=6)
+        self.recent_heads = deque(maxlen=10)
+        self.recent_ngrams = deque(maxlen=50)  # Track more n-grams with timestamps
 
     def tail_tokens(self, limit: int) -> List[str]:
         """Return last N tokens from context."""
         return self.last_tokens[-limit:] if self.last_tokens else []
+
+    def add_ngram_pattern(self, ngram: Tuple[str, ...], timestamp: float = None) -> None:
+        """Add n-gram pattern to recent tracking with timestamp."""
+        if timestamp is None:
+            timestamp = time.time()
+        self.recent_ngrams.append((ngram, timestamp))
+
+    def check_ngram_loops(self, tokens: List[str], lookback_seconds: float = 10.0) -> bool:
+        """Check if current tokens contain repeating n-gram patterns within time window."""
+        if len(tokens) < 2:
+            return False
+
+        current_time = time.time()
+        # Generate n-grams from current tokens (2-4 grams)
+        for n in range(2, min(5, len(tokens) + 1)):
+            for i in range(len(tokens) - n + 1):
+                gram = tuple(tokens[i:i+n])
+
+                # Check against recent n-grams within time window
+                for recent_gram, timestamp in self.recent_ngrams:
+                    if current_time - timestamp <= lookback_seconds:
+                        if recent_gram == gram:
+                            return True
+
+        return False
 
 def maybe_trim_repetition(
     words: List[Word],
@@ -154,10 +181,19 @@ def maybe_trim_repetition(
     print(f"OVERLAP_DEBUG: ctx_tail={ctx_tail[-10:] if ctx_tail else []}, seg_head={seg_head[:10]}")
     print(f"OVERLAP_DEBUG: context_len={len(state.last_tokens)}, seg_head_len={len(seg_head)}")
 
+    # Check for n-gram loops before processing overlap
+    if seg_head and state.check_ngram_loops(seg_head):
+        print(f"NGRAM_LOOP_DEBUG: detected repeating n-gram pattern, trimming entire segment")
+        # Trim the entire segment as it's a detected loop
+        state.last_tokens = (state.last_tokens + seg_head)[-200:]  # Still update context
+        return [], "ngram_loop_detected", len(words)
+
     if not ctx_tail or not seg_head:
         # Still update context even if no overlap detection
         head_norm = [w.norm for w in words if w.norm]
         state.last_tokens = (state.last_tokens + head_norm)[-200:]
+        # Track n-grams from processed tokens
+        _track_ngrams_from_tokens(state, head_norm)
         print(f"OVERLAP_DEBUG: No ctx_tail or seg_head, updated context to len={len(state.last_tokens)}")
         return words, None, 0
 
@@ -189,6 +225,9 @@ def maybe_trim_repetition(
 
         # Track empty-after-trim sentinel (bug detector)
         if not trimmed:
+            # For streaming mode: prefer empty result over restoring original repetitive text
+            # This prevents "chant resurrection" - return empty with reason instead
+            print(f"TRIM_DEBUG: full trim resulted in empty, blocking original restore with reason=restored_original_blocked")
             # Note: provider/language passed from call site via thread-local or params
             pass  # Will be tracked at call site
 
@@ -196,13 +235,31 @@ def maybe_trim_repetition(
         kept_norm = [w.norm for w in trimmed if w.norm]
         state.last_tokens = (state.last_tokens + kept_norm)[-200:]
 
+        # Track n-grams from kept tokens
+        _track_ngrams_from_tokens(state, kept_norm)
+
         return trimmed, reason, cut
 
     # no trim; still advance context with head (bounded)
     head_norm = [w.norm for w in words if w.norm]
     state.last_tokens = (state.last_tokens + head_norm)[-200:]
 
+    # Track n-grams from all tokens
+    _track_ngrams_from_tokens(state, head_norm)
+
     return words, None, 0
+
+def _track_ngrams_from_tokens(state: DetectorState, tokens: List[str]) -> None:
+    """Helper function to track n-grams from processed tokens."""
+    if len(tokens) < 2:
+        return
+
+    current_time = time.time()
+    # Track 2-4 grams for loop detection
+    for n in range(2, min(5, len(tokens) + 1)):
+        for i in range(len(tokens) - n + 1):
+            gram = tuple(tokens[i:i+n])
+            state.add_ngram_pattern(gram, current_time)
 
 # Backward compatibility functions for existing code
 class LegacyHallucinationManager:
@@ -227,3 +284,69 @@ def cleanup_session_manager(session_id: str) -> None:
     """Legacy cleanup function for backward compatibility"""
     if session_id in _legacy_managers:
         del _legacy_managers[session_id]
+
+def _compute_ngram_jaccard(tokens1: List[str], tokens2: List[str], n: int) -> float:
+    """Compute Jaccard similarity between n-gram sets of two token sequences."""
+    if len(tokens1) < n or len(tokens2) < n:
+        return 0.0
+
+    # Generate n-grams
+    ngrams1 = set()
+    ngrams2 = set()
+
+    for i in range(len(tokens1) - n + 1):
+        ngrams1.add(tuple(tokens1[i:i+n]))
+
+    for i in range(len(tokens2) - n + 1):
+        ngrams2.add(tuple(tokens2[i:i+n]))
+
+    if not ngrams1 or not ngrams2:
+        return 0.0
+
+    intersection = len(ngrams1 & ngrams2)
+    union = len(ngrams1 | ngrams2)
+
+    return intersection / union if union > 0 else 0.0
+
+def detect_repetition_in_text(text: str, state: DetectorState) -> bool:
+    """
+    Advanced repetition check for fallback logic using n-gram similarity.
+    Returns True if text contains repetitive patterns that should prevent fallback to original.
+    """
+    if not text or not text.strip():
+        return False
+
+    # Convert text to normalized tokens
+    tokens = _normalize_tokens(text)
+    if len(tokens) < 3:
+        return False
+
+    # Check for immediate repetition patterns using n-gram similarity
+    for n in range(2, min(5, len(tokens) + 1)):
+        for i in range(len(tokens) - n):
+            gram = tuple(tokens[i:i+n])
+            # Check if this n-gram appears again in the rest of the text
+            for j in range(i+n, len(tokens)-n+1):
+                if tuple(tokens[j:j+n]) == gram:
+                    return True
+
+    # Enhanced cross-segment repetition using n-gram Jaccard similarity
+    if state.last_tokens:
+        ctx_tail = state.tail_tokens(limit=30)  # Increased context window
+        head_tokens = tokens[:min(15, len(tokens))]  # Increased head window
+
+        if len(ctx_tail) >= 3 and len(head_tokens) >= 3:
+            # Check n-gram similarity for different n values
+            for n in range(2, min(5, len(head_tokens) + 1, len(ctx_tail) + 1)):
+                jaccard = _compute_ngram_jaccard(ctx_tail, head_tokens, n)
+                # Threshold: 0.6 or higher indicates significant similarity
+                if jaccard >= 0.6:
+                    print(f"REPETITION_DEBUG: detected cross-segment repetition n={n} jaccard={jaccard:.3f}")
+                    return True
+
+        # Fallback to traditional suffix-prefix overlap for edge cases
+        overlap = _lcs_suffix_prefix_overlap(ctx_tail, head_tokens)
+        if overlap >= 3:  # Minimum meaningful repetition
+            return True
+
+    return False

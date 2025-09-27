@@ -9,6 +9,7 @@ try:
     from utils.hallucination_metrics_v2 import (
         metrics_collector, DropReason, FallbackReason, OutcomeType
     )
+    from utils.hallucination_detector import detect_repetition_in_text, DetectorState
 except ImportError:
     # Fallback if metrics not available
     class NullMetricsCollector:
@@ -38,6 +39,11 @@ except ImportError:
         FAIL = "fail"
         ERROR = "error"
         REDACT = "redact"
+    # Detector fallbacks
+    def detect_repetition_in_text(text: str, state: object) -> bool:
+        return False
+    class DetectorState:
+        pass
 
 
 def _count_tokens(text: str) -> int:
@@ -85,13 +91,14 @@ def decide_transcript_candidate(
     min_chars: int = 6,
     provider: str = "unknown",
     language: str = "unknown",
+    detector_state: Optional[DetectorState] = None,
 ) -> PostAsrDecision:
     """Select the transcript candidate to append, applying fallbacks when needed."""
     with metrics_collector.time_post_asr_decision(provider=provider, language=language):
         return _decide_transcript_candidate_impl(
             original_text, filtered_text, run_pii, validator,
             toggles=toggles, min_tokens=min_tokens, min_chars=min_chars,
-            provider=provider, language=language
+            provider=provider, language=language, detector_state=detector_state
         )
 
 
@@ -106,6 +113,7 @@ def _decide_transcript_candidate_impl(
     min_chars: int = 6,
     provider: str = "unknown",
     language: str = "unknown",
+    detector_state: Optional[DetectorState] = None,
 ) -> PostAsrDecision:
     """Implementation with metrics tracking."""
     original = (original_text or "").strip()
@@ -140,20 +148,30 @@ def _decide_transcript_candidate_impl(
     low_confidence = False
 
     if toggles.never_empty_contract and not candidate:
-        candidate = original
-        candidate_source = "original"
-        fallback_reason = FALLBACK_PIPELINE_EMPTY
-        used_fallback = True
-        low_confidence = True
+        # Check if original text contains repetition before falling back
+        if detector_state and detect_repetition_in_text(original, detector_state):
+            # Don't fall back to repetitive original text
+            pass
+        else:
+            candidate = original
+            candidate_source = "original"
+            fallback_reason = FALLBACK_PIPELINE_EMPTY
+            used_fallback = True
+            low_confidence = True
 
     if toggles.min_size_guard and candidate:
         tokens = _count_tokens(candidate)
         if tokens < min_tokens or len(candidate) < min_chars:
-            candidate = original
-            candidate_source = "original"
-            fallback_reason = FALLBACK_MIN_SIZE
-            used_fallback = True
-            low_confidence = True
+            # Check if original text contains repetition before falling back
+            if detector_state and detect_repetition_in_text(original, detector_state):
+                # Don't fall back to repetitive original text
+                pass
+            else:
+                candidate = original
+                candidate_source = "original"
+                fallback_reason = FALLBACK_MIN_SIZE
+                used_fallback = True
+                low_confidence = True
 
     if not candidate:
         # No candidate even after fallback (likely because toggles disabled)
@@ -237,28 +255,33 @@ def _decide_transcript_candidate_impl(
 
     # PII rejected the filtered candidate; attempt fallback to original if allowed
     if toggles.never_empty_contract and candidate_source != "original" and original:
-        fallback_candidate = original
-        fallback_reason = FALLBACK_PII_INVALID
-        used_fallback = True
-        low_confidence = True
+        # Check if original text contains repetition before falling back
+        if detector_state and detect_repetition_in_text(original, detector_state):
+            # Don't fall back to repetitive original text - skip PII fallback
+            pass
+        else:
+            fallback_candidate = original
+            fallback_reason = FALLBACK_PII_INVALID
+            used_fallback = True
+            low_confidence = True
 
-        pii_result = _run_pii_candidate(fallback_candidate)
-        if pii_result and validator(pii_result):
-            stats["pii_pass"] = 1
-            stats["pii_fallback"] = 1
-            return PostAsrDecision(
-                final_text=pii_result,
-                low_confidence=low_confidence,
-                used_fallback=used_fallback,
-                drop_reason=DROP_NONE,
-                pii_pass=True,
-                stats=stats,
-                metadata={
-                    "candidate_source": "filtered",
-                    "fallback_reason": fallback_reason,
-                    "final_source": "original",
-                },
-            )
+            pii_result = _run_pii_candidate(fallback_candidate)
+            if pii_result and validator(pii_result):
+                stats["pii_pass"] = 1
+                stats["pii_fallback"] = 1
+                return PostAsrDecision(
+                    final_text=pii_result,
+                    low_confidence=low_confidence,
+                    used_fallback=used_fallback,
+                    drop_reason=DROP_NONE,
+                    pii_pass=True,
+                    stats=stats,
+                    metadata={
+                        "candidate_source": "filtered",
+                        "fallback_reason": fallback_reason,
+                        "final_source": "original",
+                    },
+                )
 
     # Final failure path: record PII rejection
     stats["pii_pass"] = 0

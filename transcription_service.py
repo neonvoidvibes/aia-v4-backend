@@ -1733,6 +1733,7 @@ def process_audio_segment_and_update_s3(
                     min_chars=6,
                     provider=provider,
                     language=language,
+                    detector_state=session_data['hallu_state'],
                 )
 
             try:
