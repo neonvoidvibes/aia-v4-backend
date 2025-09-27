@@ -61,16 +61,38 @@ def _lcs_len(a: List[str], b: List[str]) -> int:
     return dp[m][n]
 
 def _lcs_suffix_prefix_overlap(tail: List[str], head: List[str]) -> int:
-    """Compute overlap between context suffix and current head."""
+    """Compute overlap between context and current segment head using sliding window."""
     if not tail or not head:
         return 0
 
-    # Find longest matching contiguous overlap
+    # First try traditional suffix-prefix overlap (most common case)
     max_overlap = 0
     k = min(len(tail), len(head))
     for i in range(1, k + 1):
         if tail[-i:] == head[:i]:
             max_overlap = i
+
+    # If no suffix-prefix overlap, check for internal repetitions using sliding window
+    if max_overlap == 0:
+        # Look for head pattern anywhere in the tail context
+        head_len = len(head)
+        tail_len = len(tail)
+
+        # Check all possible positions in tail for head pattern
+        for start_pos in range(tail_len - head_len + 1):
+            # Check for match at this position
+            match_len = 0
+            for i in range(min(head_len, tail_len - start_pos)):
+                if tail[start_pos + i] == head[i]:
+                    match_len += 1
+                else:
+                    break
+
+            # Update max overlap if we found a longer match
+            if match_len >= 3:  # Minimum meaningful overlap
+                max_overlap = max(max_overlap, match_len)
+
+    print(f"OVERLAP_DEBUG: _lcs_overlap result={max_overlap} (suffix-prefix or sliding window)")
     return max_overlap
 
 @dataclass
