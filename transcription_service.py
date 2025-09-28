@@ -1425,6 +1425,16 @@ def process_audio_segment_and_update_s3(
     from session_cleanup import session_id_from_path, release_transcription_ref
     import time
 
+    # FIX 1: Define language and provider variables at the top to prevent UnboundLocalError
+    # These are the session-level variables that remain stable throughout processing
+    session_state = session_data.get("session_state")
+    provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
+    language = session_data.get("language_setting_from_client", "unknown")
+
+    # Log the fixed variables for debugging
+    session_id = session_data.get("session_id", "unknown")
+    logger.debug(f"Session {session_id}: Processing with provider={provider}, language={language}")
+
     pending_decremented = False
 
     def _decrement_pending(lock_already_held: bool = False):
@@ -1635,23 +1645,9 @@ def process_audio_segment_and_update_s3(
         raw_segments = transcription_result['segments']
         logger.debug(f"Raw transcription returned {len(raw_segments)} segments for {temp_segment_wav_path}")
 
-        # Get provider info for schema-aware filtering
-        current_provider = "unknown"
-        try:
-            session_state = session_data.get("session_state")
-            if session_state:
-                # session_state is a SessionState object (Pydantic model), not a dict
-                current_provider = getattr(session_state, "provider_current", "unknown")
-                logger.info(f"PROVIDER_DEBUG: session_state type={type(session_state)}, provider_current={current_provider}")
-            else:
-                logger.warning("PROVIDER_DEBUG: No session_state found in session_data")
-        except Exception as e:
-            logger.warning(f"PROVIDER_DEBUG: Failed to get provider from session_data: {e}")
-            pass
-
         # These filters don't depend on session state/offset.
         filtered_segments_pre_lock = analyze_silence_gaps(raw_segments)
-        filtered_segments_pre_lock = [s for s in filtered_segments_pre_lock if filter_by_duration_and_confidence(s, current_provider)]
+        filtered_segments_pre_lock = [s for s in filtered_segments_pre_lock if filter_by_duration_and_confidence(s, provider)]
 
     # Instantiate a transient PII client if PII filtering is enabled
     pii_llm_client_for_service = None
@@ -1697,6 +1693,13 @@ def process_audio_segment_and_update_s3(
         logger.debug(f"After all filtering, {len(final_filtered_segments)} segments remain for processing.")
 
         # --- NEW: Combine segments into a single block before writing ---
+        # FIX 2: Add observability guardrails with explicit segment counts at merge point
+        segment_count = session_data.get("_total_segments_processed", 0) + 1
+        session_data["_total_segments_processed"] = segment_count
+
+        logger.info(f"Session {session_id}: MERGE_POINT seq={current_seq} segment_count={segment_count} "
+                   f"raw_segs={len(final_filtered_segments)} provider={provider} language={language}")
+
         lines_to_append_to_s3 = []
         if final_filtered_segments:
             # Combine text from all valid segments
@@ -1733,9 +1736,6 @@ def process_audio_segment_and_update_s3(
 
             # For Deepgram: Apply segment deduplication and holdback buffer before filtering (inside session lock)
             already_filtered = False
-            # Get provider from SessionState object (not dict)
-            session_state = session_data.get("session_state")
-            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
             if provider == "deepgram":
                 curr_words, dropped = _dedupe_deepgram_segment(curr_words, session_data, segment_offset_seconds)
                 if dropped:
@@ -1831,8 +1831,7 @@ def process_audio_segment_and_update_s3(
                 already_filtered = True
 
             # Apply strict subtractive overlap trimming
-            # Provider already determined earlier in function
-            language = session_data.get("language_setting_from_client", "unknown")
+            # Provider and language already determined at function start
             session_duration_s = session_data.get("accumulated_session_audio_seconds", 0.0)
 
             # Track segment processing
@@ -1946,6 +1945,9 @@ def process_audio_segment_and_update_s3(
             if 'hallu_state' not in session_data:
                 session_data['hallu_state'] = DetectorState()
 
+            # FIX 3: Wrap decision + delivery flow with tight lifecycle logging
+            logger.info(f"Session {session_id}: DECISION_START seq={current_seq} original_len={len(original_text_for_decision)} filtered_len={len(final_text_for_s3)}")
+
             # Time the post-ASR decision with segment processing timer
             with metrics_collector.time_segment_processing(provider=provider, language=language):
                 decision = decide_transcript_candidate(
@@ -1960,6 +1962,9 @@ def process_audio_segment_and_update_s3(
                     language=language,
                     detector_state=session_data['hallu_state'],
                 )
+
+            logger.info(f"Session {session_id}: DECISION_COMPLETE seq={current_seq} drop_reason={decision.drop_reason} "
+                       f"final_len={len(decision.final_text)} fallback={decision.used_fallback} low_conf={decision.low_confidence}")
 
             try:
                 from metrics import (
@@ -2029,14 +2034,8 @@ def process_audio_segment_and_update_s3(
                 }
 
                 # Try ordered delivery first, fallback to direct S3 append
+                logger.info(f"Session {session_id}: DELIVERY_START seq={current_seq} method=ordering text_preview='{final_text_for_s3[:50]}...'")
                 delivered_via_ordering = False
-                logger.info(
-                    "Session %s: Processing transcript for seq=%s, text='%s...', low_conf=%s",
-                    session_id_for_log,
-                    current_seq,
-                    final_text_for_s3[:50],
-                    decision.low_confidence,
-                )
                 try:
                     # Import the ordering function from api_server
                     from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
@@ -2052,20 +2051,21 @@ def process_audio_segment_and_update_s3(
                             metadata=delivery_metadata,
                         )
                         delivered_via_ordering = True
-                        logger.info(f"Session {session_id_for_log}: Delivered seq={current_seq} via ordering system")
+                        logger.info(f"Session {session_id}: DELIVERY_SUCCESS seq={current_seq} method=ordering")
 
                 except Exception as delivery_e:
-                    logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
+                    logger.warning(f"Session {session_id}: DELIVERY_FAILED seq={current_seq} method=ordering error={delivery_e}")
                     delivered_via_ordering = False
 
                 # Only add to S3 if ordering system failed or is disabled
                 # The ordering system handles S3 writing when it succeeds
                 if not delivered_via_ordering:
+                    logger.info(f"Session {session_id}: DELIVERY_FALLBACK seq={current_seq} method=s3_direct")
                     formatted_line = format_transcript_line(timestamp_str, final_text_for_s3, delivery_metadata)
                     lines_to_append_to_s3.append(formatted_line)
-                    logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
+                    logger.info(f"Session {session_id}: DELIVERY_QUEUED seq={current_seq} method=s3_direct lines_queued={len(lines_to_append_to_s3)}")
                 else:
-                    logger.info(f"Session {session_id_for_log}: Successfully delivered seq={current_seq} via ordering system (handles S3 writing)")
+                    logger.info(f"Session {session_id}: DELIVERY_COMPLETE seq={current_seq} method=ordering (handles S3 internally)")
         else:
             logger.info(f"Session {session_id_for_log}: No valid segments remained after filtering, nothing to append.")
         # --- END: New segment combination logic ---
@@ -2085,6 +2085,7 @@ def process_audio_segment_and_update_s3(
 
         # Perform dual storage: raw (immutable) and clean (derived)
         if lines_to_append_to_s3:
+            logger.info(f"Session {session_id}: S3_WRITE_START seq={current_seq} lines_count={len(lines_to_append_to_s3)}")
             s3 = get_s3_client()
             aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
             if not s3 or not aws_s3_bucket:
@@ -2132,7 +2133,11 @@ def process_audio_segment_and_update_s3(
                 updated_content = existing_content + appended_text
 
                 s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
-                logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
+                logger.info(f"Session {session_id}: S3_WRITE_SUCCESS seq={current_seq} lines_written={len(lines_to_append_to_s3)} key={s3_transcript_key}")
+
+                # Log successful content emission for first-emission gate
+                if not getattr(session_data.get('hallu_state', None), '_has_emitted_content', False):
+                    logger.info(f"Session {session_id}: FIRST_EMISSION_SUCCESS seq={current_seq} - setting _has_emitted_content=True")
         
         logger.debug(f"SESSION_LOCK_RELEASED for session {session_id_for_log}")
 
