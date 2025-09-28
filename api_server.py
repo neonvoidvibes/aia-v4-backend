@@ -5728,19 +5728,21 @@ def cleanup_idle_sessions():
                 # Check for reattachment grace period using both session state and grace_deadline
                 session_state = session_data.get("session_state")
                 grace_deadline = session_data.get("grace_deadline")
+                is_finalizing = session_data.get("is_finalizing")
+                # Avoid re-triggering finalization on sessions already in-flight
 
                 # Check session state reattachment expiry
-                if session_state and session_state.reattach_deadline and session_state.is_reattach_expired():
+                if (not is_finalizing) and session_state and session_state.reattach_deadline and session_state.is_reattach_expired():
                     logger.warning(f"Idle session cleanup: Session {session_id} reattachment grace period expired (session_state). Marking for finalization.")
                     sessions_to_finalize.append(session_id)
                 # Check new grace_deadline field
-                elif grace_deadline and now > grace_deadline:
+                elif (not is_finalizing) and grace_deadline and now > grace_deadline:
                     logger.warning(f"Idle session cleanup: Session {session_id} grace period expired (grace_deadline). Marking for finalization.")
                     sessions_to_finalize.append(session_id)
                 # Fallback for sessions without session_state or grace_deadline (legacy behavior)
-                elif not session_state and not grace_deadline and \
+                elif (not is_finalizing) and \
+                     not session_state and not grace_deadline and \
                      session_data.get("is_active") and \
-                     not session_data.get("is_finalizing") and \
                      session_data.get("websocket_connection") is None and \
                      now - session_data.get("last_activity_timestamp", 0) > REATTACH_GRACE_SECONDS:
                     logger.warning(f"Idle session cleanup: Session {session_id} (legacy mode) has been active without a WebSocket for >{REATTACH_GRACE_SECONDS}s. Marking for finalization.")
