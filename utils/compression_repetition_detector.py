@@ -15,8 +15,8 @@ import threading
 class CompressionDetectorConfig:
     """Configuration for compression-based repetition detection."""
     # Primary threshold - segments with higher ratio are considered repetitive
-    # Research shows 1.35 is effective for catching subtle repetitions
-    compression_ratio_threshold: float = 1.35
+    # Lowered to 1.25 to catch Swedish patterns like "åh ni och din ballong"
+    compression_ratio_threshold: float = 1.25
 
     # Hard threshold - segments above this are always dropped
     compression_ratio_hard_limit: float = 2.4
@@ -28,8 +28,8 @@ class CompressionDetectorConfig:
     context_window_size: int = 5
 
     # Threshold for detecting repetitive patterns across segments
-    # Tuned to catch "hejsan hallå" patterns without false positives
-    cross_segment_threshold: float = 1.15
+    # Conservative threshold to minimize false positives
+    cross_segment_threshold: float = 1.20
 
 
 @dataclass

@@ -90,7 +90,7 @@ def _trim_repetitive_head(
     This handles cases like "hejsan hallå" appearing at the start of multiple segments.
     Strategy: Remove first 2-3 words if they match recent patterns.
     """
-    if len(words) < 3:
+    if len(words) < 2:
         return words, "too_short_for_head_trim", 0
 
     segment_text = " ".join([w.text for w in words])
@@ -100,10 +100,15 @@ def _trim_repetitive_head(
     if hasattr(state, 'compression_detector') and state.compression_detector:
         stats = state.compression_detector.get_recent_compression_stats()
 
-        # If we have recent context and this head seems repetitive
-        if stats.get('count', 0) > 0 and compression_result['compression_ratio'] > 1.1:
-            # Try trimming first 2-3 words
-            for trim_count in [2, 3]:
+        # If we have recent context and this segment shows cross-segment repetition
+        if stats.get('count', 0) > 0 and compression_result['reason'] == 'cross_segment_pattern':
+            # Adaptive head trimming: try different trim lengths to find optimal cut point
+            best_improvement = 0
+            best_trim_count = 0
+            best_trimmed_words = words
+
+            # Try trimming 1-4 words from the beginning
+            for trim_count in range(1, min(5, len(words))):
                 if len(words) > trim_count:
                     trimmed_words = words[trim_count:]
                     trimmed_text = " ".join([w.text for w in trimmed_words])
@@ -113,11 +118,25 @@ def _trim_repetitive_head(
                         detector = state.compression_detector
                         trimmed_ratio = detector.calculate_compression_ratio(trimmed_text)
 
-                        if trimmed_ratio < compression_result['compression_ratio'] * 0.8:
-                            logger.info(f"Head trim successful: {trim_count} words removed, ratio improved {compression_result['compression_ratio']:.2f} -> {trimmed_ratio:.2f}")
-                            return trimmed_words, "head_pattern_trimmed", trim_count
-                    except:
-                        pass
+                        # Calculate improvement (higher is better)
+                        improvement = compression_result['compression_ratio'] - trimmed_ratio
+
+                        # Keep the trim that gives the best improvement
+                        # Require very significant improvement to avoid over-trimming normal content
+                        if improvement > best_improvement and improvement > 0.20:
+                            best_improvement = improvement
+                            best_trim_count = trim_count
+                            best_trimmed_words = trimmed_words
+
+                    except Exception as e:
+                        logger.debug(f"Error calculating trimmed compression ratio: {e}")
+                        continue
+
+            # Apply the best trim found
+            if best_trim_count > 0:
+                final_ratio = compression_result['compression_ratio'] - best_improvement
+                logger.info(f"Adaptive head trim: removed {best_trim_count} words, compression improved {compression_result['compression_ratio']:.2f} -> {final_ratio:.2f}")
+                return best_trimmed_words, f"adaptive_head_trim_{best_trim_count}_words", best_trim_count
 
     # If head trimming doesn't help, fall back to main detector
     if MAIN_DETECTOR_AVAILABLE:
