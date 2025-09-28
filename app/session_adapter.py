@@ -103,7 +103,9 @@ class SessionAdapter:
         if not tokens:
             return stripped
 
-        prefix_len = min(max(len(tokens), 1), 3)
+        prefix_len = min(len(tokens), 2) if tokens else 0
+        if prefix_len == 0:
+            return stripped
         prefix_tokens = tokens[:prefix_len]
         prefix_key = " ".join(prefix_tokens)
 
