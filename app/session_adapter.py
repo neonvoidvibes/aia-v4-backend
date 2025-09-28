@@ -25,11 +25,13 @@ class SessionAdapter:
         self._seq: Dict[str, int] = {}
         self._locks: Dict[str, threading.Lock] = {}
         self._legacy_keys: Dict[str, str] = {}
+        self._legacy_intro: Dict[str, str] = {}
         self._global_lock = threading.Lock()
 
     def register_session(self, session_id: str, transcript_key: str) -> None:
         with self._global_lock:
             self._legacy_keys[session_id] = transcript_key
+            self._legacy_intro.pop(session_id, None)
 
     def on_segment(self, *, session_id: str, raw_path: str, captured_ts: float,
                    duration_s: float, language: Optional[str]) -> Optional[TranscriptChunk]:
@@ -56,6 +58,7 @@ class SessionAdapter:
             self._seq.pop(session_id, None)
             self._locks.pop(session_id, None)
             self._legacy_keys.pop(session_id, None)
+            self._legacy_intro.pop(session_id, None)
 
     def _append_legacy_transcript(self, session_id: str, chunk: TranscriptChunk) -> None:
         key = self._legacy_keys.get(session_id)
@@ -68,8 +71,9 @@ class SessionAdapter:
             logger.debug("Session %s: skipping near-duplicate chunk seq=%s for legacy transcript", session_id, chunk.seq)
             return
 
+        clean_text = self._strip_repeated_intro(session_id, chunk.text)
         timestamp = datetime.fromtimestamp(chunk.captured_ts, tz=timezone.utc).strftime("[%H:%M:%S]")
-        line = format_transcript_line(timestamp, chunk.text, chunk.meta)
+        line = format_transcript_line(timestamp, clean_text, chunk.meta)
         try:
             obj = self._s3.get_object(Bucket=self._bucket, Key=key)
             existing = obj["Body"].read().decode("utf-8")
@@ -79,3 +83,33 @@ class SessionAdapter:
             existing += "\n"
         updated = f"{existing}{line}\n"
         self._s3.put_object(Bucket=self._bucket, Key=key, Body=updated.encode("utf-8"))
+
+    def _strip_repeated_intro(self, session_id: str, text: str) -> str:
+        stripped = text.lstrip()
+        candidate = self._extract_intro(stripped)
+        stored = self._legacy_intro.get(session_id)
+        if candidate is None and stored is None:
+            return stripped
+        if stored is None and candidate:
+            self._legacy_intro[session_id] = candidate.lower()
+            return stripped
+        if stored and candidate and candidate.lower() == stored and len(stripped) > len(candidate) + 5:
+            trimmed = stripped[len(candidate):].lstrip(" ,.!?-")
+            # keep intro reference for future comparisons
+            return trimmed if trimmed else stripped
+        return stripped
+
+    @staticmethod
+    def _extract_intro(text: str) -> Optional[str]:
+        limit = min(len(text), 80)
+        window = text[:limit]
+        for mark in ["!", "?", "."]:
+            idx = window.find(mark)
+            if 0 < idx < 40:  # short introductory clause
+                return window[:idx + 1]
+        words = window.split()
+        if len(words) >= 3:
+            return " ".join(words[:3])
+        if words:
+            return " ".join(words)
+        return None
