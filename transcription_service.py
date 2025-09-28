@@ -1840,14 +1840,14 @@ def process_audio_segment_and_update_s3(
                     logger.warning(f"Session {session_id_for_log}: Failed to deliver seq={current_seq} via ordering system: {delivery_e}")
                     delivered_via_ordering = False
 
-                # Always add to S3 transcript - ordering system only handles WebSocket delivery
-                formatted_line = format_transcript_line(timestamp_str, final_text_for_s3, delivery_metadata)
-                lines_to_append_to_s3.append(formatted_line)
-
-                if delivered_via_ordering:
-                    logger.info(f"Session {session_id_for_log}: Successfully delivered seq={current_seq} via ordering system AND added to S3 transcript")
+                # Only add to S3 if ordering system failed or is disabled
+                # The ordering system handles S3 writing when it succeeds
+                if not delivered_via_ordering:
+                    formatted_line = format_transcript_line(timestamp_str, final_text_for_s3, delivery_metadata)
+                    lines_to_append_to_s3.append(formatted_line)
+                    logger.info(f"Session {session_id_for_log}: Using fallback S3 append for seq={current_seq}")
                 else:
-                    logger.info(f"Session {session_id_for_log}: Failed ordering delivery for seq={current_seq}, but added to S3 transcript")
+                    logger.info(f"Session {session_id_for_log}: Successfully delivered seq={current_seq} via ordering system (handles S3 writing)")
         else:
             logger.info(f"Session {session_id_for_log}: No valid segments remained after filtering, nothing to append.")
         # --- END: New segment combination logic ---
