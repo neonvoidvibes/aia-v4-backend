@@ -1726,6 +1726,7 @@ def process_audio_segment_and_update_s3(
                 session_data['stream_time_s'] = 0.0
 
             # For Deepgram: Apply segment deduplication and holdback buffer before filtering (inside session lock)
+            already_filtered = False
             if deepgram:
                 curr_words, dropped = _dedupe_deepgram_segment(curr_words, session_data, segment_offset_seconds)
                 if dropped:
@@ -1774,8 +1775,12 @@ def process_audio_segment_and_update_s3(
                         metrics_collector.track_trim_applied(
                             len(session_data['hallu_state'].last_tokens), seg_cut,
                             provider=provider, language=language)
+                    # Don't keep single punctuation tokens
+                    if len(seg_out) == 1 and seg_out[0].text.strip() in {".", ",", "!", "?"}:
+                        seg_out = []
                     emitted_words.extend(seg_out)
                 curr_words = emitted_words
+                already_filtered = True
 
             # Apply strict subtractive overlap trimming
             # Get provider from SessionState object (not dict)
@@ -1792,19 +1797,27 @@ def process_audio_segment_and_update_s3(
             metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
 
             # Use compression-based filtering for better repetition detection
-            ctx = DetectorContext(provider=provider, language=language, session_start_time=session_data['hallu_state']._session_start_time)
-            stitched_words, stitch_reason, cut_word_count = compress_filter_segment(
-                curr_words,
-                session_data['hallu_state'],
-                provider=provider,
-                language=language,
-                ctx=ctx
-            )
+            if not already_filtered:
+                ctx = DetectorContext(provider=provider, language=language, session_start_time=session_data['hallu_state']._session_start_time)
+                stitched_words, stitch_reason, cut_word_count = compress_filter_segment(
+                    curr_words,
+                    session_data['hallu_state'],
+                    provider=provider,
+                    language=language,
+                    ctx=ctx
+                )
+            else:
+                stitched_words, stitch_reason, cut_word_count = curr_words, "segwise_filtered", 0
             final_text_for_s3 = " ".join(w.text for w in stitched_words)
 
             if not stitched_words:
-                logger.info("FILTER_TRACE: empty after filtering; last_ctx_tokens=%d",
-                            len(session_data['hallu_state'].last_tokens))
+                # Rate-limit FILTER_TRACE to avoid log spam (once per 5s per session)
+                last_trace_key = 'last_filter_trace_time'
+                now = time.time()
+                if now - session_data.get(last_trace_key, 0) >= 5.0:
+                    logger.info("FILTER_TRACE: empty after filtering; last_ctx_tokens=%d",
+                                len(session_data['hallu_state'].last_tokens))
+                    session_data[last_trace_key] = now
 
             # Track metrics for trimming results
             if stitch_reason:

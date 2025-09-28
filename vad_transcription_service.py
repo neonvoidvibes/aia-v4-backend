@@ -44,7 +44,7 @@ class VADTranscriptionService:
     and submission of clean speech segments to the transcription worker pool.
     """
     
-    def __init__(self, openai_api_key: str, vad_aggressiveness: int = 2, language: str = "en"): # Reduced default for child speech
+    def __init__(self, openai_api_key: str, vad_aggressiveness: int = 2, language: str = "en"): # Default level 2 for child speech
         self.openai_api_key = openai_api_key
 
         # Adjust VAD aggressiveness for Swedish child speech
