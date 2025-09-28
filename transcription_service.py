@@ -10,7 +10,7 @@ import boto3
 from botocore.config import Config as BotoConfig # For S3 timeouts
 import openai
 import requests # For OpenAI API call
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import threading # For s3_lock type hint
 import subprocess # For ffprobe fallback
 import mimetypes # Import the mimetypes library
@@ -1725,22 +1725,7 @@ def process_audio_segment_and_update_s3(
                 session_data['prev_delivered_words'] = []
                 session_data['stream_time_s'] = 0.0
 
-            # Apply strict subtractive overlap trimming
-            # Get provider from SessionState object (not dict)
-            session_state = session_data.get("session_state")
-            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
-            language = session_data.get("language_setting_from_client", "unknown")
-            session_duration_s = session_data.get("accumulated_session_audio_seconds", 0.0)
-
-            # Track segment processing
-            metrics_collector.track_segment_processing(provider=provider, language=language)
-
-            # Track trim attempt
-            context_len = len(session_data['hallu_state'].last_tokens)
-            metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
-
-            # For Deepgram: Apply segment deduplication and holdback buffer before filtering
-            deepgram = provider.lower() == "deepgram"
+            # For Deepgram: Apply segment deduplication and holdback buffer before filtering (inside session lock)
             if deepgram:
                 curr_words, dropped = _dedupe_deepgram_segment(curr_words, session_data, segment_offset_seconds)
                 if dropped:
@@ -1776,9 +1761,25 @@ def process_audio_segment_and_update_s3(
                 if not ready:
                     return True  # Nothing ready yet, short-circuit
 
-                # Process the first ready segment (simplest approach)
-                curr_words = ready[0]["words"]
-                # Note: In production, you might want to process all ready segments
+                # Process all ready segments (enhanced from original single-segment approach)
+                all_ready_words = []
+                for s in ready:
+                    all_ready_words.extend(s["words"])
+                curr_words = all_ready_words
+
+            # Apply strict subtractive overlap trimming
+            # Get provider from SessionState object (not dict)
+            session_state = session_data.get("session_state")
+            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
+            language = session_data.get("language_setting_from_client", "unknown")
+            session_duration_s = session_data.get("accumulated_session_audio_seconds", 0.0)
+
+            # Track segment processing
+            metrics_collector.track_segment_processing(provider=provider, language=language)
+
+            # Track trim attempt
+            context_len = len(session_data['hallu_state'].last_tokens)
+            metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
 
             # Use compression-based filtering for better repetition detection
             ctx = DetectorContext(provider=provider, language=language, session_start_time=session_data['hallu_state']._session_start_time)
