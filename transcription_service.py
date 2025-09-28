@@ -1727,7 +1727,10 @@ def process_audio_segment_and_update_s3(
 
             # For Deepgram: Apply segment deduplication and holdback buffer before filtering (inside session lock)
             already_filtered = False
-            if deepgram:
+            # Get provider from SessionState object (not dict)
+            session_state = session_data.get("session_state")
+            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
+            if provider == "deepgram":
                 curr_words, dropped = _dedupe_deepgram_segment(curr_words, session_data, segment_offset_seconds)
                 if dropped:
                     return True  # short-circuit; nothing to emit
@@ -1764,8 +1767,32 @@ def process_audio_segment_and_update_s3(
 
                 # Process ready segments sequentially (update state between them)
                 emitted_words: List[Word] = []
+                def _drop_initial_greeting(words, session_age_s, language):
+                    """Drop leading Swedish greetings from first segment only."""
+                    try:
+                        lang_ok = (language or "").lower().startswith("sv")
+                    except Exception:
+                        lang_ok = False
+                    if not lang_ok or session_age_s > 5.0:
+                        return words, False
+                    GREET_TOKENS_SV = {"hallå", "hej", "hejsan", "tjena", "tja"}
+                    i = 0
+                    while i < len(words):
+                        w = (getattr(words[i], "text", None) or str(words[i])).lower().strip(" .,!?:;–—\"'()[]")
+                        if w in GREET_TOKENS_SV:
+                            i += 1
+                            continue
+                        break
+                    if i > 0:
+                        return words[i:], True
+                    return words, False
+
                 for s in ready:
                     seg_words = s["words"]
+                    # NEW: drop first-utterance greeting before any other filters
+                    session_age_s = session_data.get("accumulated_session_audio_seconds", 0.0)
+                    seg_words, greeting_dropped = _drop_initial_greeting(seg_words, session_age_s, language)
+
                     ctx = DetectorContext(provider=provider, language=language,
                                           session_start_time=session_data['hallu_state']._session_start_time)
                     seg_out, seg_reason, seg_cut = compress_filter_segment(
@@ -1783,9 +1810,7 @@ def process_audio_segment_and_update_s3(
                 already_filtered = True
 
             # Apply strict subtractive overlap trimming
-            # Get provider from SessionState object (not dict)
-            session_state = session_data.get("session_state")
-            provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
+            # Provider already determined earlier in function
             language = session_data.get("language_setting_from_client", "unknown")
             session_duration_s = session_data.get("accumulated_session_audio_seconds", 0.0)
 
@@ -1795,6 +1820,31 @@ def process_audio_segment_and_update_s3(
             # Track trim attempt
             context_len = len(session_data['hallu_state'].last_tokens)
             metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
+
+            # NEW: drop first-utterance greeting before any other filters (for non-Deepgram)
+            if not already_filtered:
+                def _drop_initial_greeting(words, session_age_s, language):
+                    """Drop leading Swedish greetings from first segment only."""
+                    try:
+                        lang_ok = (language or "").lower().startswith("sv")
+                    except Exception:
+                        lang_ok = False
+                    if not lang_ok or session_age_s > 5.0:
+                        return words, False
+                    GREET_TOKENS_SV = {"hallå", "hej", "hejsan", "tjena", "tja"}
+                    i = 0
+                    while i < len(words):
+                        w = (getattr(words[i], "text", None) or str(words[i])).lower().strip(" .,!?:;–—\"'()[]")
+                        if w in GREET_TOKENS_SV:
+                            i += 1
+                            continue
+                        break
+                    if i > 0:
+                        return words[i:], True
+                    return words, False
+
+                session_age_s = session_data.get("accumulated_session_audio_seconds", 0.0)
+                curr_words, greeting_dropped = _drop_initial_greeting(curr_words, session_age_s, language)
 
             # Use compression-based filtering for better repetition detection
             if not already_filtered:
@@ -1844,9 +1894,7 @@ def process_audio_segment_and_update_s3(
                 # Track metrics
                 try:
                     from metrics import HALLU_TRIMS
-                    # Get provider from SessionState object (not dict)
-                    session_state = session_data.get("session_state")
-                    provider = getattr(session_state, "provider_current", "unknown") if session_state else "unknown"
+                    # Provider already determined earlier in function
                     HALLU_TRIMS.labels(reason=stitch_reason, provider=provider).inc()
                 except Exception as e:
                     logger.debug(f"Failed to record hallucination trim metric: {e}")
@@ -1867,8 +1915,10 @@ def process_audio_segment_and_update_s3(
                 return anonymize_transcript_chunk(candidate_text, pii_llm_client_for_service, model_name_pii, language_hint=lang_hint)
 
             toggles = FeatureToggles(
-                never_empty_contract=feature_enabled('transcript.never_empty_contract', True),
-                min_size_guard=feature_enabled('transcript.min_size_guard', True),
+                never_empty_contract=True,
+                min_size_guard=True,
+                head_blocker_enabled=True,
+                early_phase_empty_allowance=True,
             )
 
             # Ensure detector state is initialized for repetition-aware fallbacks
