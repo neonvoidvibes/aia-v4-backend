@@ -28,13 +28,13 @@ class SessionAdapter:
         self._seq: Dict[str, int] = {}
         self._locks: Dict[str, threading.Lock] = {}
         self._legacy_keys: Dict[str, str] = {}
-        self._legacy_intro_tokens: Dict[str, List[str]] = {}
+        self._legacy_prefix_counts: Dict[str, Dict[str, int]] = {}
         self._global_lock = threading.Lock()
 
     def register_session(self, session_id: str, transcript_key: str) -> None:
         with self._global_lock:
             self._legacy_keys[session_id] = transcript_key
-            self._legacy_intro_tokens.pop(session_id, None)
+            self._legacy_prefix_counts.pop(session_id, None)
 
     def on_segment(self, *, session_id: str, raw_path: str, captured_ts: float,
                    duration_s: float, language: Optional[str]) -> Optional[TranscriptChunk]:
@@ -61,7 +61,7 @@ class SessionAdapter:
             self._seq.pop(session_id, None)
             self._locks.pop(session_id, None)
             self._legacy_keys.pop(session_id, None)
-            self._legacy_intro_tokens.pop(session_id, None)
+            self._legacy_prefix_counts.pop(session_id, None)
 
     def _append_legacy_transcript(self, session_id: str, chunk: TranscriptChunk) -> None:
         key = self._legacy_keys.get(session_id)
@@ -74,7 +74,11 @@ class SessionAdapter:
             logger.debug("Session %s: skipping near-duplicate chunk seq=%s for legacy transcript", session_id, chunk.seq)
             return
 
-        clean_text = self._strip_repeated_intro(session_id, chunk.text)
+        clean_text = self._strip_repeated_prefix(session_id, chunk.text)
+        if not clean_text:
+            logger.debug("Session %s: chunk seq=%s reduced to empty after prefix strip", session_id, chunk.seq)
+            return
+
         timestamp = datetime.fromtimestamp(chunk.captured_ts, tz=timezone.utc).strftime("[%H:%M:%S]")
         line = format_transcript_line(timestamp, clean_text, chunk.meta)
         try:
@@ -87,29 +91,29 @@ class SessionAdapter:
         updated = f"{existing}{line}\n"
         self._s3.put_object(Bucket=self._bucket, Key=key, Body=updated.encode("utf-8"))
 
-    def _strip_repeated_intro(self, session_id: str, text: str) -> str:
+    def _strip_repeated_prefix(self, session_id: str, text: str) -> str:
         stripped = text.lstrip()
         tokens, spans = self._tokenize_with_spans(stripped)
-        if len(tokens) < 3:
+        if not tokens:
             return stripped
 
-        baseline = self._legacy_intro_tokens.get(session_id)
-        prefix_tokens = tokens[: min(len(tokens), 8)]
-        if baseline is None:
-            self._legacy_intro_tokens[session_id] = prefix_tokens
+        prefix_len = min(max(len(tokens), 1), 3)
+        prefix_tokens = tokens[:prefix_len]
+        prefix_key = " ".join(prefix_tokens)
+
+        counts = self._legacy_prefix_counts.setdefault(session_id, {})
+        seen_before = counts.get(prefix_key, 0)
+        counts[prefix_key] = seen_before + 1
+
+        if seen_before == 0:
             return stripped
 
-        match_threshold = max(3, len(baseline) - 1)
-        matches = sum(1 for a, b in zip(baseline, prefix_tokens) if a == b)
-        if matches >= match_threshold:
-            drop_count = len(baseline)
-            if drop_count >= len(spans):
-                return stripped
-            cut = spans[drop_count - 1][1]
-            remainder = stripped[cut:].lstrip(" ,.!?-–—")
-            return remainder or stripped
+        if len(tokens) <= prefix_len:
+            return ""
 
-        return stripped
+        cut = spans[prefix_len - 1][1]
+        remainder = stripped[cut:].lstrip(" ,.!?-–—")
+        return remainder or ""
 
     @staticmethod
     def _tokenize_with_spans(text: str) -> Tuple[List[str], List[Tuple[int, int]]]:
@@ -117,7 +121,6 @@ class SessionAdapter:
         spans: List[Tuple[int, int]] = []
         for match in _TOKEN_PATTERN.finditer(text):
             start, end = match.span()
-            token = match.group().lower()
-            tokens.append(token)
+            tokens.append(match.group().lower())
             spans.append((start, end))
         return tokens, spans
