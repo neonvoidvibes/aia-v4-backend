@@ -1428,7 +1428,16 @@ def _finalize_session(session_id: str):
                 logger.info(f"WebSocket for session {session_id} close() called.")
             except Exception as e: 
                 logger.warning(f"Error closing WebSocket for session {session_id} during finalization: {e}", exc_info=True)
-        
+
+        # CRITICAL FIX: Flush any remaining buffered items in the ordering system
+        # This ensures sequences delivered to ordering but not yet flushed to S3 are written
+        if SEGMENT_RETRY_ENABLED:
+            try:
+                flush_all_ordered_segments(session_id)
+                logger.info(f"Session {session_id}: ORDERING_FLUSH_ALL completed during finalization")
+            except Exception as flush_err:
+                logger.error(f"Session {session_id}: ORDERING_FLUSH_ALL failed during finalization: {flush_err}")
+
         logger.info(f"Session {session_id} has been marked as finalized. It will be cleaned up by the idle thread later.")
 
 @app.route('/api/s3/summarize-transcript', methods=['POST'])
@@ -1967,6 +1976,88 @@ def try_deliver_ordered_results(
                                     expired_data["timestamp_str"],
                                     expired_data.get("metadata"))
             logger.warning(f"Session {session_id}: Delivered expired seq={expired_seq} after timeout")
+
+def mark_sequence_dropped(session_id: str, seq: int) -> None:
+    """Mark a sequence as dropped/skipped to advance the ordering pointer."""
+    if not SEGMENT_RETRY_ENABLED:
+        return  # No ordering system to notify
+
+    lock_to_use = session_locks.get(session_id, threading.Lock())
+
+    with lock_to_use:
+        sess = active_sessions.get(session_id)
+        if not sess:
+            logger.warning(f"Session {session_id} not found when marking seq={seq} as dropped")
+            return
+
+        # Initialize ordering state if not exists
+        if "expected_seq" not in sess:
+            sess["expected_seq"] = 1
+        if "pending_ordered_seqs" not in sess:
+            sess["pending_ordered_seqs"] = {}
+
+        expected_seq = sess["expected_seq"]
+        pending_seqs = sess["pending_ordered_seqs"]
+
+        if seq == expected_seq:
+            # This was the next expected sequence - advance the pointer
+            sess["expected_seq"] = seq + 1
+            logger.debug(f"Session {session_id}: Advanced expected_seq to {seq + 1} (dropped seq={seq})")
+
+            # Deliver any consecutive pending sequences that are now ready
+            while sess["expected_seq"] in pending_seqs:
+                next_seq = sess["expected_seq"]
+                pending_data = pending_seqs.pop(next_seq)
+                _deliver_to_client_and_s3(session_id, next_seq,
+                                        pending_data["text"],
+                                        pending_data["timestamp_str"],
+                                        pending_data.get("metadata"))
+                sess["expected_seq"] = next_seq + 1
+                sess["max_delivered_seq"] = next_seq
+                logger.debug(f"Session {session_id}: Released pending seq={next_seq} after drop advancement")
+
+        elif seq in pending_seqs:
+            # This sequence was queued but now dropped - remove it from pending
+            pending_seqs.pop(seq, None)
+            logger.debug(f"Session {session_id}: Removed dropped seq={seq} from pending queue")
+
+        # If seq < expected_seq, it was already processed or dropped - no action needed
+
+
+def flush_all_ordered_segments(session_id: str) -> None:
+    """Flush all remaining buffered segments for a session (used during finalization)."""
+    if not SEGMENT_RETRY_ENABLED:
+        return  # No ordering system to flush
+
+    lock_to_use = session_locks.get(session_id, threading.Lock())
+
+    with lock_to_use:
+        sess = active_sessions.get(session_id)
+        if not sess:
+            logger.warning(f"Session {session_id} not found when flushing ordered segments")
+            return
+
+        pending_seqs = sess.get("pending_ordered_seqs", {})
+        if not pending_seqs:
+            logger.debug(f"Session {session_id}: No pending sequences to flush")
+            return
+
+        logger.info(f"Session {session_id}: Flushing {len(pending_seqs)} remaining ordered segments")
+
+        # Sort pending sequences and deliver them all
+        for seq in sorted(pending_seqs.keys()):
+            pending_data = pending_seqs[seq]
+            gap_marker = f"[Final flush seq={seq}]"
+            _deliver_to_client_and_s3(session_id, seq,
+                                    gap_marker + " " + pending_data["text"],
+                                    pending_data["timestamp_str"],
+                                    pending_data.get("metadata"))
+            logger.debug(f"Session {session_id}: Final flush delivered seq={seq}")
+
+        # Clear the pending queue
+        sess["pending_ordered_seqs"] = {}
+        logger.info(f"Session {session_id}: All pending segments flushed and queue cleared")
+
 
 def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, timestamp_str: str, metadata: Optional[dict] = None) -> None:
     """Deliver transcript to both client and S3."""

@@ -2004,6 +2004,17 @@ def process_audio_segment_and_update_s3(
                     current_seq,
                     decision.drop_reason,
                 )
+
+                # CRITICAL FIX: Notify ordering system that this sequence was dropped (post-decision)
+                # This prevents the ordering writer from blocking on missing sequences
+                try:
+                    from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
+                    if SEGMENT_RETRY_ENABLED:
+                        from api_server import mark_sequence_dropped
+                        mark_sequence_dropped(session_id, current_seq)
+                        logger.info(f"Session {session_id}: ORDERING_SKIP seq={current_seq} reason=post_asr_drop_{decision.drop_reason}")
+                except Exception as skip_err:
+                    logger.warning(f"Session {session_id}: Failed to mark seq={current_seq} as dropped in ordering system: {skip_err}")
             else:
                 final_text_for_s3 = decision.final_text
                 assert final_text_for_s3.strip(), "post-ASR contract breached: empty text about to append"
@@ -2067,7 +2078,19 @@ def process_audio_segment_and_update_s3(
                 else:
                     logger.info(f"Session {session_id}: DELIVERY_COMPLETE seq={current_seq} method=ordering (handles S3 internally)")
         else:
-            logger.info(f"Session {session_id_for_log}: No valid segments remained after filtering, nothing to append.")
+            logger.info(f"Session {session_id}: No valid segments remained after filtering, nothing to append.")
+
+            # CRITICAL FIX: Notify ordering system that this sequence was dropped (pre-decision)
+            # This prevents the ordering writer from blocking on missing sequences
+            try:
+                from api_server import try_deliver_ordered_results, SEGMENT_RETRY_ENABLED
+                if SEGMENT_RETRY_ENABLED:
+                    # Import the ordering writer to mark this sequence as dropped
+                    from api_server import mark_sequence_dropped
+                    mark_sequence_dropped(session_id, current_seq)
+                    logger.info(f"Session {session_id}: ORDERING_SKIP seq={current_seq} reason=pre_decision_empty")
+            except Exception as skip_err:
+                logger.warning(f"Session {session_id}: Failed to mark seq={current_seq} as dropped in ordering system: {skip_err}")
         # --- END: New segment combination logic ---
 
         # Process markers (this logic remains the same)
