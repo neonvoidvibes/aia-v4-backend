@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import threading
+import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
@@ -10,6 +11,7 @@ from core.wav_norm import to_mono16k_pcm
 from storage.log_store import WriteAheadLog
 from utils.transcript_format import format_transcript_line
 
+logger = logging.getLogger(__name__)
 
 class SessionAdapter:
     """Thread-safe adapter that normalizes blobs, feeds the pipeline, and keeps legacy text files in sync."""
@@ -59,6 +61,13 @@ class SessionAdapter:
         key = self._legacy_keys.get(session_id)
         if not key:
             return
+        advisory = {}
+        if isinstance(chunk.meta, dict):
+            advisory = chunk.meta.get("advisory") or {}
+        if advisory.get("is_near_dup"):
+            logger.debug("Session %s: skipping near-duplicate chunk seq=%s for legacy transcript", session_id, chunk.seq)
+            return
+
         timestamp = datetime.fromtimestamp(chunk.captured_ts, tz=timezone.utc).strftime("[%H:%M:%S]")
         line = format_transcript_line(timestamp, chunk.text, chunk.meta)
         try:
