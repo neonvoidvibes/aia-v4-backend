@@ -31,6 +31,11 @@ from services.post_asr_pipeline import (
 )
 from utils.text_noise import drop_leading_initial_noise
 
+def _normalize_token(w) -> str:
+    t = (getattr(w, "text", None) or str(w)).strip()
+    # Lowercasing stabilizes repetition/entropy metrics across providers
+    return t.lower()
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -1784,7 +1789,7 @@ def process_audio_segment_and_update_s3(
                             dur = None
                     except Exception:
                         dur = None
-                    tokens = [(getattr(w, "text", None) or str(w)).strip() for w in words]
+                    tokens = [_normalize_token(w) for w in words]
                     drop_n = drop_leading_initial_noise(tokens, dur)
                     if drop_n > 0:
                         hallu_state._has_emitted_content = True
@@ -1798,7 +1803,10 @@ def process_audio_segment_and_update_s3(
 
                     # Log and metric
                     if noise_drop_count > 0:
-                        logger.debug(f"Session {session_data.get('session_id','unknown')}: Dropped {noise_drop_count} initial-noise tokens (provider={provider})")
+                        logger.debug(
+                            "initial_noise_drop session=%s provider=%s drop_n=%d",
+                            session_data.get('session_id','unknown'), provider, noise_drop_count
+                        )
                         try:
                             from metrics import HALLU_TRIMS
                             HALLU_TRIMS.labels(reason="initial_noise", provider=provider).inc()
@@ -1834,26 +1842,28 @@ def process_audio_segment_and_update_s3(
             metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
 
             # NEW: drop initial noise before any other filters (non-Deepgram path uses same logic)
-            if not already_filtered:
-                hallu_state = session_data['hallu_state']
-                # Estimate duration for the first ≤4 tokens if timings exist
-                try:
-                    dur = (getattr(curr_words[min(3, len(curr_words)-1)], "end", None) or 0.0) - (getattr(curr_words[0], "start", None) or 0.0)
-                    if dur <= 0:
-                        dur = None
-                except Exception:
+            hallu_state = session_data['hallu_state']
+            # Estimate duration for the first ≤4 tokens if timings exist
+            try:
+                dur = (getattr(curr_words[min(3, len(curr_words)-1)], "end", None) or 0.0) - (getattr(curr_words[0], "start", None) or 0.0)
+                if dur <= 0:
                     dur = None
-                tokens = [(getattr(w, "text", None) or str(w)).strip() for w in curr_words]
-                drop_n = drop_leading_initial_noise(tokens, dur)
-                if drop_n > 0 and not getattr(hallu_state, "_has_emitted_content", False):
-                    curr_words = curr_words[drop_n:]
-                    hallu_state._has_emitted_content = True
-                    logger.debug(f"Session {session_data.get('session_id','unknown')}: Dropped {drop_n} initial-noise tokens (provider={provider})")
-                    try:
-                        from metrics import HALLU_TRIMS
-                        HALLU_TRIMS.labels(reason="initial_noise", provider=provider).inc()
-                    except Exception as e:
-                        logger.debug(f"Failed to record initial noise trim metric: {e}")
+            except Exception:
+                dur = None
+            tokens = [_normalize_token(w) for w in curr_words]
+            drop_n = drop_leading_initial_noise(tokens, dur)
+            if drop_n > 0 and not getattr(hallu_state, "_has_emitted_content", False):
+                curr_words = curr_words[drop_n:]
+                hallu_state._has_emitted_content = True
+                logger.debug(
+                    "initial_noise_drop session=%s provider=%s drop_n=%d",
+                    session_data.get('session_id','unknown'), provider, drop_n
+                )
+                try:
+                    from metrics import HALLU_TRIMS
+                    HALLU_TRIMS.labels(reason="initial_noise", provider=provider).inc()
+                except Exception as e:
+                    logger.debug(f"Failed to record initial noise trim metric: {e}")
 
             # Use compression-based filtering for better repetition detection
             if not already_filtered:

@@ -1,5 +1,6 @@
 from math import log2
 from typing import List, Optional
+import os
 
 def _shannon_entropy_chars(s: str) -> float:
     if not s:
@@ -33,11 +34,11 @@ def is_initial_noise(
     duration_s: Optional[float],
     text_joined: Optional[str] = None,
     *,
-    max_tokens_window: int = 4,
-    max_chars_window: int = 24,
-    max_duration_s: float = 1.6,
-    min_entropy_bits: float = 2.3,
-    min_repetition_ratio: float = 0.6,
+    max_tokens_window: int = int(os.getenv("NOISE_MAX_TOKENS_WINDOW", "4")),
+    max_chars_window: int = int(os.getenv("NOISE_MAX_CHARS_WINDOW", "24")),
+    max_duration_s: float = float(os.getenv("NOISE_MAX_DURATION_S", "1.6")),
+    min_entropy_bits: float = float(os.getenv("NOISE_MIN_ENTROPY_BITS", "2.3")),
+    min_repetition_ratio: float = float(os.getenv("NOISE_MIN_REP_RATIO", "0.6")),
 ) -> bool:
     """
     Language-agnostic heuristic for initial 'chant/noise' segments:
