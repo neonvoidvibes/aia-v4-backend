@@ -19,6 +19,7 @@ import concurrent.futures # For parallel processing
 from event_bus import emit as emit_event
 
 from utils.hallucination_detector import DetectorState, Word, maybe_trim_repetition
+from utils.compression_hallucination_filter import compress_filter_segment
 from utils.hallucination_metrics_v2 import metrics_collector
 from utils.feature_flags import feature_enabled
 from utils.transcript_format import format_transcript_line
@@ -1665,9 +1666,12 @@ def process_audio_segment_and_update_s3(
             context_len = len(session_data['hallu_state'].last_tokens)
             metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
 
-            stitched_words, stitch_reason, cut_word_count = maybe_trim_repetition(
+            # Use compression-based filtering for better repetition detection
+            stitched_words, stitch_reason, cut_word_count = compress_filter_segment(
                 curr_words,
-                session_data['hallu_state']
+                session_data['hallu_state'],
+                provider=provider,
+                language=language
             )
             final_text_for_s3 = " ".join(w.text for w in stitched_words)
 

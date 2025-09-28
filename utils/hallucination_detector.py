@@ -35,6 +35,21 @@ except ImportError:
         def track_context_length(self, *args, **kwargs): pass
     metrics_collector = NullMetricsCollector()
 
+# Import compression-based detector for enhanced repetition detection
+try:
+    from .compression_repetition_detector import CompressionRepetitionDetector, CompressionDetectorConfig
+    COMPRESSION_DETECTOR_AVAILABLE = True
+except ImportError:
+    # Fallback if compression detector not available
+    COMPRESSION_DETECTOR_AVAILABLE = False
+    class CompressionRepetitionDetector:
+        def __init__(self, config=None): pass
+        def process_segment(self, text, provider="unknown"):
+            return {"is_repetitive": False, "compression_ratio": 1.0, "reason": "detector_unavailable"}
+        def reset_context(self): pass
+    class CompressionDetectorConfig:
+        pass
+
 # Configuration constants
 # Lower minimum so early repeats like "hallå nu testar jag" are trimmed.
 _MIN_OVERLAP_TOKENS = 3
@@ -223,6 +238,7 @@ class DetectorState:
     recent_heads: Deque[Tuple[str, ...]]
     recent_ngrams: Deque[Tuple[Tuple[str, ...], float]]  # (ngram, timestamp)
     head_model: SessionHeadModel  # Track segment-start patterns
+    compression_detector: CompressionRepetitionDetector  # Compression-based detection
     _lock: threading.Lock
 
     def __init__(self):
@@ -230,6 +246,11 @@ class DetectorState:
         self.recent_heads = deque(maxlen=10)
         self.recent_ngrams = deque(maxlen=50)  # Track more n-grams with timestamps
         self.head_model = SessionHeadModel()
+        # Initialize compression detector if available
+        if COMPRESSION_DETECTOR_AVAILABLE:
+            self.compression_detector = CompressionRepetitionDetector(CompressionDetectorConfig())
+        else:
+            self.compression_detector = CompressionRepetitionDetector()
         self._lock = threading.Lock()
 
     def tail_tokens(self, limit: int) -> List[str]:
@@ -506,8 +527,30 @@ def _compute_ngram_jaccard(tokens1: List[str], tokens2: List[str], n: int) -> fl
 
 def detect_repetition_in_text(text: str, state: DetectorState) -> bool:
     """
-    Advanced repetition check for fallback logic using n-gram similarity.
+    Advanced repetition check combining compression-based and n-gram similarity detection.
+    Uses proven Whisper compression ratio approach as primary method with fallback to n-gram analysis.
     Returns True if text contains repetitive patterns that should prevent fallback to original.
+    """
+    # First, use compression-based detection (proven approach)
+    if hasattr(state, 'compression_detector') and state.compression_detector:
+        try:
+            compression_result = state.compression_detector.process_segment(text, provider="fallback_check")
+            if compression_result['is_repetitive']:
+                if ENABLE_DETECTOR_DEBUG:
+                    logger.debug(f"Compression detector found repetition: ratio={compression_result['compression_ratio']:.2f}, reason={compression_result['reason']}")
+                return True
+        except Exception as e:
+            if ENABLE_DETECTOR_DEBUG:
+                logger.debug(f"Compression detection failed: {e}")
+
+    # Fallback to original n-gram based detection
+    return _detect_repetition_ngram_fallback(text, state)
+
+
+def _detect_repetition_ngram_fallback(text: str, state: DetectorState) -> bool:
+    """
+    Original n-gram similarity-based repetition detection.
+    Used as fallback when compression detection is unavailable or fails.
     """
     if not text or not text.strip():
         return False
