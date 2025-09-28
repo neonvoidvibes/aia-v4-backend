@@ -383,6 +383,8 @@ def strip_repeated_head_at_start(
 
     if should_strip and matched_pattern:
         strip_len = len(matched_pattern)
+        if strip_len >= len(words):
+            strip_len = max(0, len(words) - 1)
         # Don't strip more than we have
         strip_len = min(strip_len, len(words))
 
@@ -542,7 +544,9 @@ def maybe_trim_repetition(
         logger.debug(f"overlap={overlap} vs threshold={threshold}, will_trim={will_trim}{compression_info}")
 
     if will_trim:
-        cut = min(overlap, len(words))
+        # prevent full deletion
+        max_cut = max(0, len(words) - 1)
+        cut = min(overlap, max_cut)
         trimmed = words[cut:]
         reason = f"trimmed_overlap:{overlap}"
 

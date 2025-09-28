@@ -1761,11 +1761,21 @@ def process_audio_segment_and_update_s3(
                 if not ready:
                     return True  # Nothing ready yet, short-circuit
 
-                # Process all ready segments (enhanced from original single-segment approach)
-                all_ready_words = []
+                # Process ready segments sequentially (update state between them)
+                emitted_words: List[Word] = []
                 for s in ready:
-                    all_ready_words.extend(s["words"])
-                curr_words = all_ready_words
+                    seg_words = s["words"]
+                    ctx = DetectorContext(provider=provider, language=language,
+                                          session_start_time=session_data['hallu_state']._session_start_time)
+                    seg_out, seg_reason, seg_cut = compress_filter_segment(
+                        seg_words, session_data['hallu_state'],
+                        provider=provider, language=language, ctx=ctx)
+                    if seg_reason:
+                        metrics_collector.track_trim_applied(
+                            len(session_data['hallu_state'].last_tokens), seg_cut,
+                            provider=provider, language=language)
+                    emitted_words.extend(seg_out)
+                curr_words = emitted_words
 
             # Apply strict subtractive overlap trimming
             # Get provider from SessionState object (not dict)
@@ -1791,6 +1801,10 @@ def process_audio_segment_and_update_s3(
                 ctx=ctx
             )
             final_text_for_s3 = " ".join(w.text for w in stitched_words)
+
+            if not stitched_words:
+                logger.info("FILTER_TRACE: empty after filtering; last_ctx_tokens=%d",
+                            len(session_data['hallu_state'].last_tokens))
 
             # Track metrics for trimming results
             if stitch_reason:
