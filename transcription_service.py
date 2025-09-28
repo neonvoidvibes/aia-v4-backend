@@ -36,6 +36,50 @@ def _normalize_token(w) -> str:
     # Lowercasing stabilizes repetition/entropy metrics across providers
     return t.lower()
 
+def _append_transcript_to_s3(session_data: Dict[str, Any], text: str) -> None:
+    """Helper to append text directly to S3 transcript - single place of truth."""
+    if not text:
+        return
+
+    session_id = session_data.get('session_id', 'unknown')
+    s3_transcript_key = session_data.get('s3_transcript_key')
+    if not s3_transcript_key:
+        logger.error(f"ORDERING_WRITE_MISS session={session_id} no_s3_key")
+        return
+
+    try:
+        s3 = get_s3_client()
+        aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+        if not s3 or not aws_s3_bucket:
+            logger.error(f"ORDERING_WRITE_MISS session={session_id} no_s3_client_or_bucket")
+            return
+
+        # Make sure we always end with a newline
+        payload = text.rstrip() + "\n"
+
+        # Read existing content and append
+        try:
+            obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
+            existing_content = obj['Body'].read().decode('utf-8')
+        except s3.exceptions.NoSuchKey:
+            # File doesn't exist yet, create header
+            language_setting = session_data.get('language_setting_from_client', 'unknown')
+            session_start_time_utc = session_data.get('session_start_time_utc')
+            header = f"# Transcript - Session {session_id}\nAgent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\nLanguage: {format_language_for_header(language_setting)}\nProvider: {get_current_transcription_provider()}\nSession Started (UTC): {session_start_time_utc.isoformat() if session_start_time_utc else 'N/A'}\n\n"
+            existing_content = header
+
+        updated_content = existing_content + payload
+        s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
+
+        # Mark that we've emitted content
+        if 'hallu_state' in session_data:
+            session_data['hallu_state']._has_emitted_content = True
+
+        logger.info(f"ORDERING_WRITE_OK session={session_id} bytes={len(payload)} key={s3_transcript_key}")
+
+    except Exception as e:
+        logger.error(f"ORDERING_WRITE_FAIL session={session_id} error={e}")
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -2064,6 +2108,22 @@ def process_audio_segment_and_update_s3(
                         delivered_via_ordering = True
                         logger.info(f"Session {session_id}: DELIVERY_SUCCESS seq={current_seq} method=ordering")
 
+                        # CRITICAL FIX: Immediately drain contiguous items and append to S3
+                        # The ordering system was acknowledging delivery but never actually writing to S3
+                        try:
+                            from api_server import pop_ready_ordered_segments
+                            ready_items = pop_ready_ordered_segments(session_id)
+                        except Exception as e:
+                            logger.error(f"Session {session_id}: ORDERING_POP_READY_FAIL error={e}")
+                            ready_items = []
+
+                        for seq_ready, text_ready in ready_items:
+                            try:
+                                _append_transcript_to_s3(session_data, text_ready)
+                                logger.debug(f"Session {session_id}: ORDERING_DRAINED seq={seq_ready} chars={len(text_ready)}")
+                            except Exception as e:
+                                logger.error(f"Session {session_id}: ORDERING_APPEND_FAIL seq={seq_ready} error={e}")
+
                 except Exception as delivery_e:
                     logger.warning(f"Session {session_id}: DELIVERY_FAILED seq={current_seq} method=ordering error={delivery_e}")
                     delivered_via_ordering = False
@@ -2102,9 +2162,15 @@ def process_audio_segment_and_update_s3(
             session_data["pause_marker_to_write"] = None # Clear after processing
 
 
-        # Add verification log before persistence
+        # Add verification log before persistence (only log if there's actual content)
         joined_lines = '\n'.join(lines_to_append_to_s3)
-        logger.info(f"Session {session_id_for_log}: Persisting transcript: chars={len(joined_lines)}, lines={len(lines_to_append_to_s3)}")
+        persisted_chars = len(joined_lines)
+        persisted_lines = len(lines_to_append_to_s3)
+
+        if persisted_chars > 0 or persisted_lines > 0:
+            logger.info(f"Session {session_id}: Persisting transcript: chars={persisted_chars}, lines={persisted_lines}")
+        else:
+            logger.debug(f"Session {session_id}: Persist: no-op (nothing to write via legacy path)")
 
         # Perform dual storage: raw (immutable) and clean (derived)
         if lines_to_append_to_s3:

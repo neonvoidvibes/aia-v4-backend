@@ -1433,8 +1433,19 @@ def _finalize_session(session_id: str):
         # This ensures sequences delivered to ordering but not yet flushed to S3 are written
         if SEGMENT_RETRY_ENABLED:
             try:
-                flush_all_ordered_segments(session_id)
-                logger.info(f"Session {session_id}: ORDERING_FLUSH_ALL completed during finalization")
+                remaining_items = flush_all_ordered_segments(session_id)
+                logger.info(f"Session {session_id}: ORDERING_FLUSH_ALL returned {len(remaining_items)} items")
+
+                # Actually write the flushed items to S3
+                from transcription_service import _append_transcript_to_s3
+                for seq_flush, text_flush in remaining_items:
+                    try:
+                        _append_transcript_to_s3(session_data, text_flush)
+                        logger.debug(f"Session {session_id}: FINAL_FLUSH_WRITTEN seq={seq_flush} chars={len(text_flush)}")
+                    except Exception as append_err:
+                        logger.error(f"Session {session_id}: FINAL_FLUSH_WRITE_FAIL seq={seq_flush} error={append_err}")
+
+                logger.info(f"Session {session_id}: ORDERING_FLUSH_ALL completed, wrote {len(remaining_items)} items to S3")
             except Exception as flush_err:
                 logger.error(f"Session {session_id}: ORDERING_FLUSH_ALL failed during finalization: {flush_err}")
 
@@ -2024,39 +2035,71 @@ def mark_sequence_dropped(session_id: str, seq: int) -> None:
         # If seq < expected_seq, it was already processed or dropped - no action needed
 
 
-def flush_all_ordered_segments(session_id: str) -> None:
-    """Flush all remaining buffered segments for a session (used during finalization)."""
+def pop_ready_ordered_segments(session_id: str) -> List[Tuple[int, str]]:
+    """Pop all contiguous, ready-to-flush segments from the ordering buffer."""
     if not SEGMENT_RETRY_ENABLED:
-        return  # No ordering system to flush
+        return []
 
     lock_to_use = session_locks.get(session_id, threading.Lock())
+    ready_items = []
+
+    with lock_to_use:
+        sess = active_sessions.get(session_id)
+        if not sess:
+            return []
+
+        expected_seq = sess.get("expected_seq", 1)
+        pending_seqs = sess.get("pending_ordered_seqs", {})
+
+        # Find all contiguous sequences starting from expected_seq
+        current_seq = expected_seq
+        while current_seq in pending_seqs:
+            pending_data = pending_seqs.pop(current_seq)
+            ready_items.append((current_seq, pending_data["text"]))
+            sess["expected_seq"] = current_seq + 1
+            sess["max_delivered_seq"] = current_seq
+            current_seq += 1
+
+        if ready_items:
+            logger.debug(f"Session {session_id}: Popped {len(ready_items)} ready segments (seqs {ready_items[0][0]}-{ready_items[-1][0]})")
+
+    return ready_items
+
+
+def flush_all_ordered_segments(session_id: str) -> List[Tuple[int, str]]:
+    """Flush all remaining buffered segments for a session (used during finalization)."""
+    if not SEGMENT_RETRY_ENABLED:
+        return []  # No ordering system to flush
+
+    lock_to_use = session_locks.get(session_id, threading.Lock())
+    flushed_items = []
 
     with lock_to_use:
         sess = active_sessions.get(session_id)
         if not sess:
             logger.warning(f"Session {session_id} not found when flushing ordered segments")
-            return
+            return []
 
         pending_seqs = sess.get("pending_ordered_seqs", {})
         if not pending_seqs:
             logger.debug(f"Session {session_id}: No pending sequences to flush")
-            return
+            return []
 
         logger.info(f"Session {session_id}: Flushing {len(pending_seqs)} remaining ordered segments")
 
-        # Sort pending sequences and deliver them all
+        # Sort pending sequences and prepare them for S3 writing
         for seq in sorted(pending_seqs.keys()):
             pending_data = pending_seqs[seq]
-            gap_marker = f"[Final flush seq={seq}]"
-            _deliver_to_client_and_s3(session_id, seq,
-                                    gap_marker + " " + pending_data["text"],
-                                    pending_data["timestamp_str"],
-                                    pending_data.get("metadata"))
-            logger.debug(f"Session {session_id}: Final flush delivered seq={seq}")
+            gap_marker = f"[Final flush seq={seq}] "
+            full_text = gap_marker + pending_data["text"]
+            flushed_items.append((seq, full_text))
+            logger.debug(f"Session {session_id}: Prepared final flush seq={seq}")
 
         # Clear the pending queue
         sess["pending_ordered_seqs"] = {}
-        logger.info(f"Session {session_id}: All pending segments flushed and queue cleared")
+        logger.info(f"Session {session_id}: All pending segments prepared for flush, queue cleared")
+
+    return flushed_items
 
 
 def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, timestamp_str: str, metadata: Optional[dict] = None) -> None:
