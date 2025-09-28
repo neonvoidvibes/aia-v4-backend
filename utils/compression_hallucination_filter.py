@@ -26,7 +26,8 @@ def compress_filter_segment(
     words: List[Word],
     state: DetectorState,
     provider: str = "unknown",
-    language: str = "unknown"
+    language: str = "unknown",
+    ctx: 'DetectorContext' = None
 ) -> Tuple[List[Word], Optional[str], int]:
     """
     Apply compression-based filtering before main hallucination detection.
@@ -65,7 +66,7 @@ def compress_filter_segment(
                 else:
                     # For intra-segment repetition, use standard trimming with compression tie-breaking
                     if MAIN_DETECTOR_AVAILABLE:
-                        return maybe_trim_repetition(words, state, compression_score=result['compression_ratio'])
+                        return maybe_trim_repetition(words, state, ctx=ctx, compression_score=result['compression_ratio'])
                     else:
                         return words, "main_detector_unavailable", 0
 
@@ -74,7 +75,7 @@ def compress_filter_segment(
 
     # No compression issues detected - proceed with normal detection
     if MAIN_DETECTOR_AVAILABLE:
-        return maybe_trim_repetition(words, state)
+        return maybe_trim_repetition(words, state, ctx=ctx)
     else:
         return words, "no_filtering", 0
 
@@ -140,7 +141,7 @@ def _trim_repetitive_head(
 
     # If head trimming doesn't help, fall back to main detector
     if MAIN_DETECTOR_AVAILABLE:
-        return maybe_trim_repetition(words, state)
+        return maybe_trim_repetition(words, state, ctx=None)
     else:
         return words, "head_trim_failed", 0
 

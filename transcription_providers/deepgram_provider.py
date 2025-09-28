@@ -36,11 +36,11 @@ class DeepgramProvider(TranscriptionProvider):
             return 1  # Default to Quiet for Deepgram (reduces hallucination)
 
         # Map frontend levels to Deepgram VAD modes
-        # Note: For Swedish child speech, consider using less aggressive VAD
+        # Keep mapping in [1..3] range as recommended
         mapping = {
-            1: 0,  # Quiet -> Least aggressive (more inclusive, good for child speech)
-            2: 1,  # Mid -> Default balanced mode
-            3: 2   # Noisy -> More aggressive (reduced from 3 to 2 for better child speech handling)
+            1: 1,  # Quiet -> Default balanced mode
+            2: 2,  # Mid -> More aggressive
+            3: 3   # Noisy -> Most aggressive
         }
         return mapping.get(vad_aggressiveness, 1)  # Default to balanced (1) if invalid
 

@@ -18,7 +18,7 @@ import math # For chunking calculations
 import concurrent.futures # For parallel processing
 from event_bus import emit as emit_event
 
-from utils.hallucination_detector import DetectorState, Word, maybe_trim_repetition
+from utils.hallucination_detector import DetectorState, Word, maybe_trim_repetition, DetectorContext
 from utils.compression_hallucination_filter import compress_filter_segment
 from utils.hallucination_metrics_v2 import metrics_collector
 from utils.feature_flags import feature_enabled
@@ -38,13 +38,14 @@ def _emit_session_event(session_id: Optional[str], event_type: str, payload: Opt
     if session_id:
         emit_event(session_id, event_type, payload or {})
 
-def _dedupe_deepgram_segment(words: List[Word], session_data: Dict, segment_offset: float) -> List[Word]:
+def _dedupe_deepgram_segment(words: List[Word], session_data: Dict, segment_offset: float) -> Tuple[List[Word], bool]:
     """
     Deduplication for Deepgram segments to handle out-of-order/duplicate segments.
     Uses time-sorted segment queue with Jaccard token overlap deduplication.
+    Returns (words, dropped: bool)
     """
     if not words:
-        return words
+        return words, False
 
     # Initialize segment history for this session
     if 'deepgram_segment_history' not in session_data:
@@ -52,7 +53,7 @@ def _dedupe_deepgram_segment(words: List[Word], session_data: Dict, segment_offs
 
     segment_text = " ".join(w.text for w in words).strip()
     if not segment_text:
-        return words
+        return words, False
 
     # Get segment timing
     segment_start = words[0].start if words else segment_offset
@@ -60,30 +61,36 @@ def _dedupe_deepgram_segment(words: List[Word], session_data: Dict, segment_offs
 
     # Check against recent segments for duplicates
     history = session_data['deepgram_segment_history']
-    current_tokens = set(segment_text.lower().split())
+
+    # Use token multiset for better duplicate detection
+    from collections import Counter
+    current_tokens = Counter(segment_text.lower().split())
 
     # Clean old history (keep only last 30 seconds)
     cutoff_time = segment_start - 30.0
     history[:] = [seg for seg in history if seg['end'] >= cutoff_time]
 
-    # Check for duplicates using Jaccard similarity
+    # Sort history by start time to handle out-of-order segments
+    history.sort(key=lambda x: x['start'])
+
+    # Check for duplicates using multiset Jaccard similarity
     for existing_segment in history:
-        existing_tokens = existing_segment.get('tokens', set())
+        existing_tokens = existing_segment.get('token_counts', Counter())
         if current_tokens and existing_tokens:
-            # Calculate Jaccard similarity
-            intersection = len(current_tokens & existing_tokens)
-            union = len(current_tokens | existing_tokens)
+            # Calculate multiset Jaccard similarity
+            intersection = sum((current_tokens & existing_tokens).values())
+            union = sum((current_tokens | existing_tokens).values())
             jaccard = intersection / union if union > 0 else 0.0
 
             # High overlap threshold for deduplication
             if jaccard > 0.8:
                 logger.debug(f"Deepgram segment deduped: jaccard={jaccard:.2f}, original='{existing_segment['text'][:50]}', duplicate='{segment_text[:50]}'")
-                return []  # Drop duplicate segment
+                return words, True  # dropped upstream
 
     # Add current segment to history
     history.append({
         'text': segment_text,
-        'tokens': current_tokens,
+        'token_counts': current_tokens,
         'start': segment_start,
         'end': segment_end,
         'timestamp': time.time()
@@ -93,7 +100,7 @@ def _dedupe_deepgram_segment(words: List[Word], session_data: Dict, segment_offs
     if len(history) > 20:
         history[:] = history[-15:]  # Keep most recent 15 segments
 
-    return words
+    return words, False
 
 # Import session state model
 from models.session_state import SessionState
@@ -1706,6 +1713,15 @@ def process_audio_segment_and_update_s3(
             # Initialize detector state if not exists
             if 'hallu_state' not in session_data:
                 session_data['hallu_state'] = DetectorState()
+                # Initialize session start time
+                session_start_time_utc = session_data.get('session_start_time', datetime.now(timezone.utc))
+                session_data['hallu_state']._session_start_time = session_start_time_utc.timestamp()
+                # Set language hint on head model
+                try:
+                    language = session_data.get("language_setting_from_client", "unknown")
+                    session_data['hallu_state'].head_model._language_hint = language[:2].lower()
+                except Exception:
+                    pass
                 session_data['prev_delivered_words'] = []
                 session_data['stream_time_s'] = 0.0
 
@@ -1723,16 +1739,55 @@ def process_audio_segment_and_update_s3(
             context_len = len(session_data['hallu_state'].last_tokens)
             metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
 
-            # For Deepgram: Apply segment deduplication before filtering
-            if provider.lower() == "deepgram":
-                curr_words = _dedupe_deepgram_segment(curr_words, session_data, segment_offset_seconds)
+            # For Deepgram: Apply segment deduplication and holdback buffer before filtering
+            deepgram = provider.lower() == "deepgram"
+            if deepgram:
+                curr_words, dropped = _dedupe_deepgram_segment(curr_words, session_data, segment_offset_seconds)
+                if dropped:
+                    return True  # short-circuit; nothing to emit
+
+                # Final-ish holdback: buffer segments briefly to avoid re-stitching interims
+                hb = session_data.setdefault("holdback_queue", [])
+                seg = {
+                    "start": curr_words[0].start if curr_words else segment_offset_seconds,
+                    "end":   curr_words[-1].end if curr_words else segment_offset_seconds,
+                    "words": curr_words,
+                    "ts": time.time(),
+                }
+                hb.append(seg)
+                # sort by start
+                hb.sort(key=lambda s: (s["start"], s["end"]))
+                # release segments that no longer overlap with any newer item beyond epsilon, or older than timeout
+                epsilon = 0.05
+                timeout_s = 0.5
+                now = time.time()
+                ready = []
+                keep = []
+                for i, s in enumerate(hb):
+                    newer_overlap = any((t["start"] - s["end"]) < epsilon and t is not s for t in hb[i+1:])
+                    too_old = (now - s["ts"]) >= timeout_s
+                    if not newer_overlap or too_old:
+                        ready.append(s)
+                    else:
+                        keep.append(s)
+                session_data["holdback_queue"] = keep
+
+                # Replace curr_words by processing ready items
+                if not ready:
+                    return True  # Nothing ready yet, short-circuit
+
+                # Process the first ready segment (simplest approach)
+                curr_words = ready[0]["words"]
+                # Note: In production, you might want to process all ready segments
 
             # Use compression-based filtering for better repetition detection
+            ctx = DetectorContext(provider=provider, language=language, session_start_time=session_data['hallu_state']._session_start_time)
             stitched_words, stitch_reason, cut_word_count = compress_filter_segment(
                 curr_words,
                 session_data['hallu_state'],
                 provider=provider,
-                language=language
+                language=language,
+                ctx=ctx
             )
             final_text_for_s3 = " ".join(w.text for w in stitched_words)
 
@@ -1934,8 +1989,9 @@ def process_audio_segment_and_update_s3(
                 logger.error("S3 client/bucket unavailable inside lock. Cannot write.")
                 # Don't update duration if write fails
             else:
-                # Write to raw JSONL (append-only, never blocked)
-                raw_key = s3_transcript_key.replace('.txt', '.raw.jsonl')
+                # Write to raw JSONL (append-only, never blocked) - avoid RMW races
+                import uuid
+                base = s3_transcript_key.rsplit(".", 1)[0]
                 raw_entry = {
                     "timestamp": time.time(),
                     "utc_time": datetime.now(timezone.utc).isoformat(),
@@ -1946,20 +2002,19 @@ def process_audio_segment_and_update_s3(
                     "provider": provider,
                     "language": language,
                     "words_cut": cut_word_count,
-                    "session_phase": phase if 'phase' in locals() else "unknown"
+                    "session_phase": "unknown"  # Will be available in future
                 }
                 try:
                     raw_line = json.dumps(raw_entry) + "\n"
+                    chunk_key = f"{base}.raw/{int(time.time()*1000)}-{uuid.uuid4().hex}.jsonl"
+                    s3.put_object(Bucket=aws_s3_bucket, Key=chunk_key, Body=raw_line.encode('utf-8'))
+                    # best-effort manifest (append-only)
+                    manifest_key = f"{base}.raw/_manifest"
                     try:
-                        # Try to get existing raw content
-                        obj = s3.get_object(Bucket=aws_s3_bucket, Key=raw_key)
-                        existing_raw = obj['Body'].read().decode('utf-8')
-                    except s3.exceptions.NoSuchKey:
-                        existing_raw = ""
-
-                    updated_raw = existing_raw + raw_line
-                    s3.put_object(Bucket=aws_s3_bucket, Key=raw_key, Body=updated_raw.encode('utf-8'))
-                    logger.debug(f"Appended raw entry to {raw_key}")
+                        s3.put_object(Bucket=aws_s3_bucket, Key=manifest_key, Body=(chunk_key+"\n").encode("utf-8"))
+                    except Exception:
+                        pass
+                    logger.debug(f"Wrote raw entry to {chunk_key}")
                 except Exception as e:
                     logger.error(f"Failed to write raw transcript: {e}")
 
