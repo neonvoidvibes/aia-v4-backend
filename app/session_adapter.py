@@ -1,9 +1,10 @@
 from __future__ import annotations
 import os
+import re
 import threading
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 
 from app.pipeline_wiring import build_pipeline
 from core.types import AudioBlob, TranscriptChunk
@@ -12,6 +13,8 @@ from storage.log_store import WriteAheadLog
 from utils.transcript_format import format_transcript_line
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_PATTERN = re.compile(r"\b\w+\b")
 
 class SessionAdapter:
     """Thread-safe adapter that normalizes blobs, feeds the pipeline, and keeps legacy text files in sync."""
@@ -25,13 +28,13 @@ class SessionAdapter:
         self._seq: Dict[str, int] = {}
         self._locks: Dict[str, threading.Lock] = {}
         self._legacy_keys: Dict[str, str] = {}
-        self._legacy_intro: Dict[str, str] = {}
+        self._legacy_intro_tokens: Dict[str, List[str]] = {}
         self._global_lock = threading.Lock()
 
     def register_session(self, session_id: str, transcript_key: str) -> None:
         with self._global_lock:
             self._legacy_keys[session_id] = transcript_key
-            self._legacy_intro.pop(session_id, None)
+            self._legacy_intro_tokens.pop(session_id, None)
 
     def on_segment(self, *, session_id: str, raw_path: str, captured_ts: float,
                    duration_s: float, language: Optional[str]) -> Optional[TranscriptChunk]:
@@ -58,7 +61,7 @@ class SessionAdapter:
             self._seq.pop(session_id, None)
             self._locks.pop(session_id, None)
             self._legacy_keys.pop(session_id, None)
-            self._legacy_intro.pop(session_id, None)
+            self._legacy_intro_tokens.pop(session_id, None)
 
     def _append_legacy_transcript(self, session_id: str, chunk: TranscriptChunk) -> None:
         key = self._legacy_keys.get(session_id)
@@ -86,30 +89,35 @@ class SessionAdapter:
 
     def _strip_repeated_intro(self, session_id: str, text: str) -> str:
         stripped = text.lstrip()
-        candidate = self._extract_intro(stripped)
-        stored = self._legacy_intro.get(session_id)
-        if candidate is None and stored is None:
+        tokens, spans = self._tokenize_with_spans(stripped)
+        if len(tokens) < 3:
             return stripped
-        if stored is None and candidate:
-            self._legacy_intro[session_id] = candidate.lower()
+
+        baseline = self._legacy_intro_tokens.get(session_id)
+        prefix_tokens = tokens[: min(len(tokens), 8)]
+        if baseline is None:
+            self._legacy_intro_tokens[session_id] = prefix_tokens
             return stripped
-        if stored and candidate and candidate.lower() == stored and len(stripped) > len(candidate) + 5:
-            trimmed = stripped[len(candidate):].lstrip(" ,.!?-")
-            # keep intro reference for future comparisons
-            return trimmed if trimmed else stripped
+
+        match_threshold = max(3, len(baseline) - 1)
+        matches = sum(1 for a, b in zip(baseline, prefix_tokens) if a == b)
+        if matches >= match_threshold:
+            drop_count = len(baseline)
+            if drop_count >= len(spans):
+                return stripped
+            cut = spans[drop_count - 1][1]
+            remainder = stripped[cut:].lstrip(" ,.!?-–—")
+            return remainder or stripped
+
         return stripped
 
     @staticmethod
-    def _extract_intro(text: str) -> Optional[str]:
-        limit = min(len(text), 80)
-        window = text[:limit]
-        for mark in ["!", "?", "."]:
-            idx = window.find(mark)
-            if 0 < idx < 40:  # short introductory clause
-                return window[:idx + 1]
-        words = window.split()
-        if len(words) >= 3:
-            return " ".join(words[:3])
-        if words:
-            return " ".join(words)
-        return None
+    def _tokenize_with_spans(text: str) -> Tuple[List[str], List[Tuple[int, int]]]:
+        tokens: List[str] = []
+        spans: List[Tuple[int, int]] = []
+        for match in _TOKEN_PATTERN.finditer(text):
+            start, end = match.span()
+            token = match.group().lower()
+            tokens.append(token)
+            spans.append((start, end))
+        return tokens, spans
