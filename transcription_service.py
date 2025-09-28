@@ -29,7 +29,7 @@ from services.post_asr_pipeline import (
     DROP_NONE,
     DROP_ASR_EMPTY,
 )
-from utils.text_noise import drop_leading_initial_noise
+from utils.text_noise import drop_leading_initial_noise, noise_signals
 
 def _normalize_token(w) -> str:
     t = (getattr(w, "text", None) or str(w)).strip()
@@ -1792,7 +1792,6 @@ def process_audio_segment_and_update_s3(
                     tokens = [_normalize_token(w) for w in words]
                     drop_n = drop_leading_initial_noise(tokens, dur)
                     if drop_n > 0:
-                        hallu_state._has_emitted_content = True
                         return words[drop_n:], drop_n
                     return words, 0
 
@@ -1803,9 +1802,11 @@ def process_audio_segment_and_update_s3(
 
                     # Log and metric
                     if noise_drop_count > 0:
+                        sig = noise_signals(tokens, dur)
                         logger.debug(
-                            "initial_noise_drop session=%s provider=%s drop_n=%d",
-                            session_data.get('session_id','unknown'), provider, noise_drop_count
+                            "initial_noise_drop session=%s provider=%s drop_n=%d rep=%.3f ent=%.3f dur=%s win=%d chars=%d",
+                            session_data.get('session_id','unknown'), provider, noise_drop_count,
+                            sig["rep_ratio"], sig["entropy"], sig["duration"], sig["window_len"], sig["chars"]
                         )
                         try:
                             from metrics import HALLU_TRIMS
@@ -1852,12 +1853,13 @@ def process_audio_segment_and_update_s3(
                 dur = None
             tokens = [_normalize_token(w) for w in curr_words]
             drop_n = drop_leading_initial_noise(tokens, dur)
-            if drop_n > 0 and not getattr(hallu_state, "_has_emitted_content", False):
+            if drop_n > 0:
                 curr_words = curr_words[drop_n:]
-                hallu_state._has_emitted_content = True
+                sig = noise_signals(tokens, dur)
                 logger.debug(
-                    "initial_noise_drop session=%s provider=%s drop_n=%d",
-                    session_data.get('session_id','unknown'), provider, drop_n
+                    "initial_noise_drop session=%s provider=%s drop_n=%d rep=%.3f ent=%.3f dur=%s win=%d chars=%d",
+                    session_data.get('session_id','unknown'), provider, drop_n,
+                    sig["rep_ratio"], sig["entropy"], sig["duration"], sig["window_len"], sig["chars"]
                 )
                 try:
                     from metrics import HALLU_TRIMS

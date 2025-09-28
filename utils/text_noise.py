@@ -61,6 +61,14 @@ def is_initial_noise(
 
     return (tokens_ok or chars_ok) and dur_ok and signal_low_info
 
+def noise_signals(tokens: List[str], duration_s: Optional[float]):
+    window = tokens[:max(1, int(os.getenv("NOISE_MAX_TOKENS_WINDOW", "4")))]
+    joined = "".join(window)
+    rep = _repetition_ratio(window)
+    ent = _shannon_entropy_chars(joined)
+    dur = duration_s
+    return {"rep_ratio": rep, "entropy": ent, "duration": dur, "window_len": len(window), "chars": len(joined)}
+
 def drop_leading_initial_noise(tokens: List[str], duration_s: Optional[float]) -> int:
     """
     If the leading run qualifies as initial noise, return how many tokens to drop.
