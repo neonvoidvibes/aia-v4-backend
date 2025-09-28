@@ -63,9 +63,9 @@ def compress_filter_segment(
                     # For cross-segment patterns like "hejsan hallå", try to trim head
                     return _trim_repetitive_head(words, state, result)
                 else:
-                    # For intra-segment repetition, use standard trimming
+                    # For intra-segment repetition, use standard trimming with compression tie-breaking
                     if MAIN_DETECTOR_AVAILABLE:
-                        return maybe_trim_repetition(words, state)
+                        return maybe_trim_repetition(words, state, compression_score=result['compression_ratio'])
                     else:
                         return words, "main_detector_unavailable", 0
 

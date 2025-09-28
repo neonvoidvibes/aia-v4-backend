@@ -74,6 +74,30 @@ def _normalize_tokens(text: str) -> List[str]:
     t = _ws_re.sub(" ", t).strip()
     return t.split()
 
+def _simple_char_similarity(str1: str, str2: str) -> float:
+    """Simple character-level similarity for Swedish head pattern matching."""
+    if not str1 or not str2:
+        return 0.0
+
+    # Normalize both strings
+    s1 = str1.lower().strip()
+    s2 = str2.lower().strip()
+
+    if s1 == s2:
+        return 1.0
+
+    # Simple character overlap metric
+    set1 = set(s1)
+    set2 = set(s2)
+
+    if not set1 or not set2:
+        return 0.0
+
+    intersection = len(set1 & set2)
+    union = len(set1 | set2)
+
+    return intersection / union if union > 0 else 0.0
+
 def _lcs_len(a: List[str], b: List[str]) -> int:
     """Classic DP LCS length, optimized for short sequences (<=15)"""
     m, n = len(a), len(b)
@@ -182,7 +206,7 @@ class SessionHeadModel:
                 # Clean up last_seen for removed items
                 self.last_seen = {k: v for k, v in self.last_seen.items() if k in self.counts}
 
-    def should_strip_head(self, tokens: List[str], now: float = None) -> Tuple[bool, Optional[Tuple[str, ...]]]:
+    def should_strip_head(self, tokens: List[str], now: float = None, provider: str = "unknown") -> Tuple[bool, Optional[Tuple[str, ...]]]:
         """Check if head should be stripped based on recent patterns."""
         if now is None:
             now = time.time()
@@ -190,9 +214,15 @@ class SessionHeadModel:
         if len(tokens) < 2:
             return False, None
 
+        # For Deepgram+Swedish: enable runtime head-pattern blocker with relaxed thresholds
+        is_deepgram_swedish = provider.lower() == "deepgram" and hasattr(self, '_language_hint') and self._language_hint == "sv"
+
         with self._lock:
             best_match = None
             best_score = 0.0
+
+            session_age = now - self.session_start_time
+            early_session = session_age <= 30.0  # Extended early session window
 
             for head_pattern, weight in self.counts.items():
                 # Skip patterns not seen recently (>60s)
@@ -203,14 +233,21 @@ class SessionHeadModel:
                 if len(tokens) >= k:
                     # Exact prefix match
                     if tuple(tokens[:k]) == head_pattern:
-                        # Check activation rule: ≥2 occurrences or within 15s of session start
-                        if weight >= 2.0 or (now - self.session_start_time <= 15.0):
+                        # Relaxed activation for Deepgram+Swedish in early session
+                        if is_deepgram_swedish and early_session:
+                            # Single occurrence is enough in first 30s for Deepgram+Swedish
+                            if weight >= 1.0:
+                                return True, head_pattern
+                        # Standard activation rule: ≥2 occurrences or within 15s of session start
+                        elif weight >= 2.0 or (session_age <= 15.0):
                             return True, head_pattern
 
-                    # Strong Jaccard match for near-matches
+                    # Enhanced fuzzy matching for head patterns
                     if k <= len(tokens):
                         tokens_k = tokens[:k]
-                        # Simple token-level Jaccard for head matching
+
+                        # Multi-level fuzzy matching
+                        # 1. Token-level Jaccard (existing)
                         set1 = set(head_pattern)
                         set2 = set(tokens_k)
                         if set1 and set2:
@@ -219,10 +256,35 @@ class SessionHeadModel:
                                 best_match = head_pattern
                                 best_score = jaccard
 
-            # Strong match threshold (≥0.8) for near-matches
-            if best_match and best_score >= 0.8:
+                        # 2. Character-level similarity for Swedish variations
+                        if is_deepgram_swedish:
+                            head_str = " ".join(head_pattern)
+                            tokens_str = " ".join(tokens_k)
+
+                            # Simple character-level similarity
+                            if len(head_str) > 0 and len(tokens_str) > 0:
+                                char_similarity = _simple_char_similarity(head_str, tokens_str)
+                                if char_similarity > 0.75:  # 75% character similarity
+                                    # Boost score for high character similarity
+                                    adjusted_score = max(jaccard, char_similarity * 0.9)
+                                    if adjusted_score > best_score:
+                                        best_match = head_pattern
+                                        best_score = adjusted_score
+
+            # Adaptive threshold based on provider and session phase
+            if is_deepgram_swedish and early_session:
+                threshold = 0.6  # Lower threshold for Deepgram+Swedish in early session
+            else:
+                threshold = 0.8  # Standard threshold
+
+            if best_match and best_score >= threshold:
                 weight = self.counts.get(best_match, 0.0)
-                if weight >= 2.0 or (now - self.session_start_time <= 15.0):
+
+                # Relaxed weight requirements for Deepgram+Swedish
+                if is_deepgram_swedish and early_session:
+                    if weight >= 1.0:
+                        return True, best_match
+                elif weight >= 2.0 or (session_age <= 15.0):
                     return True, best_match
 
             return False, None
@@ -288,7 +350,8 @@ class DetectorState:
 def strip_repeated_head_at_start(
     words: List[Word],
     state: DetectorState,
-    segment_position: int = 0
+    segment_position: int = 0,
+    provider: str = "unknown"
 ) -> Tuple[List[Word], Optional[str], int]:
     """
     Strip repeated head patterns at segment start.
@@ -306,7 +369,7 @@ def strip_repeated_head_at_start(
         return words, None, 0
 
     # Check if head should be stripped
-    should_strip, matched_pattern = state.head_model.should_strip_head(tokens)
+    should_strip, matched_pattern = state.head_model.should_strip_head(tokens, provider=provider)
 
     if should_strip and matched_pattern:
         strip_len = len(matched_pattern)
@@ -334,6 +397,8 @@ def maybe_trim_repetition(
     overlap_ratio: float = _OVERLAP_RATIO,
     segment_position: int = 0,  # 0 for segment start, >0 for continuation
     feature_enabled_head_blocker: bool = True,
+    provider: str = "unknown",
+    compression_score: Optional[float] = None,  # For tie-breaking decisions
 ) -> Tuple[List[Word], Optional[str], int]:
     """
     Pure function: if the head of `words` overlaps with the tail of prior context,
@@ -344,7 +409,7 @@ def maybe_trim_repetition(
     # Step 1: Try segment-start head blocker first (runs before other logic)
     if feature_enabled_head_blocker and segment_position == 0:
         head_blocked_words, head_reason, head_cut = strip_repeated_head_at_start(
-            words, state, segment_position
+            words, state, segment_position, provider=provider
         )
         if head_reason:
             # Update head model with original tokens before returning
@@ -410,29 +475,63 @@ def maybe_trim_repetition(
     if ENABLE_DETECTOR_DEBUG:
         logger.debug(f"suffix-prefix overlap={overlap} between ctx_tail={ctx_tail} and seg_head={seg_head}")
 
-    # Bootstrap: in the first few tokens of context, use a relaxed threshold so
-    # immediate repeats of the greeting are trimmed cleanly.
-    # This avoids needing time-based logic and keeps trimming purely boundary-based.
-    if context_len < 8:
+    # Phase-based thresholding with hard caps to prevent late-session over-trimming
+    session_start_time = getattr(state, '_session_start_time', None) or time.time()
+    session_age = time.time() - session_start_time
+
+    # Phase detection with hard boundaries
+    if context_len < 8:  # Bootstrap phase: first 8 context tokens
         boot_min = 2
         boot_ratio = 0.50
         threshold = max(boot_min, int(len(seg_head) * boot_ratio))
+        phase = "BOOTSTRAP"
         if ENABLE_DETECTOR_DEBUG:
             logger.debug(f"BOOTSTRAP mode - threshold={threshold} (boot_min={boot_min}, seg_head_len*{boot_ratio}={int(len(seg_head) * boot_ratio)})")
-    elif segment_position == 0:
-        # Start-only aggressive thresholding: lower threshold for segment start
+    elif segment_position == 0 and session_age <= 10.0:  # Early segment start (first 10 seconds)
         start_min = 2  # Lower minimum for segment start
         threshold = max(start_min, int(len(seg_head) * overlap_ratio))
+        phase = "SEGMENT_START"
         if ENABLE_DETECTOR_DEBUG:
             logger.debug(f"SEGMENT_START mode - threshold={threshold} (start_min={start_min}, seg_head_len*{overlap_ratio}={int(len(seg_head) * overlap_ratio)})")
-    else:
+    elif session_age <= 30.0:  # Normal phase: up to 30 seconds
         threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
+        phase = "NORMAL"
         if ENABLE_DETECTOR_DEBUG:
             logger.debug(f"NORMAL mode - threshold={threshold} (min_tokens={min_overlap_tokens}, seg_head_len*{overlap_ratio}={int(len(seg_head) * overlap_ratio)})")
+    else:  # Late session: hard cap at 5% trim rate
+        # After 30 seconds, never allow more than 5% trim rate
+        late_session_max_trim = max(1, int(len(seg_head) * 0.05))  # Maximum 5% trim
+        normal_threshold = max(min_overlap_tokens, int(len(seg_head) * overlap_ratio))
+        threshold = min(normal_threshold, late_session_max_trim)
+        phase = "LATE_SESSION_CAPPED"
+        if ENABLE_DETECTOR_DEBUG:
+            logger.debug(f"LATE_SESSION mode - threshold={threshold} (capped at 5%: {late_session_max_trim}, normal would be: {normal_threshold})")
+
+    # Use compression score for tie-breaking when overlap is close to threshold
+    will_trim = overlap >= threshold
+    if compression_score and overlap > 0:
+        # For borderline cases, use compression score to make final decision
+        if threshold - 1 <= overlap < threshold:
+            # Tie-breaking zone: overlap is close but below threshold
+            # High compression score (indicating repetition) can tip the decision toward trimming
+            compression_threshold = 2.5  # Above this ratio, favor trimming
+            if compression_score >= compression_threshold:
+                will_trim = True
+                if ENABLE_DETECTOR_DEBUG:
+                    logger.debug(f"compression tie-breaker: overlap={overlap} < threshold={threshold}, but compression={compression_score:.2f} >= {compression_threshold}, trimming")
+        elif overlap >= threshold and overlap < threshold + 2:
+            # Confirmation zone: overlap meets threshold but compression score can confirm
+            # Low compression score (indicating normal speech) can reduce trimming aggressiveness
+            if compression_score < 1.8:  # Below this ratio, consider not trimming
+                will_trim = False
+                if ENABLE_DETECTOR_DEBUG:
+                    logger.debug(f"compression tie-breaker: overlap={overlap} >= threshold={threshold}, but compression={compression_score:.2f} < 1.8, not trimming")
 
     if ENABLE_DETECTOR_DEBUG:
-        logger.debug(f"overlap={overlap} vs threshold={threshold}, will_trim={overlap >= threshold}")
-    if overlap >= threshold:
+        compression_info = f", compression={compression_score:.2f}" if compression_score else ""
+        logger.debug(f"overlap={overlap} vs threshold={threshold}, will_trim={will_trim}{compression_info}")
+
+    if will_trim:
         cut = min(overlap, len(words))
         trimmed = words[cut:]
         reason = f"trimmed_overlap:{overlap}"

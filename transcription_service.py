@@ -38,6 +38,63 @@ def _emit_session_event(session_id: Optional[str], event_type: str, payload: Opt
     if session_id:
         emit_event(session_id, event_type, payload or {})
 
+def _dedupe_deepgram_segment(words: List[Word], session_data: Dict, segment_offset: float) -> List[Word]:
+    """
+    Deduplication for Deepgram segments to handle out-of-order/duplicate segments.
+    Uses time-sorted segment queue with Jaccard token overlap deduplication.
+    """
+    if not words:
+        return words
+
+    # Initialize segment history for this session
+    if 'deepgram_segment_history' not in session_data:
+        session_data['deepgram_segment_history'] = []
+
+    segment_text = " ".join(w.text for w in words).strip()
+    if not segment_text:
+        return words
+
+    # Get segment timing
+    segment_start = words[0].start if words else segment_offset
+    segment_end = words[-1].end if words else segment_offset + 1.0
+
+    # Check against recent segments for duplicates
+    history = session_data['deepgram_segment_history']
+    current_tokens = set(segment_text.lower().split())
+
+    # Clean old history (keep only last 30 seconds)
+    cutoff_time = segment_start - 30.0
+    history[:] = [seg for seg in history if seg['end'] >= cutoff_time]
+
+    # Check for duplicates using Jaccard similarity
+    for existing_segment in history:
+        existing_tokens = existing_segment.get('tokens', set())
+        if current_tokens and existing_tokens:
+            # Calculate Jaccard similarity
+            intersection = len(current_tokens & existing_tokens)
+            union = len(current_tokens | existing_tokens)
+            jaccard = intersection / union if union > 0 else 0.0
+
+            # High overlap threshold for deduplication
+            if jaccard > 0.8:
+                logger.debug(f"Deepgram segment deduped: jaccard={jaccard:.2f}, original='{existing_segment['text'][:50]}', duplicate='{segment_text[:50]}'")
+                return []  # Drop duplicate segment
+
+    # Add current segment to history
+    history.append({
+        'text': segment_text,
+        'tokens': current_tokens,
+        'start': segment_start,
+        'end': segment_end,
+        'timestamp': time.time()
+    })
+
+    # Keep history size manageable
+    if len(history) > 20:
+        history[:] = history[-15:]  # Keep most recent 15 segments
+
+    return words
+
 # Import session state model
 from models.session_state import SessionState
 
@@ -1666,6 +1723,10 @@ def process_audio_segment_and_update_s3(
             context_len = len(session_data['hallu_state'].last_tokens)
             metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
 
+            # For Deepgram: Apply segment deduplication before filtering
+            if provider.lower() == "deepgram":
+                curr_words = _dedupe_deepgram_segment(curr_words, session_data, segment_offset_seconds)
+
             # Use compression-based filtering for better repetition detection
             stitched_words, stitch_reason, cut_word_count = compress_filter_segment(
                 curr_words,
@@ -1865,7 +1926,7 @@ def process_audio_segment_and_update_s3(
         joined_lines = '\n'.join(lines_to_append_to_s3)
         logger.info(f"Session {session_id_for_log}: Persisting transcript: chars={len(joined_lines)}, lines={len(lines_to_append_to_s3)}")
 
-        # Perform S3 append if there's new content
+        # Perform dual storage: raw (immutable) and clean (derived)
         if lines_to_append_to_s3:
             s3 = get_s3_client()
             aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
@@ -1873,16 +1934,46 @@ def process_audio_segment_and_update_s3(
                 logger.error("S3 client/bucket unavailable inside lock. Cannot write.")
                 # Don't update duration if write fails
             else:
+                # Write to raw JSONL (append-only, never blocked)
+                raw_key = s3_transcript_key.replace('.txt', '.raw.jsonl')
+                raw_entry = {
+                    "timestamp": time.time(),
+                    "utc_time": datetime.now(timezone.utc).isoformat(),
+                    "segment_offset": segment_offset_seconds,
+                    "original_text": curr_text_raw or "",
+                    "filtered_text": final_text_for_s3,
+                    "filter_reason": stitch_reason,
+                    "provider": provider,
+                    "language": language,
+                    "words_cut": cut_word_count,
+                    "session_phase": phase if 'phase' in locals() else "unknown"
+                }
+                try:
+                    raw_line = json.dumps(raw_entry) + "\n"
+                    try:
+                        # Try to get existing raw content
+                        obj = s3.get_object(Bucket=aws_s3_bucket, Key=raw_key)
+                        existing_raw = obj['Body'].read().decode('utf-8')
+                    except s3.exceptions.NoSuchKey:
+                        existing_raw = ""
+
+                    updated_raw = existing_raw + raw_line
+                    s3.put_object(Bucket=aws_s3_bucket, Key=raw_key, Body=updated_raw.encode('utf-8'))
+                    logger.debug(f"Appended raw entry to {raw_key}")
+                except Exception as e:
+                    logger.error(f"Failed to write raw transcript: {e}")
+
+                # Write to clean transcript (derived from raw)
                 try:
                     obj = s3.get_object(Bucket=aws_s3_bucket, Key=s3_transcript_key)
                     existing_content = obj['Body'].read().decode('utf-8')
                 except s3.exceptions.NoSuchKey:
                     header = f"# Transcript - Session {session_id_for_log}\nAgent: {session_data.get('agent_name', 'N/A')}, Event: {session_data.get('event_id', 'N/A')}\nLanguage: {format_language_for_header(language_setting_from_client)}\nProvider: {get_current_transcription_provider()}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
                     existing_content = header
-                
+
                 appended_text = "\n".join(lines_to_append_to_s3) + "\n"
                 updated_content = existing_content + appended_text
-                
+
                 s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=updated_content.encode('utf-8'))
                 logger.info(f"Appended {len(lines_to_append_to_s3)} lines to S3 transcript {s3_transcript_key}.")
         

@@ -44,21 +44,36 @@ class VADTranscriptionService:
     and submission of clean speech segments to the transcription worker pool.
     """
     
-    def __init__(self, openai_api_key: str, vad_aggressiveness: int = 3): # Increased default aggressiveness
+    def __init__(self, openai_api_key: str, vad_aggressiveness: int = 2, language: str = "en"): # Reduced default for child speech
         self.openai_api_key = openai_api_key
-        self.vad_aggressiveness = vad_aggressiveness
-        
+
+        # Adjust VAD aggressiveness for Swedish child speech
+        if language.lower() in ["sv", "swedish"] and vad_aggressiveness >= 3:
+            # Swedish child speech often has softer onset - reduce aggressiveness
+            adjusted_aggressiveness = max(1, vad_aggressiveness - 1)
+            logger.info(f"Adjusted VAD aggressiveness from {vad_aggressiveness} to {adjusted_aggressiveness} for Swedish child speech")
+            self.vad_aggressiveness = adjusted_aggressiveness
+        else:
+            self.vad_aggressiveness = vad_aggressiveness
+
         try:
-            self.vad = webrtcvad.Vad(vad_aggressiveness)
-            logger.info(f"VAD initialized with aggressiveness level {vad_aggressiveness}")
+            self.vad = webrtcvad.Vad(self.vad_aggressiveness)
+            logger.info(f"VAD initialized with aggressiveness level {self.vad_aggressiveness}")
         except Exception as e:
             logger.error(f"Failed to initialize WebRTC VAD: {e}", exc_info=True)
             raise RuntimeError(f"VAD initialization failed: {e}")
-        
+
         self.sample_rate = 16000
         self.frame_duration_ms = 30
         self.frame_bytes = int(self.sample_rate * (self.frame_duration_ms / 1000.0) * 2) # 16-bit audio
-        
+
+        # Adjust pre-roll buffering for Swedish child speech
+        if language.lower() in ["sv", "swedish"]:
+            self.pre_roll_buffer_ms = 200  # Increased from default ~120ms
+            logger.info(f"Increased pre-roll buffering to {self.pre_roll_buffer_ms}ms for Swedish child speech")
+        else:
+            self.pre_roll_buffer_ms = 120  # Default
+
         logger.info(f"VAD Service initialized - Sample Rate: {self.sample_rate}Hz, Frame Duration: {self.frame_duration_ms}ms")
 
     def process_webm_to_wav(self, webm_blob_bytes: bytes) -> Optional[np.ndarray]:
