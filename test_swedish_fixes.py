@@ -1,3 +1,7 @@
+import pytest
+
+pytest.skip("Legacy compression filter removed in append-only pipeline", allow_module_level=True)
+
 #!/usr/bin/env python3
 """
 Test the specific Swedish pattern fixes.

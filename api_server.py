@@ -65,8 +65,95 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, re
 from flask_cors import CORS
 import boto3
 
-from transcription_service import process_audio_segment_and_update_s3, get_current_transcription_provider, get_default_vad_aggressiveness, format_language_for_header
+from app.session_adapter import SessionAdapter
+from services.deepgram_sdk import DeepgramSDK
+from services.openai_whisper_sdk import OpenAIWhisper
+
 import tempfile
+
+# Provider client factories used by the new append-only pipeline
+def make_deepgram_client():
+    return DeepgramSDK(api_key=os.environ.get('DEEPGRAM_API_KEY'))
+
+
+def make_whisper_client():
+    return OpenAIWhisper(api_key=os.environ.get('OPENAI_API_KEY'))
+
+
+def make_s3_client():
+    return boto3.client('s3')
+
+# Append-only transcript adapter wiring
+DG_CLIENT = make_deepgram_client()
+WHISPER_CLIENT = make_whisper_client()
+S3_CLIENT = make_s3_client()
+TRANSCRIPT_BUCKET = os.environ.get('TRANSCRIPT_BUCKET', 'aiademomagicaudio')
+TRANSCRIPT_PREFIX = os.environ.get('TRANSCRIPT_PREFIX', 'organizations/river/agents')
+SESSION_ADAPTER = SessionAdapter(dg_client=DG_CLIENT, whisper_client=WHISPER_CLIENT,
+                                 s3_client=S3_CLIENT, bucket=TRANSCRIPT_BUCKET,
+                                 base_prefix=TRANSCRIPT_PREFIX)
+
+_TRANSCRIPTION_PROVIDER_NAME = os.environ.get('TRANSCRIPTION_PROVIDER', 'deepgram').strip().lower()
+
+
+def get_current_transcription_provider() -> str:
+    return _TRANSCRIPTION_PROVIDER_NAME.capitalize()
+
+
+def get_default_vad_aggressiveness() -> int:
+    return 1 if _TRANSCRIPTION_PROVIDER_NAME == 'deepgram' else 2
+
+
+def transcribe_large_audio_file_with_progress(
+    audio_file_path: str,
+    openai_api_key: str,
+    language_setting_from_client: str,
+    progress_callback,
+    chunk_size_mb: int = 20
+):
+    whisper = OpenAIWhisper(api_key=openai_api_key)
+    progress_callback(0, 1, 'Transcribing audio...')
+    result = whisper.transcribe_file(wav_path=audio_file_path, language=language_setting_from_client)
+    progress_callback(1, 1, 'Transcription complete')
+    if not result:
+        return None
+    return {
+        'text': result.get('text', ''),
+        'segments': result.get('segments') or [],
+        'partial': False
+    }
+
+
+def transcribe_large_audio_file(audio_file_path: str, openai_api_key: str, language_setting_from_client: str):
+    whisper = OpenAIWhisper(api_key=openai_api_key)
+    result = whisper.transcribe_file(wav_path=audio_file_path, language=language_setting_from_client)
+    if not result:
+        return None
+    return {
+        'text': result.get('text', ''),
+        'segments': result.get('segments') or []
+    }
+
+def format_language_for_header(language_code: str) -> str:
+    language_map = {
+        'any': 'Auto-detect',
+        'sv': 'Swedish',
+        'en': 'English',
+        'da': 'Danish',
+        'no': 'Norwegian',
+        'fi': 'Finnish',
+        'de': 'German',
+        'fr': 'French',
+        'es': 'Spanish',
+        'it': 'Italian',
+        'pt': 'Portuguese',
+        'nl': 'Dutch',
+        'ru': 'Russian',
+        'zh': 'Chinese',
+        'ja': 'Japanese',
+        'ko': 'Korean'
+    }
+    return language_map.get(language_code, language_code.upper())
 
 # Mobile recording uses custom magic number detection (no external dependencies needed)
 
@@ -313,7 +400,6 @@ def setup_logging(debug=False):
     for lib in ['anthropic', 'httpx', 'httpcore', 'hpack', 'boto3', 'botocore', 'urllib3', 's3transfer', 'openai', 'sounddevice', 'requests', 'pinecone', 'werkzeug', 'flask_sock', 'google.generativeai', 'google.api_core']:
         logging.getLogger(lib).setLevel(logging.WARNING)
     logging.getLogger('utils').setLevel(logging.DEBUG if debug else logging.INFO)
-    logging.getLogger('transcription_service').setLevel(logging.DEBUG if debug else logging.INFO)
     logging.info(f"Logging setup complete. Level: {logging.getLevelName(log_level)}")
     return root_logger
 
@@ -432,7 +518,7 @@ RINGBUF_SECONDS = int(os.getenv("RINGBUF_SECONDS", "45"))
 RINGBUF_MAX_RESULTS = int(os.getenv("RINGBUF_MAX_RESULTS", "200"))
 
 # Gap recovery configuration
-SEGMENT_RETRY_ENABLED = os.getenv("SEGMENT_RETRY_ENABLED", "true").lower() == "true"
+SEGMENT_RETRY_ENABLED = os.getenv("SEGMENT_RETRY_ENABLED", "false").lower() == "true"
 SEGMENT_RETRY_MAX_ATTEMPTS = int(os.getenv("SEGMENT_RETRY_MAX_ATTEMPTS", "3"))
 MAX_PENDING_SEGMENTS = int(os.getenv("MAX_PENDING_SEGMENTS", "20"))
 SEGMENT_GAP_TIMEOUT_SEC = int(os.getenv("SEGMENT_GAP_TIMEOUT_SEC", "120"))
@@ -1395,12 +1481,12 @@ def _finalize_session(session_id: str):
                         session_data['actual_segment_duration_seconds'] = estimated_duration_final
                         logger.warning(f"Using rough estimated duration for final segment: {estimated_duration_final:.2f}s")
 
-                    process_audio_segment_and_update_s3(
-                        temp_segment_wav_path=final_output_wav_path,
-                        session_data=session_data,
-                        session_lock=session_locks[session_id],
-                        openai_api_key=session_data.get("openai_api_key"),
-                        anthropic_api_key=session_data.get("anthropic_api_key")
+                    SESSION_ADAPTER.on_segment(
+                        session_id=session_id,
+                        raw_path=final_output_wav_path,
+                        captured_ts=time.time(),
+                        duration_s=session_data.get("actual_segment_duration_seconds", actual_duration_final),
+                        language=session_data.get("language_setting_from_client")
                     )
                 else:
                     logger.error(f"Session {session_id} Finalize: ffmpeg direct WAV conversion failed. RC: {process.returncode}, Err: {stderr.decode('utf-8', 'ignore')}")
@@ -1429,25 +1515,7 @@ def _finalize_session(session_id: str):
             except Exception as e: 
                 logger.warning(f"Error closing WebSocket for session {session_id} during finalization: {e}", exc_info=True)
 
-        # CRITICAL FIX: Flush any remaining buffered items in the ordering system
-        # This ensures sequences delivered to ordering but not yet flushed to S3 are written
-        if SEGMENT_RETRY_ENABLED:
-            try:
-                remaining_items = flush_all_ordered_segments(session_id)
-                logger.info(f"Session {session_id}: ORDERING_FLUSH_ALL returned {len(remaining_items)} items")
-
-                # Actually write the flushed items to S3
-                from transcription_service import _append_transcript_to_s3
-                for seq_flush, text_flush in remaining_items:
-                    try:
-                        _append_transcript_to_s3(session_data, text_flush)
-                        logger.debug(f"Session {session_id}: FINAL_FLUSH_WRITTEN seq={seq_flush} chars={len(text_flush)}")
-                    except Exception as append_err:
-                        logger.error(f"Session {session_id}: FINAL_FLUSH_WRITE_FAIL seq={seq_flush} error={append_err}")
-
-                logger.info(f"Session {session_id}: ORDERING_FLUSH_ALL completed, wrote {len(remaining_items)} items to S3")
-            except Exception as flush_err:
-                logger.error(f"Session {session_id}: ORDERING_FLUSH_ALL failed during finalization: {flush_err}")
+        SESSION_ADAPTER.on_finalize(session_id=session_id)
 
         logger.info(f"Session {session_id} has been marked as finalized. It will be cleaned up by the idle thread later.")
 
@@ -2250,183 +2318,9 @@ def _heartbeat_loop():
                 logger.error(f"Error finalizing expired session {session_id}: {e}")
 
 def _retry_worker():
-    """Background worker to retry failed transcription segments."""
-    import glob
-    import json
-    from datetime import datetime, timezone
-    from transcription_service import (
-        load_retry_segment, cleanup_retry_files, transcribe_chunk_with_sticky_fallback,
-        _transcribe_audio_segment_openai, format_timestamp_range, is_valid_transcription
-    )
-    from utils.hallucination_detector import get_hallucination_manager
-    from utils.transcript_format import format_transcript_line
-    from utils.pii_filter import anonymize_transcript_chunk
-
-    while True:
-        if not SEGMENT_RETRY_ENABLED:
-            time.sleep(30)
-            continue
-
-        try:
-            # Find all retry files
-            retry_files = glob.glob("tmp/retry_segments/*/*.json")
-
-            for retry_json_path in retry_files:
-                try:
-                    retry_data = load_retry_segment(retry_json_path)
-                    if not retry_data:
-                        continue
-
-                    session_id = retry_data["session_id"]
-                    seq = retry_data["seq"]
-                    attempts = retry_data.get("attempts", 0)
-                    created_at_str = retry_data.get("created_at")
-
-                    # Check if max attempts reached
-                    if attempts >= SEGMENT_RETRY_MAX_ATTEMPTS:
-                        logger.warning(f"Session {session_id}: Max retry attempts reached for seq={seq}")
-                        cleanup_retry_files(retry_json_path)
-                        continue
-
-                    # Check if timeout reached
-                    if created_at_str:
-                        try:
-                            created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-                            age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
-                            if age_seconds > SEGMENT_GAP_TIMEOUT_SEC:
-                                logger.warning(f"Session {session_id}: Retry timeout reached for seq={seq}")
-                                cleanup_retry_files(retry_json_path)
-                                continue
-                        except Exception as time_e:
-                            logger.warning(f"Session {session_id}: Error parsing created_at for seq={seq}: {time_e}")
-
-                    # Check if session still exists
-                    if session_id not in active_sessions:
-                        logger.debug(f"Session {session_id}: Session no longer exists, cleaning up retry seq={seq}")
-                        cleanup_retry_files(retry_json_path)
-                        continue
-
-                    # Attempt retry
-                    wav_path = retry_data["wav_path"]
-                    if not os.path.exists(wav_path):
-                        logger.warning(f"Session {session_id}: WAV file missing for retry seq={seq}")
-                        cleanup_retry_files(retry_json_path)
-                        continue
-
-                    logger.info(f"Session {session_id}: Retrying transcription for seq={seq} (attempt {attempts + 1})")
-
-                    # Get session data snapshot
-                    session_snapshot = retry_data.get("session_data_snapshot", {})
-                    language_setting = session_snapshot.get("language_setting_from_client", "any")
-                    vad_aggressiveness = session_snapshot.get("vad_aggressiveness_from_client")
-                    last_transcript = session_snapshot.get("last_successful_transcript", "")
-
-                    # Attempt transcription
-                    transcription_result = None
-                    session_state = None
-
-                    with session_locks[session_id]:
-                        sess = active_sessions.get(session_id)
-                        if sess:
-                            session_state = sess.get("session_state")
-
-                    try:
-                        if session_state:
-                            transcription_result = transcribe_chunk_with_sticky_fallback(
-                                session_state,
-                                wav_path,
-                                language=language_setting,
-                                vad_aggressiveness=vad_aggressiveness
-                            )
-                        else:
-                            # Fallback to OpenAI
-                            openai_key = session_snapshot.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
-                            if openai_key:
-                                transcription_result = _transcribe_audio_segment_openai(
-                                    wav_path,
-                                    openai_key,
-                                    language_setting,
-                                    rolling_context_prompt=last_transcript,
-                                    vad_aggressiveness=vad_aggressiveness
-                                )
-
-                        if transcription_result and transcription_result.get('text'):
-                            # Success! Process the result
-                            text = transcription_result['text'].strip()
-
-                            if is_valid_transcription(text):
-                                # Apply hallucination detection
-                                hallucination_manager = get_hallucination_manager(session_id)
-                                is_valid, reason, corrected_text = hallucination_manager.process_transcript(text)
-
-                                if not is_valid:
-                                    logger.warning(f"Session {session_id}: Retry seq={seq} failed hallucination check: {reason}")
-                                    final_text = corrected_text
-                                else:
-                                    final_text = corrected_text
-
-                                # Apply PII filtering if enabled
-                                if os.getenv('ENABLE_TRANSCRIPT_PII_FILTERING', 'false').lower() == 'true':
-                                    # We'd need anthropic_api_key for PII filtering - skip for now in retry
-                                    pass
-
-                                # Create timestamp
-                                segment_offset_seconds = retry_data.get("segment_offset_seconds", 0)
-                                session_start_time_utc = None
-                                if session_snapshot.get("session_start_time_utc"):
-                                    session_start_time_utc = datetime.fromisoformat(session_snapshot["session_start_time_utc"].replace('Z', '+00:00'))
-
-                                if session_start_time_utc:
-                                    # Estimate duration for timestamp
-                                    duration = 15.0  # Default estimate
-                                    timestamp_str = format_timestamp_range(
-                                        segment_offset_seconds,
-                                        segment_offset_seconds + duration,
-                                        session_start_time_utc
-                                    )
-                                else:
-                                    timestamp_str = f"[{segment_offset_seconds:.1f}s]"
-
-                                # Deliver via ordering system
-                                try_deliver_ordered_results(
-                                    session_id=session_id,
-                                    seq=seq,
-                                    transcript_text=final_text,
-                                    timestamp_str=timestamp_str
-                                )
-
-                                logger.info(f"Session {session_id}: Successfully retried seq={seq}")
-                                cleanup_retry_files(retry_json_path)
-                            else:
-                                logger.warning(f"Session {session_id}: Retry seq={seq} produced invalid text")
-                                # Update attempts and continue
-                                retry_data["attempts"] = attempts + 1
-                                retry_data["last_error"] = "Invalid transcription text"
-                                with open(retry_json_path, 'w') as f:
-                                    json.dump(retry_data, f, indent=2)
-                        else:
-                            # Transcription failed, update attempts
-                            retry_data["attempts"] = attempts + 1
-                            retry_data["last_error"] = "Transcription returned no result"
-                            with open(retry_json_path, 'w') as f:
-                                json.dump(retry_data, f, indent=2)
-
-                    except Exception as transcribe_e:
-                        # Transcription failed, update attempts
-                        retry_data["attempts"] = attempts + 1
-                        retry_data["last_error"] = str(transcribe_e)
-                        with open(retry_json_path, 'w') as f:
-                            json.dump(retry_data, f, indent=2)
-                        logger.warning(f"Session {session_id}: Retry attempt {attempts + 1} failed for seq={seq}: {transcribe_e}")
-
-                except Exception as retry_e:
-                    logger.error(f"Error processing retry file {retry_json_path}: {retry_e}")
-
-        except Exception as e:
-            logger.error(f"Error in retry worker: {e}")
-
-        # Sleep before next scan
-        time.sleep(30)
+    """Retry queue disabled in append-only pipeline."""
+    logger.info('Retry worker disabled; append-only pipeline does not resubmit segments.')
+    return
 
 # Start background threads
 _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
@@ -2792,9 +2686,6 @@ def audio_stream_socket(ws, session_id: str):
                                 vad_bridge.process_audio_blob(session_id, bytes_to_process)
                                 logger.debug(f"Session {session_id}: Dispatched {len(bytes_to_process)} bytes to VAD bridge.")
                                 
-                                # NOTE: Duration update moved to transcription_service after actual measurement
-                                # This fixes the timestamp issue where estimated duration (3s) != actual duration (~1.5s)
-                                logger.debug(f"Session {session_id}: Duration update deferred to transcription_service for accuracy")
 
                             except Exception as e:
                                 logger.error(f"Session {session_id}: Error dispatching audio to VAD bridge: {e}", exc_info=True)
@@ -2911,15 +2802,22 @@ def audio_stream_socket(ws, session_id: str):
                                             logger.warning(f"Thread Session {s_id}: Session data missing when trying to update actual_segment_duration.")
                                             s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
 
-                                    success_transcribe = process_audio_segment_and_update_s3(
-                                        temp_segment_wav_path=wav_path,
-                                        session_data=s_data_ref,
-                                        session_lock=lock_ref,
-                                        openai_api_key=openai_key,
-                                        anthropic_api_key=anthropic_key
-                                    )
-                                    if not success_transcribe:
-                                         logger.error(f"Thread Session {s_id}: Transcription or S3 update failed for segment {wav_path}")
+                                    try:
+                                        SESSION_ADAPTER.on_segment(
+                                            session_id=s_id,
+                                            raw_path=wav_path,
+                                            captured_ts=time.time(),
+                                            duration_s=actual_segment_dur,
+                                            language=s_data_ref.get('language_setting_from_client')
+                                        )
+                                    except Exception as adapter_err:
+                                        logger.error(f"Thread Session {s_id}: Adapter processing failed for segment {wav_path}: {adapter_err}", exc_info=True)
+                                    finally:
+                                        try:
+                                            with lock_ref:
+                                                s_data_ref['pending_segments'] = max(0, int(s_data_ref.get('pending_segments', 1)) - 1)
+                                        except Exception as pending_err:
+                                            logger.debug(f"Thread Session {s_id}: Failed to decrement pending segments: {pending_err}")
 
                                 except Exception as thread_e:
                                     logger.error(f"Thread Session {s_id}: Error during threaded segment processing: {thread_e}", exc_info=True)
@@ -3251,7 +3149,6 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
             update_job_progress(job_id, status='failed', error='Transcription service not configured (missing API key)')
             return
         
-        from transcription_service import transcribe_large_audio_file_with_progress
 
         # Check for cancellation before starting transcription
         if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
@@ -3431,7 +3328,6 @@ def transcribe_uploaded_file(user: SupabaseUser):
                 logger.error(f"OpenAI API key not found for agent '{agent_name_from_form}' or globally.")
                 return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
             
-            from transcription_service import transcribe_large_audio_file
             
             logger.info(f"Starting transcription for {temp_filepath} with language: {transcriptionLanguage}...")
             transcription_data = transcribe_large_audio_file(

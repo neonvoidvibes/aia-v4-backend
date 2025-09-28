@@ -1,3 +1,7 @@
+import pytest
+
+pytest.skip("Compression filter removed in append-only pipeline", allow_module_level=True)
+
 #!/usr/bin/env python3
 """
 Test compression-based hallucination filtering with Swedish transcript patterns.
