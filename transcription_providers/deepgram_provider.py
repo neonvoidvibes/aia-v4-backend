@@ -5,6 +5,14 @@ from .base import TranscriptionProvider, TranscriptionResult, Segment
 
 logger = logging.getLogger(__name__)
 
+# Import noise detection for phrase repetition filtering
+try:
+    from utils.text_noise import drop_leading_initial_noise, noise_signals
+except ImportError:
+    logger.warning("text_noise module not available - initial noise detection disabled")
+    def drop_leading_initial_noise(tokens, duration): return 0
+    def noise_signals(tokens, duration): return {}
+
 class DeepgramProvider(TranscriptionProvider):
     def __init__(self, api_key: Optional[str] = None, model: str = "nova-3", smart_format: bool = True, punctuate: bool = True):
         self.api_key = api_key or os.getenv("DEEPGRAM_API_KEY", "")
@@ -144,6 +152,60 @@ class DeepgramProvider(TranscriptionProvider):
             logger.info(f"Deepgram transcription result: text_length={len(text)}, segments_count={len(segments)}")
             if text:
                 logger.info(f"Deepgram transcript preview: {text[:100]}...")
+
+            # Apply initial noise detection (phrase repetition filtering)
+            if text and words:
+                tokens = [w.get("word", w.get("text", "")).strip() for w in words if w.get("word") or w.get("text")]
+
+                if tokens:
+                    # Calculate duration from first to last word
+                    duration_s = None
+                    try:
+                        if len(words) > 0:
+                            first_start = float(words[0].get("start", 0))
+                            last_end = float(words[-1].get("end", 0))
+                            duration_s = last_end - first_start
+                    except (ValueError, TypeError):
+                        duration_s = None
+
+                    # Check for initial noise/phrase repetition
+                    drop_count = drop_leading_initial_noise(tokens, duration_s)
+
+                    if drop_count > 0:
+                        # Log the detection with detailed signals
+                        signals = noise_signals(tokens, duration_s)
+                        logger.info(
+                            f"DEEPGRAM_INITIAL_NOISE_DROP path={os.path.basename(path)} drop_n={drop_count} "
+                            f"rep={signals.get('rep_ratio', 0):.3f} ent={signals.get('entropy', 0):.3f} "
+                            f"phrase_rep={signals.get('phrase_repetition', 0):.3f} dur={duration_s} "
+                            f"win={signals.get('window_len', 0)} chars={signals.get('chars', 0)} "
+                            f"original_text='{text[:50]}...'"
+                        )
+
+                        # Remove the leading noise tokens from words and update text/segments
+                        filtered_words = words[drop_count:] if drop_count < len(words) else []
+
+                        if filtered_words:
+                            # Rebuild text from filtered words
+                            filtered_text = " ".join(w.get("word", w.get("text", "")).strip()
+                                                   for w in filtered_words
+                                                   if w.get("word") or w.get("text")).strip()
+
+                            # Rebuild segments from filtered words
+                            filtered_segments = self._words_to_segments(filtered_words)
+
+                            logger.info(f"Deepgram noise filtering: removed {drop_count} tokens, "
+                                       f"text: '{text[:50]}...' -> '{filtered_text[:50]}...'")
+
+                            text = filtered_text
+                            words = filtered_words
+                            segments = filtered_segments
+                        else:
+                            # All tokens were noise - return empty result
+                            logger.info(f"Deepgram noise filtering: all {drop_count} tokens were noise, returning empty result")
+                            text = ""
+                            words = []
+                            segments = []
 
 # Normalize to service Word schema in upstream caller; ensure 'confidence' key exists.
             words_normalized = [
