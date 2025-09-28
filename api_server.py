@@ -1514,8 +1514,14 @@ def _finalize_session(session_id: str):
             try:
                 ws.close(1000, "Session stopped by server (finalize)")
                 logger.info(f"WebSocket for session {session_id} close() called.")
+            except ConnectionClosed as e:
+                logger.info(
+                    f"WebSocket for session {session_id} already closed before finalize close(): {e}"
+                )
             except Exception as e: 
                 logger.warning(f"Error closing WebSocket for session {session_id} during finalization: {e}", exc_info=True)
+            finally:
+                session_data["websocket_connection"] = None
 
         SESSION_ADAPTER.on_finalize(session_id=session_id)
 
