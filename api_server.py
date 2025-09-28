@@ -1298,6 +1298,7 @@ def start_recording_route(user: SupabaseUser):
         "fallback_active": False,
         **reconnect_state  # Add reconnection fields
     }
+    SESSION_ADAPTER.register_session(session_id, s3_transcript_key)
     logger.info(f"Transcript session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
     
@@ -1398,6 +1399,7 @@ def start_audio_recording(user: SupabaseUser):
         "last_audio_ts": None,
         "recent_events": deque(maxlen=200),
     }
+    SESSION_ADAPTER.register_session(session_id, s3_recording_key)
     logger.info(f"Audio recording session {session_id} started for agent {agent_name} by user {user.id}.")
     
     s3 = get_s3_client()
