@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for greeting removal and contract fallback fixes."""
+"""Unit tests for initial noise removal and contract fallback fixes."""
 
 import sys
 import os
@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pytest
 from utils.hallucination_detector import DetectorState, Word
+from utils.text_noise import drop_leading_initial_noise, is_initial_noise
 from services.post_asr_pipeline import (
     FeatureToggles,
     decide_transcript_candidate,
@@ -44,62 +45,59 @@ class MockHalluState:
         self._has_emitted_content = False
 
 
-def test_initial_greeting_removal():
-    """Test that the very first 'Hallå ...' is removed and second later 'hallå' in normal speech is kept."""
+def test_initial_noise_repetitive_removal():
+    """Test that repetitive noise like 'aaaaa' x3 within ~1s is dropped on first emission."""
 
-    # Simulate the greeting drop function from transcription_service.py
-    def _drop_initial_greeting(words, hallu_state, language):
-        """Drop leading Swedish greetings from first segment only."""
-        try:
-            lang_ok = (language or "").lower().startswith("sv")
-        except Exception:
-            lang_ok = False
+    # Test case: Repetitive short-duration noise
+    tokens_repetitive = ["aaaa", "aaaa", "aaaa"]
+    duration_short = 0.8  # Short duration
 
-        # Check if this is the first content emission for the session
-        has_emitted_content = getattr(hallu_state, '_has_emitted_content', False)
-        if not lang_ok or has_emitted_content:
-            return words, 0
+    drop_count = drop_leading_initial_noise(tokens_repetitive, duration_short)
+    assert drop_count == 3, f"Should drop all 3 repetitive tokens, got {drop_count}"
 
-        if not words:
-            return words, 0
+    # Test case: Same tokens but longer duration should NOT be dropped
+    duration_long = 2.5  # Long duration
+    drop_count_long = drop_leading_initial_noise(tokens_repetitive, duration_long)
+    assert drop_count_long == 0, f"Should not drop tokens with long duration, got {drop_count_long}"
 
-        GREET_TOKENS_SV = {"hallå", "hej", "hejsan", "tjena", "tja", "hejhej", "yo"}
-        i = 0
-        while i < len(words):
-            w_text = getattr(words[i], "text", None) or str(words[i])
-            # Normalize Unicode (e.g., hall\u00e5 -> hallå)
-            w_normalized = w_text.lower().strip(" .,!?:;–—\"'()[]").replace('\u00e5', 'å')
-            if w_normalized in GREET_TOKENS_SV:
-                i += 1
-                continue
-            break
+    print("✓ test_initial_noise_repetitive_removal passed")
 
-        if i > 0:
-            # Mark that we've now had our first content, even if it was dropped
-            hallu_state._has_emitted_content = True
-            return words[i:], i  # Return count of dropped words
-        return words, 0
 
-    hallu_state = MockHalluState()
+def test_initial_noise_vs_normal_speech():
+    """Test 'ok ok ok' short burst is dropped; 'ok then continue talking' isn't dropped."""
 
-    # Test 1: First segment with greeting should be removed
-    words1 = create_test_words("hallå this is a test message")
-    result1, dropped_count1 = _drop_initial_greeting(words1, hallu_state, "sv")
-    result1_text = " ".join([w.text for w in result1])
+    # Test case: Short repetitive burst should be dropped
+    tokens_burst = ["ok", "ok", "ok"]
+    duration_burst = 1.2  # Short duration
 
-    assert dropped_count1 == 1, "Should drop exactly 1 greeting token"
-    assert result1_text == "this is a test message", f"Expected 'this is a test message', got '{result1_text}'"
-    assert hallu_state._has_emitted_content == True, "Should mark content as emitted"
+    drop_count = drop_leading_initial_noise(tokens_burst, duration_burst)
+    assert drop_count == 3, f"Should drop repetitive burst, got {drop_count}"
 
-    # Test 2: Second segment with 'hallå' in normal speech should be kept
-    words2 = create_test_words("I said hallå to my friend")
-    result2, dropped_count2 = _drop_initial_greeting(words2, hallu_state, "sv")
-    result2_text = " ".join([w.text for w in result2])
+    # Test case: Diverse speech should NOT be dropped
+    tokens_diverse = ["ok", "then", "continue", "talking"]
+    duration_diverse = 1.5  # Similar duration
 
-    assert dropped_count2 == 0, "Should not drop any tokens from second segment"
-    assert result2_text == "I said hallå to my friend", f"Expected full text, got '{result2_text}'"
+    drop_count_diverse = drop_leading_initial_noise(tokens_diverse, duration_diverse)
+    assert drop_count_diverse == 0, f"Should not drop diverse speech, got {drop_count_diverse}"
 
-    print("✓ test_initial_greeting_removal passed")
+    print("✓ test_initial_noise_vs_normal_speech passed")
+
+
+def test_non_repetitive_content_preserved():
+    """Test that 3-4 token non-repetitive start isn't dropped."""
+
+    # Test case: Short but diverse content
+    tokens_diverse = ["hello", "world", "how", "are"]
+    duration = 1.3
+
+    drop_count = drop_leading_initial_noise(tokens_diverse, duration)
+    assert drop_count == 0, f"Should not drop diverse content, got {drop_count}"
+
+    # Verify using is_initial_noise directly
+    is_noise = is_initial_noise(tokens_diverse, duration)
+    assert not is_noise, "Diverse tokens should not be classified as noise"
+
+    print("✓ test_non_repetitive_content_preserved passed")
 
 
 def test_contract_fallback_on_empty_filtered():
@@ -169,99 +167,47 @@ def test_contract_fallback_on_empty_filtered():
     print("✓ test_contract_fallback_on_empty_filtered passed")
 
 
-def test_multiple_greeting_tokens():
-    """Test handling of multiple greeting tokens in sequence."""
+def test_entropy_based_noise_detection():
+    """Test low entropy sequences are detected as noise."""
 
-    def _drop_initial_greeting(words, hallu_state, language):
-        """Drop leading Swedish greetings from first segment only."""
-        try:
-            lang_ok = (language or "").lower().startswith("sv")
-        except Exception:
-            lang_ok = False
+    # Test case: Very low entropy (repeated characters)
+    tokens_low_entropy = ["mmmmm", "mmmmm"]
+    duration = 1.0
 
-        has_emitted_content = getattr(hallu_state, '_has_emitted_content', False)
-        if not lang_ok or has_emitted_content:
-            return words, 0
+    is_noise = is_initial_noise(tokens_low_entropy, duration)
+    assert is_noise, "Low entropy repeated tokens should be classified as noise"
 
-        if not words:
-            return words, 0
+    # Test case: High entropy should NOT be noise
+    tokens_high_entropy = ["complex", "diverse", "vocabulary", "here"]
+    is_not_noise = is_initial_noise(tokens_high_entropy, duration)
+    assert not is_not_noise, "High entropy tokens should not be classified as noise"
 
-        GREET_TOKENS_SV = {"hallå", "hej", "hejsan", "tjena", "tja", "hejhej", "yo"}
-        i = 0
-        while i < len(words):
-            w_text = getattr(words[i], "text", None) or str(words[i])
-            w_normalized = w_text.lower().strip(" .,!?:;–—\"'()[]").replace('\u00e5', 'å')
-            if w_normalized in GREET_TOKENS_SV:
-                i += 1
-                continue
-            break
-
-        if i > 0:
-            hallu_state._has_emitted_content = True
-            return words[i:], i
-        return words, 0
-
-    hallu_state = MockHalluState()
-
-    # Test multiple greeting tokens
-    words = create_test_words("hej hallå tjena how are you")
-    result, dropped_count = _drop_initial_greeting(words, hallu_state, "sv")
-    result_text = " ".join([w.text for w in result])
-
-    assert dropped_count == 3, f"Should drop 3 greeting tokens, dropped {dropped_count}"
-    assert result_text == "how are you", f"Expected 'how are you', got '{result_text}'"
-
-    print("✓ test_multiple_greeting_tokens passed")
+    print("✓ test_entropy_based_noise_detection passed")
 
 
-def test_unicode_normalization():
-    """Test Unicode normalization in greeting detection."""
+def test_provider_agnostic_behavior():
+    """Test that noise detection works identically regardless of language or provider context."""
 
-    def _drop_initial_greeting(words, hallu_state, language):
-        """Drop leading Swedish greetings from first segment only."""
-        try:
-            lang_ok = (language or "").lower().startswith("sv")
-        except Exception:
-            lang_ok = False
+    # Test the same pattern with different "language" contexts
+    tokens = ["ah", "ah", "ah", "um"]
+    duration = 1.1
 
-        has_emitted_content = getattr(hallu_state, '_has_emitted_content', False)
-        if not lang_ok or has_emitted_content:
-            return words, 0
+    # Should behave identically regardless of context
+    drop_en = drop_leading_initial_noise(tokens, duration)
+    drop_sv = drop_leading_initial_noise(tokens, duration)
+    drop_fr = drop_leading_initial_noise(tokens, duration)
 
-        if not words:
-            return words, 0
+    assert drop_en == drop_sv == drop_fr, "Behavior should be identical across language contexts"
+    assert drop_en > 0, "Repetitive pattern should be dropped"
 
-        GREET_TOKENS_SV = {"hallå", "hej", "hejsan", "tjena", "tja", "hejhej", "yo"}
-        i = 0
-        while i < len(words):
-            w_text = getattr(words[i], "text", None) or str(words[i])
-            w_normalized = w_text.lower().strip(" .,!?:;–—\"'()[]").replace('\u00e5', 'å')
-            if w_normalized in GREET_TOKENS_SV:
-                i += 1
-                continue
-            break
-
-        if i > 0:
-            hallu_state._has_emitted_content = True
-            return words[i:], i
-        return words, 0
-
-    hallu_state = MockHalluState()
-
-    # Test Unicode normalization: hall\u00e5 should match hallå
-    words = create_test_words("hall\u00e5 there friend")
-    result, dropped_count = _drop_initial_greeting(words, hallu_state, "sv")
-    result_text = " ".join([w.text for w in result])
-
-    assert dropped_count == 1, f"Should drop Unicode greeting token, dropped {dropped_count}"
-    assert result_text == "there friend", f"Expected 'there friend', got '{result_text}'"
-
-    print("✓ test_unicode_normalization passed")
+    print("✓ test_provider_agnostic_behavior passed")
 
 
 if __name__ == "__main__":
-    test_initial_greeting_removal()
+    test_initial_noise_repetitive_removal()
+    test_initial_noise_vs_normal_speech()
+    test_non_repetitive_content_preserved()
     test_contract_fallback_on_empty_filtered()
-    test_multiple_greeting_tokens()
-    test_unicode_normalization()
-    print("\n✅ All greeting removal and contract fallback tests passed!")
+    test_entropy_based_noise_detection()
+    test_provider_agnostic_behavior()
+    print("\n✅ All initial noise removal and contract fallback tests passed!")

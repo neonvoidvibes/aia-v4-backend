@@ -29,6 +29,7 @@ from services.post_asr_pipeline import (
     DROP_NONE,
     DROP_ASR_EMPTY,
 )
+from utils.text_noise import drop_leading_initial_noise
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1767,51 +1768,42 @@ def process_audio_segment_and_update_s3(
 
                 # Process ready segments sequentially (update state between them)
                 emitted_words: List[Word] = []
-                def _drop_initial_greeting(words, hallu_state, language):
-                    """Drop leading Swedish greetings from first segment only."""
-                    try:
-                        lang_ok = (language or "").lower().startswith("sv")
-                    except Exception:
-                        lang_ok = False
-
-                    # Check if this is the first content emission for the session
-                    has_emitted_content = getattr(hallu_state, '_has_emitted_content', False)
-                    if not lang_ok or has_emitted_content:
-                        return words, False
-
+                def _drop_initial_noise(words, hallu_state, provider):
+                    """
+                    Language-agnostic: drop a leading short, low-entropy, repetitive run
+                    ONCE per session before any other filters.
+                    """
                     if not words:
-                        return words, False
-
-                    GREET_TOKENS_SV = {"hallå", "hej", "hejsan", "tjena", "tja", "hejhej", "yo"}
-                    i = 0
-                    while i < len(words):
-                        w_text = getattr(words[i], "text", None) or str(words[i])
-                        # Normalize Unicode (e.g., hall\u00e5 -> hallå)
-                        w_normalized = w_text.lower().strip(" .,!?:;–—\"'()[]").replace('\u00e5', 'å')
-                        if w_normalized in GREET_TOKENS_SV:
-                            i += 1
-                            continue
-                        break
-
-                    if i > 0:
-                        # Mark that we've now had our first content, even if it was dropped
+                        return words, 0
+                    if getattr(hallu_state, "_has_emitted_content", False):
+                        return words, 0
+                    # Estimate duration of the candidate run using word timings if present
+                    try:
+                        dur = (getattr(words[min(3, len(words)-1)], "end", None) or 0.0) - (getattr(words[0], "start", None) or 0.0)
+                        if dur <= 0:
+                            dur = None
+                    except Exception:
+                        dur = None
+                    tokens = [(getattr(w, "text", None) or str(w)).strip() for w in words]
+                    drop_n = drop_leading_initial_noise(tokens, dur)
+                    if drop_n > 0:
                         hallu_state._has_emitted_content = True
-                        return words[i:], i  # Return count of dropped words
+                        return words[drop_n:], drop_n
                     return words, 0
 
                 for s in ready:
                     seg_words = s["words"]
-                    # NEW: drop first-utterance greeting before any other filters
-                    seg_words, greeting_dropped_count = _drop_initial_greeting(seg_words, session_data['hallu_state'], language)
+                    # NEW: drop initial noise before any other filters (provider-agnostic)
+                    seg_words, noise_drop_count = _drop_initial_noise(seg_words, session_data['hallu_state'], provider)
 
-                    # Log and track greeting removal
-                    if greeting_dropped_count > 0:
-                        logger.debug(f"Session {session_data.get('session_id', 'unknown')}: Dropped {greeting_dropped_count} initial greeting tokens")
+                    # Log and metric
+                    if noise_drop_count > 0:
+                        logger.debug(f"Session {session_data.get('session_id','unknown')}: Dropped {noise_drop_count} initial-noise tokens (provider={provider})")
                         try:
                             from metrics import HALLU_TRIMS
-                            HALLU_TRIMS.labels(reason="initial_greeting", provider=provider).inc()
+                            HALLU_TRIMS.labels(reason="initial_noise", provider=provider).inc()
                         except Exception as e:
-                            logger.debug(f"Failed to record initial greeting trim metric: {e}")
+                            logger.debug(f"Failed to record initial noise trim metric: {e}")
 
                     ctx = DetectorContext(provider=provider, language=language,
                                           session_start_time=session_data['hallu_state']._session_start_time)
@@ -1841,50 +1833,27 @@ def process_audio_segment_and_update_s3(
             context_len = len(session_data['hallu_state'].last_tokens)
             metrics_collector.track_trim_attempt(context_len, provider=provider, language=language)
 
-            # NEW: drop first-utterance greeting before any other filters (for non-Deepgram)
+            # NEW: drop initial noise before any other filters (non-Deepgram path uses same logic)
             if not already_filtered:
-                def _drop_initial_greeting(words, hallu_state, language):
-                    """Drop leading Swedish greetings from first segment only."""
-                    try:
-                        lang_ok = (language or "").lower().startswith("sv")
-                    except Exception:
-                        lang_ok = False
-
-                    # Check if this is the first content emission for the session
-                    has_emitted_content = getattr(hallu_state, '_has_emitted_content', False)
-                    if not lang_ok or has_emitted_content:
-                        return words, False
-
-                    if not words:
-                        return words, False
-
-                    GREET_TOKENS_SV = {"hallå", "hej", "hejsan", "tjena", "tja", "hejhej", "yo"}
-                    i = 0
-                    while i < len(words):
-                        w_text = getattr(words[i], "text", None) or str(words[i])
-                        # Normalize Unicode (e.g., hall\u00e5 -> hallå)
-                        w_normalized = w_text.lower().strip(" .,!?:;–—\"'()[]").replace('\u00e5', 'å')
-                        if w_normalized in GREET_TOKENS_SV:
-                            i += 1
-                            continue
-                        break
-
-                    if i > 0:
-                        # Mark that we've now had our first content, even if it was dropped
-                        hallu_state._has_emitted_content = True
-                        return words[i:], i  # Return count of dropped words
-                    return words, 0
-
-                curr_words, greeting_dropped_count = _drop_initial_greeting(curr_words, session_data['hallu_state'], language)
-
-                # Log and track greeting removal
-                if greeting_dropped_count > 0:
-                    logger.debug(f"Session {session_data.get('session_id', 'unknown')}: Dropped {greeting_dropped_count} initial greeting tokens")
+                hallu_state = session_data['hallu_state']
+                # Estimate duration for the first ≤4 tokens if timings exist
+                try:
+                    dur = (getattr(curr_words[min(3, len(curr_words)-1)], "end", None) or 0.0) - (getattr(curr_words[0], "start", None) or 0.0)
+                    if dur <= 0:
+                        dur = None
+                except Exception:
+                    dur = None
+                tokens = [(getattr(w, "text", None) or str(w)).strip() for w in curr_words]
+                drop_n = drop_leading_initial_noise(tokens, dur)
+                if drop_n > 0 and not getattr(hallu_state, "_has_emitted_content", False):
+                    curr_words = curr_words[drop_n:]
+                    hallu_state._has_emitted_content = True
+                    logger.debug(f"Session {session_data.get('session_id','unknown')}: Dropped {drop_n} initial-noise tokens (provider={provider})")
                     try:
                         from metrics import HALLU_TRIMS
-                        HALLU_TRIMS.labels(reason="initial_greeting", provider=provider).inc()
+                        HALLU_TRIMS.labels(reason="initial_noise", provider=provider).inc()
                     except Exception as e:
-                        logger.debug(f"Failed to record initial greeting trim metric: {e}")
+                        logger.debug(f"Failed to record initial noise trim metric: {e}")
 
             # Use compression-based filtering for better repetition detection
             if not already_filtered:
