@@ -35,6 +35,7 @@ class SessionAdapter:
         with self._global_lock:
             self._legacy_keys[session_id] = transcript_key
             self._legacy_prefix_counts.pop(session_id, None)
+            logger.debug("Session %s: registered legacy transcript %s", session_id, transcript_key)
 
     def on_segment(self, *, session_id: str, raw_path: str, captured_ts: float,
                    duration_s: float, language: Optional[str]) -> Optional[TranscriptChunk]:
@@ -53,6 +54,8 @@ class SessionAdapter:
         if chunk:
             with lock:
                 self._append_legacy_transcript(session_id, chunk)
+        else:
+            logger.debug("Session %s: chunk seq=%s dropped (pipeline returned None)", session_id, seq)
         return chunk
 
     def on_finalize(self, *, session_id: str) -> None:
@@ -62,10 +65,12 @@ class SessionAdapter:
             self._locks.pop(session_id, None)
             self._legacy_keys.pop(session_id, None)
             self._legacy_prefix_counts.pop(session_id, None)
+        logger.debug("Session %s: finalized", session_id)
 
     def _append_legacy_transcript(self, session_id: str, chunk: TranscriptChunk) -> None:
         key = self._legacy_keys.get(session_id)
         if not key:
+            logger.debug("Session %s: no legacy key; skipping chunk seq=%s", session_id, chunk.seq)
             return
         advisory = {}
         if isinstance(chunk.meta, dict):
@@ -90,6 +95,7 @@ class SessionAdapter:
             existing += "\n"
         updated = f"{existing}{line}\n"
         self._s3.put_object(Bucket=self._bucket, Key=key, Body=updated.encode("utf-8"))
+        logger.debug("Session %s: appended chunk seq=%s to legacy transcript (len=%s)", session_id, chunk.seq, len(updated))
 
     def _strip_repeated_prefix(self, session_id: str, text: str) -> str:
         stripped = text.lstrip()
@@ -105,14 +111,25 @@ class SessionAdapter:
         seen_before = counts.get(prefix_key, 0)
         counts[prefix_key] = seen_before + 1
 
+        logger.debug(
+            "Session %s: prefix '%s' tokens=%s seen=%s text='%s'",
+            session_id,
+            prefix_key,
+            prefix_tokens,
+            seen_before,
+            stripped[:60],
+        )
+
         if seen_before == 0:
             return stripped
 
         if len(tokens) <= prefix_len:
+            logger.debug("Session %s: prefix removal would yield empty for text '%s'", session_id, stripped)
             return ""
 
         cut = spans[prefix_len - 1][1]
         remainder = stripped[cut:].lstrip(" ,.!?-–—")
+        logger.debug("Session %s: trimmed prefix -> '%s'", session_id, remainder[:60])
         return remainder or ""
 
     @staticmethod
