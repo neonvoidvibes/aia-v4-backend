@@ -452,6 +452,8 @@ def _dispatch_pcm_segment(
     duration_s: float,
     sample_rate: int,
     channels: int,
+    *,
+    synchronous: bool = False,
 ) -> None:
     temp_processing_dir = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
     os.makedirs(temp_processing_dir, exist_ok=True)
@@ -466,7 +468,13 @@ def _dispatch_pcm_segment(
 
     session_data["actual_segment_duration_seconds"] = duration_s
 
-    def _process_pcm_segment():
+    def _decrement_pending() -> None:
+        try:
+            session_data['pending_segments'] = max(0, int(session_data.get('pending_segments', 1)) - 1)
+        except Exception as pending_err:
+            logger.debug(f"Session {session_id}: Failed to decrement pending segments after PCM processing: {pending_err}")
+
+    def _process_pcm_segment() -> None:
         try:
             SESSION_ADAPTER.on_segment(
                 session_id=session_id,
@@ -480,13 +488,16 @@ def _dispatch_pcm_segment(
         except Exception as exc:
             logger.error(f"Session {session_id}: Error processing PCM segment {wav_path}: {exc}", exc_info=True)
         finally:
-            try:
+            if synchronous:
+                _decrement_pending()
+            else:
                 with session_locks[session_id]:
-                    session_data['pending_segments'] = max(0, int(session_data.get('pending_segments', 1)) - 1)
-            except Exception as pending_err:
-                logger.debug(f"Session {session_id}: Failed to decrement pending segments after PCM processing: {pending_err}")
+                    _decrement_pending()
 
-    threading.Thread(target=_process_pcm_segment, name=f"pcm-segment-{session_id}", daemon=True).start()
+    if synchronous:
+        _process_pcm_segment()
+    else:
+        threading.Thread(target=_process_pcm_segment, name=f"pcm-segment-{session_id}", daemon=True).start()
 
 
 def _process_webm_segment_thread(
@@ -817,6 +828,7 @@ MAX_PENDING_SEGMENTS = int(os.getenv("MAX_PENDING_SEGMENTS", "20"))
 SEGMENT_GAP_TIMEOUT_SEC = int(os.getenv("SEGMENT_GAP_TIMEOUT_SEC", "120"))
 
 PCM_SEGMENT_TARGET_MS_DEFAULT = int(os.getenv("PCM_SEGMENT_TARGET_MS", "15000"))
+PCM_SEGMENT_OVERLAP_MS_DEFAULT = int(os.getenv("PCM_SEGMENT_OVERLAP_MS", "500"))
 
 def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
     """Initialize session state for reconnection support with ring buffers."""
@@ -1807,7 +1819,15 @@ def _finalize_session(session_id: str):
                 except Exception:
                     duration_s = len(pcm_buffer) / (16000 * 2)
                 logger.info(f"Session {session_id}: Flushing {len(pcm_buffer)} PCM bytes during finalize (duration≈{duration_s:.2f}s)")
-                _dispatch_pcm_segment(session_id, session_data, pcm_buffer, duration_s, sample_rate, channels)
+                _dispatch_pcm_segment(
+                    session_id,
+                    session_data,
+                    pcm_buffer,
+                    duration_s,
+                    sample_rate,
+                    channels,
+                    synchronous=True,
+                )
             session_data["pcm_frame_buffer"] = bytearray()
             session_data["pcm_accumulated_duration_ms"] = 0.0
             session_data["pcm_samples_buffered"] = 0
@@ -3071,16 +3091,18 @@ def audio_stream_socket(ws, session_id: str):
                             session_id,
                             session_data,
                             message,
-                            lambda sid, sdata, pcm_bytes, duration_s, sample_rate, channels: _dispatch_pcm_segment(
+                            lambda sid, sdata, pcm_bytes, duration_s, sample_rate, channels, sync: _dispatch_pcm_segment(
                                 sid,
                                 sdata,
                                 pcm_bytes,
                                 duration_s,
                                 sample_rate,
                                 channels,
+                                synchronous=sync,
                             ),
                             logger=logger,
                             default_segment_target_ms=PCM_SEGMENT_TARGET_MS_DEFAULT,
+                            overlap_ms=PCM_SEGMENT_OVERLAP_MS_DEFAULT,
                         )
                         if handled_pcm:
                             session_data.setdefault("content_type", "audio/pcm")

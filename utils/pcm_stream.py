@@ -9,7 +9,7 @@ PCM_FRAME_MAGIC = 0x314D4350  # 'PCM1' little-endian
 PCM_FRAME_HEADER_BYTES = 32
 
 
-DispatchFn = Callable[[str, Dict[str, Any], bytes, float, int, int], None]
+DispatchFn = Callable[[str, Dict[str, Any], bytes, float, int, int, bool], None]
 
 
 def handle_pcm_frame(
@@ -20,6 +20,7 @@ def handle_pcm_frame(
     *,
     logger: Optional[Any] = None,
     default_segment_target_ms: int = 3000,
+    overlap_ms: int = 0,
 ) -> bool:
     """Parse an incoming PCM frame and dispatch accumulated segments.
 
@@ -128,7 +129,26 @@ def handle_pcm_frame(
                 duration_s = total_samples / sample_rate if sample_rate else len(pcm_bytes) / (16000 * 2)
             except Exception:
                 duration_s = len(pcm_bytes) / (16000 * 2)
-            dispatch_fn(session_id, session_data, pcm_bytes, duration_s, sample_rate, channels)
+            dispatch_fn(session_id, session_data, pcm_bytes, duration_s, sample_rate, channels, False)
+
+            if overlap_ms > 0:
+                bytes_per_sample = channels * 2
+                overlap_samples = int(sample_rate * (max(0, overlap_ms) / 1000.0))
+                overlap_bytes = overlap_samples * bytes_per_sample
+                if overlap_bytes > 0:
+                    tail = pcm_bytes[-overlap_bytes:] if overlap_bytes < len(pcm_bytes) else pcm_bytes
+                    buffer.extend(tail)
+                    session_data["pcm_samples_buffered"] = len(buffer) // 2
+                    if sample_rate * bytes_per_sample:
+                        session_data["pcm_accumulated_duration_ms"] = (
+                            len(buffer) / (sample_rate * bytes_per_sample)
+                        ) * 1000
+                else:
+                    session_data["pcm_samples_buffered"] = 0
+                    session_data["pcm_accumulated_duration_ms"] = 0.0
+            else:
+                session_data["pcm_samples_buffered"] = 0
+                session_data["pcm_accumulated_duration_ms"] = 0.0
     return True
 
 

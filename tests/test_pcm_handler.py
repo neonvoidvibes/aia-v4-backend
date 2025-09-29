@@ -46,8 +46,9 @@ def test_handle_pcm_frame_dispatches_when_threshold_met(monkeypatch, session_dat
         captured["sample_rate"] = sample_rate
         captured["channels"] = channels
 
-    def dispatch_fn(*args):
-        fake_dispatch(*args)
+    def dispatch_fn(session_id, sess_data, pcm_bytes, duration_s, sample_rate, channels, synchronous):
+        assert not synchronous
+        fake_dispatch(session_id, sess_data, pcm_bytes, duration_s, sample_rate, channels)
 
     payload = (b"\x01\x00" * 320)
     frame = _build_pcm_frame(1, payload)
