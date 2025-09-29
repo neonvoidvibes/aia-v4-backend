@@ -12,6 +12,7 @@ from core.types import AudioBlob, TranscriptChunk
 from core.wav_norm import to_mono16k_pcm
 from storage.log_store import WriteAheadLog
 from utils.transcript_format import format_transcript_line
+from utils.silence_gate import evaluate_silence, config_from_env, SilenceGateResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,14 @@ class SessionAdapter:
         self._legacy_prefix_counts: Dict[str, Dict[str, int]] = {}
         self._legacy_timezones: Dict[str, str] = {}
         self._global_lock = threading.Lock()
+        self._silence_gate_enabled = os.getenv('ENABLE_SILENCE_GATE', 'true').lower() not in {'0', 'false', 'no'}
+
+    @staticmethod
+    def _resolve_aggressiveness(value: Optional[int]) -> int:
+        try:
+            return max(0, min(3, int(value)))
+        except (TypeError, ValueError):
+            return 2
 
     def register_session(self, session_id: str, transcript_key: str, timezone_name: Optional[str] = None) -> None:
         with self._global_lock:
@@ -44,7 +53,8 @@ class SessionAdapter:
             logger.debug("Session %s: registered legacy transcript %s", session_id, transcript_key)
 
     def on_segment(self, *, session_id: str, raw_path: str, captured_ts: float,
-                   duration_s: float, language: Optional[str]) -> Optional[TranscriptChunk]:
+                   duration_s: float, language: Optional[str],
+                   vad_aggressiveness: Optional[int] = None) -> Optional[TranscriptChunk]:
         with self._global_lock:
             lock = self._locks.setdefault(session_id, threading.Lock())
         with lock:
@@ -53,6 +63,38 @@ class SessionAdapter:
         wav_path = f"tmp/sessions/{session_id}/blobs/{seq:012d}.wav"
         os.makedirs(os.path.dirname(wav_path), exist_ok=True)
         to_mono16k_pcm(raw_path, wav_path)
+
+        if self._silence_gate_enabled:
+            aggr = self._resolve_aggressiveness(vad_aggressiveness)
+            gate_config = config_from_env(aggr)
+            gate_result: SilenceGateResult = evaluate_silence(
+                wav_path,
+                aggressiveness=aggr,
+                config=gate_config,
+            )
+            if not gate_result.is_speech:
+                self._wal.log_silence_drop(
+                    session_id=session_id,
+                    seq=seq,
+                    captured_ts=captured_ts,
+                    aggressiveness=gate_result.aggressiveness,
+                    speech_ratio=gate_result.speech_ratio,
+                    avg_rms=gate_result.avg_rms,
+                    frame_count=gate_result.frame_count,
+                    speech_frames=gate_result.speech_frames,
+                    reason=gate_result.reason,
+                    local_wav_path=wav_path,
+                )
+                logger.info(
+                    "Session %s: silence gate suppressed seq=%s (ratio=%.3f, rms=%.1f, reason=%s, aggr=%s)",
+                    session_id,
+                    seq,
+                    gate_result.speech_ratio,
+                    gate_result.avg_rms,
+                    gate_result.reason,
+                    gate_result.aggressiveness,
+                )
+                return None
 
         blob = AudioBlob(session_id=session_id, seq=seq, captured_ts=captured_ts,
                          wav_path=wav_path, duration_s=duration_s)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json, os, io
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from core.types import TranscriptChunk
 
 # This module provides an append-only write-ahead log (WAL) and a manifest.
@@ -17,6 +17,47 @@ class WriteAheadLog:
 
     def _manifest_key(self, session_id: str) -> str:
         return f"{self._base}/{session_id}/manifest.json"
+
+    def _drop_key(self, session_id: str, seq: int) -> str:
+        return f"{self._base}/{session_id}/drops/{seq:012d}.json"
+
+    def log_silence_drop(
+        self,
+        *,
+        session_id: str,
+        seq: int,
+        captured_ts: float,
+        aggressiveness: int,
+        speech_ratio: float,
+        avg_rms: float,
+        frame_count: int,
+        speech_frames: int,
+        reason: str,
+        local_wav_path: Optional[str] = None,
+    ) -> str:
+        payload: Dict[str, Any] = {
+            "session_id": session_id,
+            "seq": seq,
+            "captured_ts": captured_ts,
+            "aggressiveness": aggressiveness,
+            "speech_ratio": speech_ratio,
+            "avg_rms": avg_rms,
+            "frame_count": frame_count,
+            "speech_frames": speech_frames,
+            "reason": reason,
+        }
+        if local_wav_path:
+            payload["local_wav_path"] = local_wav_path
+
+        key = self._drop_key(session_id, seq)
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._s3.put_object(
+            Bucket=self._bucket,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+        )
+        return key
 
     def append_chunk(self, chunk: TranscriptChunk) -> str:
         key = self._chunk_key(chunk.session_id, chunk.seq)
@@ -68,4 +109,3 @@ class WriteAheadLog:
             ContentType="application/json",
         )
         return key
-

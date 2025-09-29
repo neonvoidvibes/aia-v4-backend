@@ -214,18 +214,43 @@ def format_language_for_header(language_code: str) -> str:
     return language_map.get(language_code, language_code.upper())
 
 
+def _get_default_timezone_name() -> str:
+    env_tz = os.getenv("DEFAULT_TRANSCRIPT_TIMEZONE")
+    if env_tz:
+        try:
+            ZoneInfo(env_tz)
+            return env_tz
+        except Exception:
+            logger.warning(f"Environment DEFAULT_TRANSCRIPT_TIMEZONE='{env_tz}' is invalid; ignoring")
+
+    try:
+        local_tz = datetime.now().astimezone().tzinfo
+        if isinstance(local_tz, ZoneInfo):
+            return getattr(local_tz, "key", "UTC") or "UTC"
+    except Exception:
+        pass
+
+    return "UTC"
+
+
 def _resolve_client_timezone(tz_name: Optional[str], reference_utc: datetime) -> Tuple[str, str, datetime]:
     """Resolve a client-supplied timezone into canonical name, abbreviation, and local start time."""
-    fallback_zone = ZoneInfo("UTC")
-    zone = fallback_zone
-    zone_name = "UTC"
+    fallback_zone_name = _get_default_timezone_name()
+    zone_name = fallback_zone_name
+
+    try:
+        zone = ZoneInfo(fallback_zone_name)
+    except Exception:
+        logger.warning(f"Failed to initialize fallback timezone '{fallback_zone_name}', defaulting to UTC")
+        zone = ZoneInfo("UTC")
+        zone_name = "UTC"
 
     if tz_name:
         try:
             zone = ZoneInfo(tz_name)
             zone_name = tz_name
         except Exception:
-            logger.warning(f"Received invalid timezone '{tz_name}', defaulting to UTC")
+            logger.warning(f"Received invalid timezone '{tz_name}', falling back to '{zone_name}'")
 
     local_dt = reference_utc.astimezone(zone)
     tz_abbr = local_dt.tzname() or zone_name or "UTC"
@@ -1321,6 +1346,10 @@ def start_recording_route(user: SupabaseUser):
     client_timezone_name, client_timezone_abbr, session_start_time_local = _resolve_client_timezone(
         client_timezone_raw, session_start_time_utc
     )
+    timezone_source = "client" if client_timezone_raw else "default"
+    logger.info(
+        f"Transcript session {session_id}: timezone set to {client_timezone_name} ({client_timezone_abbr}), source={timezone_source}"
+    )
     # Fetch agent-specific API keys or fall back to globals
     agent_openai_key = get_api_key(agent_name, 'openai')
     agent_anthropic_key = get_api_key(agent_name, 'anthropic')
@@ -1451,6 +1480,10 @@ def start_audio_recording(user: SupabaseUser):
     client_timezone_raw = data.get('clientTimezone')
     client_timezone_name, client_timezone_abbr, session_start_time_local = _resolve_client_timezone(
         client_timezone_raw, session_start_time_utc
+    )
+    timezone_source = "client" if client_timezone_raw else "default"
+    logger.info(
+        f"Recording session {session_id}: timezone set to {client_timezone_name} ({client_timezone_abbr}), source={timezone_source}"
     )
     
     agent_openai_key = get_api_key(agent_name, 'openai')
@@ -1599,7 +1632,8 @@ def _finalize_session(session_id: str):
                         raw_path=final_output_wav_path,
                         captured_ts=time.time(),
                         duration_s=session_data.get("actual_segment_duration_seconds", actual_duration_final),
-                        language=session_data.get("language_setting_from_client")
+                        language=session_data.get("language_setting_from_client"),
+                        vad_aggressiveness=session_data.get("vad_aggressiveness_from_client")
                     )
                 else:
                     logger.error(f"Session {session_id} Finalize: ffmpeg direct WAV conversion failed. RC: {process.returncode}, Err: {stderr.decode('utf-8', 'ignore')}")
@@ -2895,7 +2929,8 @@ def audio_stream_socket(ws, session_id: str):
                             def process_segment_in_thread(
                                 s_id, s_data_ref, lock_ref,
                                 audio_bytes, wav_path,
-                                openai_key, anthropic_key
+                                openai_key, anthropic_key,
+                                vad_level
                             ):
                                 try:
                                     ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', wav_path]
@@ -2934,7 +2969,8 @@ def audio_stream_socket(ws, session_id: str):
                                             raw_path=wav_path,
                                             captured_ts=time.time(),
                                             duration_s=actual_segment_dur,
-                                            language=s_data_ref.get('language_setting_from_client')
+                                            language=s_data_ref.get('language_setting_from_client'),
+                                            vad_aggressiveness=vad_level
                                         )
                                     except Exception as adapter_err:
                                         logger.error(f"Thread Session {s_id}: Adapter processing failed for segment {wav_path}: {adapter_err}", exc_info=True)
@@ -2964,7 +3000,8 @@ def audio_stream_socket(ws, session_id: str):
                                     all_segment_bytes_for_ffmpeg_thread,
                                     final_output_wav_path_thread,
                                     session_data.get("openai_api_key"),
-                                    session_data.get("anthropic_api_key")
+                                    session_data.get("anthropic_api_key"),
+                                    session_data.get("vad_aggressiveness_from_client")
                                 )
                             )
                             processing_thread.start()
