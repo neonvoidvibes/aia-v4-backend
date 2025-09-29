@@ -5530,11 +5530,31 @@ def save_chat_history(user: SupabaseUser):
         return jsonify({'error': 'Agent not found'}), 404
     agent_id = agent_result.data['id']
 
+    # Check if this session already has a chat (idempotency check for title generation)
+    existing_session_chat = None
+    if client_session_id and not chat_id:
+        try:
+            existing_session_chat = client.table('chat_history') \
+                .select('id, title') \
+                .eq('user_id', user.id) \
+                .eq('agent_id', agent_id) \
+                .eq('client_session_id', client_session_id) \
+                .single().execute()
+            if existing_session_chat and existing_session_chat.data:
+                logger.info(f"Found existing chat for session {client_session_id}: {existing_session_chat.data['id']}")
+        except Exception:
+            existing_session_chat = None
+
     if not title and not chat_id and messages:
-        first_user_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), None)
-        logger.info(f"Generating title for new chat. First user message: {first_user_message[:50] if first_user_message else 'None'}...")
-        title = generate_chat_title(first_user_message) if first_user_message else "New Chat"
-        logger.info(f"Generated title: '{title}'")
+        # If session already has a chat with a title, reuse it instead of regenerating
+        if existing_session_chat and existing_session_chat.data and existing_session_chat.data.get('title'):
+            title = existing_session_chat.data['title']
+            logger.info(f"Reusing existing title from session: '{title}'")
+        else:
+            first_user_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), None)
+            logger.info(f"Generating title for new chat. First user message: {first_user_message[:50] if first_user_message else 'None'}...")
+            title = generate_chat_title(first_user_message) if first_user_message else "New Chat"
+            logger.info(f"Generated title: '{title}'")
     else:
         logger.info(f"Skipping title generation - title: {bool(title)}, chat_id: {bool(chat_id)}, messages: {len(messages) if messages else 0}")
 
