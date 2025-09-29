@@ -57,6 +57,7 @@ from utils.transcript_summarizer import generate_transcript_summary # Added impo
 from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript
 from utils.pinecone_utils import init_pinecone, create_namespace
 from utils.embedding_handler import EmbeddingHandler
+from utils.webm_header import extract_webm_header
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
 from groq import APIError as GroqAPIError
@@ -94,6 +95,62 @@ SESSION_ADAPTER = SessionAdapter(dg_client=DG_CLIENT, whisper_client=WHISPER_CLI
                                  base_prefix=TRANSCRIPT_PREFIX)
 
 _TRANSCRIPTION_PROVIDER_NAME = os.environ.get('TRANSCRIPTION_PROVIDER', 'deepgram').strip().lower()
+STRICT_WEBM_HEADER_ENABLED = os.environ.get('WEBM_STRICT_HEADER', '0').lower() in ('1', 'true', 'yes')
+
+
+def _resolve_webm_header(session_id: str, session_data: dict[str, Any]) -> tuple[bytes, str]:
+    """Return the header bytes and effective mode for the session."""
+
+    header_mode = session_data.get("webm_header_mode", "legacy")
+    if header_mode == "pure":
+        header_bytes = session_data.get("webm_pure_header_bytes")
+        if header_bytes:
+            return header_bytes, "pure"
+        if not session_data.get("webm_header_warned_missing"):
+            logger.warning(
+                f"Session {session_id}: Pure header requested but unavailable; falling back to legacy header bytes."
+            )
+            session_data["webm_header_warned_missing"] = True
+
+    header_bytes = session_data.get("webm_global_header_bytes", b"")
+    return header_bytes, "legacy"
+
+
+def _store_first_webm_blob(session_id: str, session_data: dict[str, Any], blob: bytes) -> None:
+    """Persist header bytes for later segments, respecting strict mode."""
+
+    session_data["webm_global_header_bytes"] = blob
+    session_data["webm_header_mode"] = "legacy"
+
+    if STRICT_WEBM_HEADER_ENABLED:
+        pure_header = extract_webm_header(blob)
+        if pure_header:
+            session_data["webm_pure_header_bytes"] = pure_header
+            session_data["webm_header_mode"] = "pure"
+            session_data["webm_header_stats"] = {
+                "mode": "pure",
+                "header_len": len(pure_header),
+                "fallback": False
+            }
+            logger.info(
+                f"Session {session_id}: Stored pure WebM header ({len(pure_header)} bytes) for subsequent segments."
+            )
+            return
+
+        session_data["webm_header_stats"] = {
+            "mode": "legacy",
+            "header_len": len(blob),
+            "fallback": True
+        }
+        logger.warning(
+            f"Session {session_id}: Strict header extraction failed; reverting to legacy header handling."
+        )
+    else:
+        session_data["webm_header_stats"] = {
+            "mode": "legacy",
+            "header_len": len(blob),
+            "fallback": False
+        }
 
 
 def get_current_transcription_provider() -> str:
@@ -1439,14 +1496,17 @@ def _finalize_session(session_id: str):
         logger.info(f"Finalizing session {session_id} (marked is_finalizing=True, is_active=False).")
         
         current_fragment_bytes_final = bytes(session_data.get("current_segment_raw_bytes", bytearray()))
-        global_header_bytes_final = session_data.get("webm_global_header_bytes", b'')
-        
+        global_header_bytes_final, finalize_header_mode = _resolve_webm_header(session_id, session_data)
+
         all_final_segment_bytes = b''
         if global_header_bytes_final and current_fragment_bytes_final:
             if current_fragment_bytes_final.startswith(global_header_bytes_final): 
                 all_final_segment_bytes = current_fragment_bytes_final
             else:
                 all_final_segment_bytes = global_header_bytes_final + current_fragment_bytes_final
+                logger.debug(
+                    f"Session {session_id}: Prepended header ({len(global_header_bytes_final)} bytes, mode={finalize_header_mode}) during finalize."
+                )
         elif current_fragment_bytes_final: 
              all_final_segment_bytes = current_fragment_bytes_final
 
@@ -2650,12 +2710,14 @@ def audio_stream_socket(ws, session_id: str):
                     if vad_enabled and VAD_IMPORT_SUCCESS and vad_bridge:
                         # VAD Processing Path with robust header and data accumulation
                         if not session_data.get("is_first_blob_received", False):
-                            # The first blob contains the header AND the first audio chunk.
-                            session_data["webm_global_header_bytes"] = bytes(message)
+                            first_blob = bytes(message)
                             session_data["is_first_blob_received"] = True
-                            logger.info(f"Session {session_id}: Captured first blob as global WebM header and initial data ({len(message)} bytes).")
+                            logger.info(
+                                f"Session {session_id}: Captured first blob as WebM header candidate ({len(first_blob)} bytes)."
+                            )
+                            _store_first_webm_blob(session_id, session_data, first_blob)
                             # The first blob is the first segment.
-                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(first_blob)
                         else:
                             # Subsequent blobs are just audio data fragments, append them.
                             session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
@@ -2670,11 +2732,13 @@ def audio_stream_socket(ws, session_id: str):
                             logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment.")
 
                             current_fragment_bytes = bytes(session_data["current_segment_raw_bytes"])
-                            global_header_bytes = session_data.get("webm_global_header_bytes", b"")
-                            
-                            # The first segment already has its header. For subsequent segments, prepend the stored header.
-                            if not current_fragment_bytes.startswith(global_header_bytes):
+                            global_header_bytes, effective_header_mode = _resolve_webm_header(session_id, session_data)
+
+                            if global_header_bytes and not current_fragment_bytes.startswith(global_header_bytes):
                                 bytes_to_process = global_header_bytes + current_fragment_bytes
+                                logger.debug(
+                                    f"Session {session_id}: Prepended {len(global_header_bytes)} header bytes (mode={effective_header_mode}) before VAD dispatch."
+                                )
                             else:
                                 bytes_to_process = current_fragment_bytes
 
@@ -2704,10 +2768,11 @@ def audio_stream_socket(ws, session_id: str):
                     if not vad_enabled:
                         logger.debug(f"Session {session_id}: Using original processing path (VAD disabled or failed for chunk).")
                         if not session_data.get("is_first_blob_received", False):
-                            session_data["webm_global_header_bytes"] = bytes(message) 
+                            first_blob = bytes(message)
                             session_data["is_first_blob_received"] = True
-                            logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(message)} bytes).")
-                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
+                            logger.info(f"Session {session_id}: Captured first blob as global WebM header ({len(first_blob)} bytes).")
+                            _store_first_webm_blob(session_id, session_data, first_blob)
+                            session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(first_blob)
                         else:
                             session_data.setdefault("current_segment_raw_bytes", bytearray()).extend(message)
                         
@@ -2721,7 +2786,7 @@ def audio_stream_socket(ws, session_id: str):
                             logger.info(f"Session {session_id}: Accumulated enough audio ({session_data['accumulated_audio_duration_for_current_segment_seconds']:.2f}s est.). Processing segment from raw bytes.")
                             
                             current_fragment_bytes = bytes(session_data["current_segment_raw_bytes"])
-                            global_header_bytes = session_data.get("webm_global_header_bytes", b'')
+                            global_header_bytes, effective_header_mode = _resolve_webm_header(session_id, session_data)
 
                             if not global_header_bytes and current_fragment_bytes:
                                 logger.warning(f"Session {session_id}: Global header not captured, but processing fragments. This might fail if not the very first segment.")
@@ -2732,7 +2797,9 @@ def audio_stream_socket(ws, session_id: str):
                                     logger.debug(f"Session {session_id}: Processing first segment data which includes its own header.")
                                 else:
                                     all_segment_bytes = global_header_bytes + current_fragment_bytes
-                                    logger.debug(f"Session {session_id}: Prepended global header ({len(global_header_bytes)} bytes) to current fragments ({len(current_fragment_bytes)} bytes).")
+                                    logger.debug(
+                                        f"Session {session_id}: Prepended header ({len(global_header_bytes)} bytes, mode={effective_header_mode}) to current fragments ({len(current_fragment_bytes)} bytes)."
+                                    )
                             elif global_header_bytes and not current_fragment_bytes:
                                 logger.warning(f"Session {session_id}: Global header exists but no current fragments. Skipping empty segment.")
                                 session_data["current_segment_raw_bytes"] = bytearray() 
@@ -2741,8 +2808,8 @@ def audio_stream_socket(ws, session_id: str):
                                 continue
                             
                             bytes_to_process = bytes(session_data["current_segment_raw_bytes"])
-                            global_header_for_thread = session_data.get("webm_global_header_bytes", b'')
-                            
+                            global_header_for_thread, _ = _resolve_webm_header(session_id, session_data)
+
                             session_data["current_segment_raw_bytes"] = bytearray()
                             session_data["accumulated_audio_duration_for_current_segment_seconds"] = 0.0
                             
