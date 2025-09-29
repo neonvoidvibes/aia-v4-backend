@@ -34,6 +34,18 @@ class SessionAdapter:
         self._legacy_timezones: Dict[str, str] = {}
         self._global_lock = threading.Lock()
         self._silence_gate_enabled = os.getenv('ENABLE_SILENCE_GATE', 'true').lower() not in {'0', 'false', 'no'}
+        self._trim_margin_frames = max(0, int(os.getenv('SILENCE_GATE_TRIM_MARGIN_FRAMES', '2')))
+        if self._silence_gate_enabled:
+            default_cfg = config_from_env()
+            logger.info(
+                "SessionAdapter: silence gate enabled (default min_ratio=%.3f, rms_floor=%.1f, confirm=%s, trim_margin_frames=%s)",
+                default_cfg.min_speech_ratio,
+                default_cfg.rms_floor,
+                default_cfg.confirm_silence_windows,
+                self._trim_margin_frames,
+            )
+        else:
+            logger.info("SessionAdapter: silence gate disabled via ENABLE_SILENCE_GATE")
 
     @staticmethod
     def _resolve_aggressiveness(value: Optional[int]) -> int:
@@ -41,6 +53,72 @@ class SessionAdapter:
             return max(0, min(3, int(value)))
         except (TypeError, ValueError):
             return 2
+
+    def silence_gate_enabled(self) -> bool:
+        return self._silence_gate_enabled
+
+    def gate_config_for(self, aggressiveness: Optional[int]) -> SilenceGateConfig:
+        aggr = self._resolve_aggressiveness(aggressiveness)
+        return config_from_env(aggr)
+
+    def trim_margin_frames(self) -> int:
+        return self._trim_margin_frames
+
+    def _trim_wav_to_voiced(
+        self,
+        *,
+        session_id: str,
+        seq: int,
+        wav_path: str,
+        result: SilenceGateResult,
+    ) -> None:
+        start_frame = result.voiced_start_frame
+        end_frame = result.voiced_end_frame
+        if start_frame is None or end_frame is None:
+            return
+        if result.frame_bytes <= 0 or result.frame_count <= 0:
+            return
+
+        margin = self._trim_margin_frames
+        expanded_start = max(0, start_frame - margin)
+        expanded_end = min(result.frame_count - 1, end_frame + margin)
+        if expanded_start == 0 and expanded_end >= result.frame_count - 1:
+            return  # Nothing to trim
+
+        start_byte = expanded_start * result.frame_bytes
+        end_byte = min(result.frame_count * result.frame_bytes, (expanded_end + 1) * result.frame_bytes)
+        if end_byte <= start_byte:
+            return
+
+        try:
+            import wave
+            with wave.open(wav_path, 'rb') as wf:
+                params = wf.getparams()
+                wf.rewind()
+                data = wf.readframes(wf.getnframes())
+            trimmed = data[start_byte:end_byte]
+            if len(trimmed) == len(data) or not trimmed:
+                return
+            with wave.open(wav_path, 'wb') as wf_out:
+                wf_out.setparams(params)
+                wf_out.writeframes(trimmed)
+            logger.info(
+                "Session %s: trimmed wav seq=%s start_frame=%s end_frame=%s margin=%s original_bytes=%s trimmed_bytes=%s",
+                session_id,
+                seq,
+                expanded_start,
+                expanded_end,
+                margin,
+                len(data),
+                len(trimmed),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Session %s: failed to trim wav seq=%s (%s)",
+                session_id,
+                seq,
+                exc,
+            )
 
     def register_session(self, session_id: str, transcript_key: str, timezone_name: Optional[str] = None) -> None:
         with self._global_lock:
@@ -72,7 +150,25 @@ class SessionAdapter:
                 aggressiveness=aggr,
                 config=gate_config,
             )
-            if not gate_result.is_speech:
+            decision_message = (
+                f"Session {session_id}: silence gate {{status}} seq={seq} "
+                f"ratio={gate_result.speech_ratio:.3f} rms={gate_result.avg_rms:.1f} "
+                f"frames={gate_result.frame_count} speech_frames={gate_result.speech_frames} "
+                f"reason={gate_result.reason} aggr={gate_result.aggressiveness} "
+                f"min_ratio={gate_config.min_speech_ratio:.3f} rms_floor={gate_config.rms_floor:.1f} "
+                f"confirm={gate_config.confirm_silence_windows}"
+            )
+            if gate_result.is_speech:
+                logger.info(decision_message.format(status="passed"))
+                if gate_result.voiced_start_frame is not None and gate_result.voiced_end_frame is not None:
+                    self._trim_wav_to_voiced(
+                        session_id=session_id,
+                        seq=seq,
+                        wav_path=wav_path,
+                        result=gate_result,
+                    )
+            else:
+                logger.info(decision_message.format(status="dropped"))
                 self._wal.log_silence_drop(
                     session_id=session_id,
                     seq=seq,
@@ -83,16 +179,10 @@ class SessionAdapter:
                     frame_count=gate_result.frame_count,
                     speech_frames=gate_result.speech_frames,
                     reason=gate_result.reason,
+                    min_speech_ratio=gate_config.min_speech_ratio,
+                    rms_floor=gate_config.rms_floor,
+                    confirm_windows=gate_config.confirm_silence_windows,
                     local_wav_path=wav_path,
-                )
-                logger.info(
-                    "Session %s: silence gate suppressed seq=%s (ratio=%.3f, rms=%.1f, reason=%s, aggr=%s)",
-                    session_id,
-                    seq,
-                    gate_result.speech_ratio,
-                    gate_result.avg_rms,
-                    gate_result.reason,
-                    gate_result.aggressiveness,
                 )
                 return None
 

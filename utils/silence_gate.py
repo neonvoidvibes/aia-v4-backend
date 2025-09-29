@@ -40,6 +40,11 @@ class SilenceGateResult:
     speech_frames: int
     aggressiveness: int
     reason: str
+    frame_ms: int = _FRAME_MS_DEFAULT
+    sample_rate: int = 16000
+    frame_bytes: int = 0
+    voiced_start_frame: Optional[int] = None
+    voiced_end_frame: Optional[int] = None
 
 
 def _sanitize_aggressiveness(level: Optional[int]) -> int:
@@ -149,6 +154,8 @@ def evaluate_silence(
             speech_frames=0,
             aggressiveness=config.aggressiveness,
             reason="read_error",
+            sample_rate=16000,
+            frame_bytes=0,
         )
 
     if channels != 1 or sample_width != 2:
@@ -162,10 +169,13 @@ def evaluate_silence(
             speech_frames=0,
             aggressiveness=config.aggressiveness,
             reason="unsupported_format",
+            sample_rate=sample_rate,
+            frame_bytes=0,
         )
 
     frames = _generate_frames(raw, sample_rate, frame_ms)
     frame_count = len(frames)
+    frame_size = len(frames[0]) if frames else int(sample_rate * (frame_ms / 1000.0)) * 2
     if frame_count == 0:
         overall_rms = _frame_rms(raw)
         return SilenceGateResult(
@@ -176,6 +186,8 @@ def evaluate_silence(
             speech_frames=0,
             aggressiveness=config.aggressiveness,
             reason="insufficient_audio",
+            sample_rate=sample_rate,
+            frame_bytes=0,
         )
 
     vad_available = webrtcvad is not None
@@ -215,49 +227,58 @@ def evaluate_silence(
     speech_ratio = speech_frames / frame_count
     avg_rms = rms_total / frame_count
 
-    # Decision tree — fail open whenever any guard indicates possible speech.
-    if speech_ratio >= config.min_speech_ratio:
+    voiced_start = next((i for i, flag in enumerate(vad_decisions) if flag), None)
+    voiced_end = (
+        (frame_count - 1 - next((i for i, flag in enumerate(reversed(vad_decisions)) if flag), None))
+        if speech_frames > 0 else None
+    )
+
+    if speech_frames == 0:
         return SilenceGateResult(
-            is_speech=True,
+            is_speech=False,
+            speech_ratio=0.0,
+            avg_rms=avg_rms,
+            frame_count=frame_count,
+            speech_frames=0,
+            aggressiveness=config.aggressiveness,
+            reason="no_voiced_frames",
+            frame_ms=frame_ms,
+            sample_rate=sample_rate,
+            frame_bytes=frame_size,
+        )
+
+    if speech_ratio < config.min_speech_ratio and avg_rms < config.rms_floor:
+        final_reason = "vad_unavailable" if not vad_available else "below_thresholds"
+        return SilenceGateResult(
+            is_speech=False,
             speech_ratio=speech_ratio,
             avg_rms=avg_rms,
             frame_count=frame_count,
             speech_frames=speech_frames,
             aggressiveness=config.aggressiveness,
-            reason="speech_ratio",
+            reason=final_reason,
+            frame_ms=frame_ms,
+            sample_rate=sample_rate,
+            frame_bytes=frame_size,
         )
 
-    if avg_rms >= config.rms_floor:
-        return SilenceGateResult(
-            is_speech=True,
-            speech_ratio=speech_ratio,
-            avg_rms=avg_rms,
-            frame_count=frame_count,
-            speech_frames=speech_frames,
-            aggressiveness=config.aggressiveness,
-            reason="rms_floor",
-        )
+    pass_reason = "speech_ratio" if speech_ratio >= config.min_speech_ratio else "rms_floor"
+    if max_consecutive_silence < config.confirm_silence_windows and pass_reason != "speech_ratio":
+        pass_reason = "hysteresis"
 
-    if max_consecutive_silence < config.confirm_silence_windows:
-        return SilenceGateResult(
-            is_speech=True,
-            speech_ratio=speech_ratio,
-            avg_rms=avg_rms,
-            frame_count=frame_count,
-            speech_frames=speech_frames,
-            aggressiveness=config.aggressiveness,
-            reason="hysteresis",
-        )
-
-    final_reason = "vad_unavailable" if not vad_available else "below_thresholds"
     return SilenceGateResult(
-        is_speech=False,
+        is_speech=True,
         speech_ratio=speech_ratio,
         avg_rms=avg_rms,
         frame_count=frame_count,
         speech_frames=speech_frames,
         aggressiveness=config.aggressiveness,
-        reason=final_reason,
+        reason=pass_reason,
+        frame_ms=frame_ms,
+        sample_rate=sample_rate,
+        frame_bytes=frame_size,
+        voiced_start_frame=voiced_start,
+        voiced_end_frame=voiced_end,
     )
 
 

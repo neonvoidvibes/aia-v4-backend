@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import sys
@@ -66,9 +67,12 @@ def test_session_adapter_suppresses_silence(monkeypatch, raw_wav):
         speech_frames=0,
         aggressiveness=2,
         reason="below_thresholds",
+        frame_ms=30,
+        sample_rate=16000,
+        frame_bytes=960,
     )
     monkeypatch.setattr(sa, "evaluate_silence", lambda *args, **kwargs: silence_result)
-    monkeypatch.setattr(sa, "config_from_env", lambda level: SilenceGateConfig(level or 2, 0.2, 100.0, 2))
+    monkeypatch.setattr(sa, "config_from_env", lambda level=None: SilenceGateConfig((level or 2), 0.2, 100.0, 2))
 
     adapter = sa.SessionAdapter(dg_client=None, whisper_client=None, s3_client=fake_s3,
                                 bucket="bucket", base_prefix="prefix")
@@ -86,8 +90,10 @@ def test_session_adapter_suppresses_silence(monkeypatch, raw_wav):
     assert result is None
     assert pipe.calls == []
     assert fake_s3.put_calls, "expected silence drop to be written"
-    drop_payload = fake_s3.put_calls[0]["Body"].decode("utf-8")
-    assert "\"reason\": \"below_thresholds\"" in drop_payload
+    drop_payload = json.loads(fake_s3.put_calls[0]["Body"].decode("utf-8"))
+    assert drop_payload["reason"] == "below_thresholds"
+    assert "min_speech_ratio" in drop_payload
+    assert "rms_floor" in drop_payload
 
 
 def test_session_adapter_allows_speech(monkeypatch, raw_wav):
@@ -105,13 +111,20 @@ def test_session_adapter_allows_speech(monkeypatch, raw_wav):
         speech_frames=6,
         aggressiveness=1,
         reason="speech_ratio",
+        frame_ms=30,
+        sample_rate=16000,
+        frame_bytes=960,
+        voiced_start_frame=1,
+        voiced_end_frame=4,
     )
     monkeypatch.setattr(sa, "evaluate_silence", lambda *args, **kwargs: speech_result)
-    monkeypatch.setattr(sa, "config_from_env", lambda level: SilenceGateConfig(level or 1, 0.2, 100.0, 2))
+    monkeypatch.setattr(sa, "config_from_env", lambda level=None: SilenceGateConfig((level or 1), 0.2, 100.0, 2))
 
     adapter = sa.SessionAdapter(dg_client=None, whisper_client=None, s3_client=fake_s3,
                                 bucket="bucket", base_prefix="prefix")
     adapter._silence_gate_enabled = True
+    calls = []
+    monkeypatch.setattr(adapter, "_trim_wav_to_voiced", lambda **kwargs: calls.append(kwargs))
 
     result = adapter.on_segment(
         session_id="sess",
@@ -124,3 +137,4 @@ def test_session_adapter_allows_speech(monkeypatch, raw_wav):
 
     assert pipe.calls, "expected pipeline to run when speech passes gate"
     assert not fake_s3.put_calls
+    assert calls, "expected trimming to be invoked for voiced segment"

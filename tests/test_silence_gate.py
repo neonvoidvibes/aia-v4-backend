@@ -24,7 +24,7 @@ def test_silence_gate_flags_silence(tmp_path):
     cfg = SilenceGateConfig(aggressiveness=1, min_speech_ratio=0.2, rms_floor=50.0, confirm_silence_windows=2)
     result = evaluate_silence(str(wav_path), config=cfg)
     assert result.is_speech is False
-    assert result.reason in {"below_thresholds", "vad_unavailable"}
+    assert result.reason in {"below_thresholds", "vad_unavailable", "no_voiced_frames"}
 
 
 def test_silence_gate_allows_voiced_segments(tmp_path):

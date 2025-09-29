@@ -1413,6 +1413,18 @@ def start_recording_route(user: SupabaseUser):
     SESSION_ADAPTER.register_session(session_id, s3_transcript_key, client_timezone_name)
     logger.info(f"Transcript session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
+    if SESSION_ADAPTER.silence_gate_enabled():
+        gate_cfg = SESSION_ADAPTER.gate_config_for(vad_aggressiveness)
+        margin_frames = SESSION_ADAPTER.trim_margin_frames()
+        logger.info(
+            f"Session {session_id}: silence gate armed (vad_aggressiveness={vad_aggressiveness}, "
+            f"min_ratio={gate_cfg.min_speech_ratio:.3f}, rms_floor={gate_cfg.rms_floor:.1f}, "
+            f"confirm={gate_cfg.confirm_silence_windows}, trim_margin_frames={margin_frames})"
+        )
+    else:
+        logger.info(
+            f"Session {session_id}: silence gate disabled (vad_aggressiveness={vad_aggressiveness})"
+        )
     
     # Initialize VAD session if enabled
     if VAD_IMPORT_SUCCESS and vad_bridge: # Force VAD activation if available to fix hallucinations

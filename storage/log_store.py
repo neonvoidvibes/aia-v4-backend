@@ -33,6 +33,9 @@ class WriteAheadLog:
         frame_count: int,
         speech_frames: int,
         reason: str,
+        min_speech_ratio: Optional[float] = None,
+        rms_floor: Optional[float] = None,
+        confirm_windows: Optional[int] = None,
         local_wav_path: Optional[str] = None,
     ) -> str:
         payload: Dict[str, Any] = {
@@ -46,6 +49,12 @@ class WriteAheadLog:
             "speech_frames": speech_frames,
             "reason": reason,
         }
+        if min_speech_ratio is not None:
+            payload["min_speech_ratio"] = min_speech_ratio
+        if rms_floor is not None:
+            payload["rms_floor"] = rms_floor
+        if confirm_windows is not None:
+            payload["confirm_windows"] = confirm_windows
         if local_wav_path:
             payload["local_wav_path"] = local_wav_path
 
