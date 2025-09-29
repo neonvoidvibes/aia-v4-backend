@@ -375,8 +375,8 @@ def generate_transcript_summary(
     )
 
     # Use explicitly passed model_name, then SUMMARY_LLM_MODEL_NAME, then the requested default
-    # NOTE: claude-sonnet-4-20250514 is a VALID model name - do not change without verification
-    final_model_name = model_name or os.getenv("SUMMARY_LLM_MODEL_NAME", "claude-sonnet-4-20250514")
+    # NOTE: claude-sonnet-4-5-20250929 is a VALID model name - do not change without verification
+    final_model_name = model_name or os.getenv("SUMMARY_LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
 
     try:
         logger.info(f"Generating summary for '{original_filename}' using model '{final_model_name}'. Agent: {agent_name}, Event: {event_id}. Prompt length (approx): {len(prompt_content)}")

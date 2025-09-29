@@ -4464,7 +4464,7 @@ def handle_chat(user: SupabaseUser):
     saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled')
     transcription_language_setting = data.get('transcriptionLanguage', 'any')
     # Get default model from the existing LLM_MODEL_NAME env var, with a hardcoded fallback.
-    default_model = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-20250514")
+    default_model = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
     model_selection = data.get('model', default_model)
     temperature = data.get('temperature', 0.7) # Default temperature
     incoming_messages = data.get('messages', [])
