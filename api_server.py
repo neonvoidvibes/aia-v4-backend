@@ -4144,13 +4144,14 @@ def create_agent(user: SupabaseUser):
     agent_name = request.form['agent_name']
 
     # SECURITY: Validate agent name format to prevent random UUID/session ID abuse
-    if not re.match(r'^[a-z][a-z0-9-]*$', agent_name):
-        logger.warning(f"BLOCKED: Invalid agent name format attempted: '{agent_name}' by user {user.id}")
-        return jsonify({"error": "Invalid agent name format. Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens."}), 400
+    # Allow flexible naming (underscores, mixed case, numbers, etc.) but block specific problematic patterns
+    if agent_name.startswith('wizard-session'):
+        logger.warning(f"BLOCKED: Wizard session ID attempted as agent name: '{agent_name}' by user {user.id}")
+        return jsonify({"error": "Invalid agent name. Cannot use wizard session IDs."}), 400
 
-    if agent_name.startswith('wizard-session') or re.match(r'^[0-9a-f]{32}$', agent_name):
-        logger.warning(f"BLOCKED: Suspicious agent name attempted: '{agent_name}' by user {user.id}")
-        return jsonify({"error": "Invalid agent name. Cannot use wizard session IDs or UUID patterns."}), 400
+    if re.match(r'^[0-9a-f]{32}$', agent_name):
+        logger.warning(f"BLOCKED: Pure UUID pattern attempted as agent name: '{agent_name}' by user {user.id}")
+        return jsonify({"error": "Invalid agent name. Cannot use random UUID patterns."}), 400
 
     logger.info(f"Agent creation request received: '{agent_name}' by user {user.id}")
 
@@ -5049,9 +5050,9 @@ def sync_agents_from_s3_to_supabase():
         return
 
     # SECURITY: Filter out invalid agent names (wizard sessions, UUIDs, etc.)
+    # Allow flexible naming but block specific problematic patterns
     def is_valid_agent_name(name):
-        return (re.match(r'^[a-z][a-z0-9-]*$', name) and
-                not name.startswith('wizard-session') and
+        return (not name.startswith('wizard-session') and
                 not re.match(r'^[0-9a-f]{32}$', name))
 
     valid_missing_agents = [name for name in missing_agents if is_valid_agent_name(name)]
