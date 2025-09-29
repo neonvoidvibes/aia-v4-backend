@@ -73,11 +73,11 @@ def config_from_env(aggressiveness: Optional[int] = None) -> SilenceGateConfig:
     """Build a gate configuration based on environment knobs."""
 
     level = _sanitize_aggressiveness(aggressiveness)
-    base_ratio = _env_float("SILENCE_GATE_MIN_RATIO", 0.2)
+    base_ratio = _env_float("SILENCE_GATE_MIN_RATIO", 0.3)
     ratio_step = _env_float("SILENCE_GATE_MIN_RATIO_STEP", 0.05)
     min_ratio = min(0.95, max(0.0, base_ratio + ratio_step * max(0, level - 1)))
 
-    base_rms = _env_float("SILENCE_GATE_RMS_FLOOR", 180.0)
+    base_rms = _env_float("SILENCE_GATE_RMS_FLOOR", 220.0)
     rms_step = _env_float("SILENCE_GATE_RMS_FLOOR_STEP", 40.0)
     rms_floor = max(0.0, base_rms + rms_step * max(0, level - 1))
 
