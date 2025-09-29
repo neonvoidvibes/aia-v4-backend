@@ -817,7 +817,7 @@ session_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
 logger.info("Initialized and cleared active_sessions and session_locks at startup.")
 
 # Reattach grace window for unexpected disconnects (seconds)
-REATTACH_GRACE_SECONDS = int(os.getenv("REATTACH_GRACE_SECONDS", "90"))
+REATTACH_GRACE_SECONDS = int(os.getenv("REATTACH_GRACE_SECONDS", "130"))
 RINGBUF_SECONDS = int(os.getenv("RINGBUF_SECONDS", "45"))
 RINGBUF_MAX_RESULTS = int(os.getenv("RINGBUF_MAX_RESULTS", "200"))
 
