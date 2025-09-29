@@ -4142,6 +4142,18 @@ def create_agent(user: SupabaseUser):
         return jsonify({"error": "Missing required field: agent_name"}), 400
 
     agent_name = request.form['agent_name']
+
+    # SECURITY: Validate agent name format to prevent random UUID/session ID abuse
+    if not re.match(r'^[a-z][a-z0-9-]*$', agent_name):
+        logger.warning(f"BLOCKED: Invalid agent name format attempted: '{agent_name}' by user {user.id}")
+        return jsonify({"error": "Invalid agent name format. Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens."}), 400
+
+    if agent_name.startswith('wizard-session') or re.match(r'^[0-9a-f]{32}$', agent_name):
+        logger.warning(f"BLOCKED: Suspicious agent name attempted: '{agent_name}' by user {user.id}")
+        return jsonify({"error": "Invalid agent name. Cannot use wizard session IDs or UUID patterns."}), 400
+
+    logger.info(f"Agent creation request received: '{agent_name}' by user {user.id}")
+
     description = request.form.get('description', '')
     system_prompt_content = request.form.get('system_prompt_content')
     api_keys_json = request.form.get('api_keys')
@@ -5032,11 +5044,28 @@ def sync_agents_from_s3_to_supabase():
         logger.error(f"Agent Sync: Unexpected error querying Supabase agents: {e}", exc_info=True)
         return
     missing_agents = [name for name in s3_agent_names if name not in db_agent_names]
-    if not missing_agents: 
+    if not missing_agents:
         logger.info("Agent Sync: Supabase 'agents' table is up-to-date with S3 directories.")
         return
-    logger.info(f"Agent Sync: Found {len(missing_agents)} agents in S3 to add to Supabase: {missing_agents}")
-    agents_to_insert = [{'name': name, 'description': f'Agent discovered from S3 path: {name}'} for name in missing_agents]
+
+    # SECURITY: Filter out invalid agent names (wizard sessions, UUIDs, etc.)
+    def is_valid_agent_name(name):
+        return (re.match(r'^[a-z][a-z0-9-]*$', name) and
+                not name.startswith('wizard-session') and
+                not re.match(r'^[0-9a-f]{32}$', name))
+
+    valid_missing_agents = [name for name in missing_agents if is_valid_agent_name(name)]
+    invalid_agents = [name for name in missing_agents if not is_valid_agent_name(name)]
+
+    if invalid_agents:
+        logger.warning(f"Agent Sync: BLOCKED {len(invalid_agents)} invalid agent names from sync: {invalid_agents}")
+
+    if not valid_missing_agents:
+        logger.info("Agent Sync: No valid agents to sync after filtering.")
+        return
+
+    logger.info(f"Agent Sync: Found {len(valid_missing_agents)} valid agents in S3 to add to Supabase: {valid_missing_agents}")
+    agents_to_insert = [{'name': name, 'description': f'Agent discovered from S3 path: {name}'} for name in valid_missing_agents]
     try:
         insert_response = client.table("agents").insert(agents_to_insert).execute()
         if hasattr(insert_response, 'error') and insert_response.error:
@@ -5457,9 +5486,20 @@ def save_chat_history(user: SupabaseUser):
     title = data.get('title')
     last_message_id = data.get('lastMessageId') # New field
     client_session_id = data.get('clientSessionId') or data.get('client_session_id')
+
+    # SECURITY: Block wizard sessions from creating chat history/agent entries
+    if client_session_id and client_session_id.startswith('wizard-session'):
+        logger.info(f"BLOCKED: Wizard session {client_session_id} attempted to save chat history for agent '{agent_name}' by user {user.id}")
+        return jsonify({'success': True, 'chatId': None, 'message': 'Wizard sessions are not saved'}), 200
+
     if not agent_name or not messages:
         return jsonify({'error': 'Agent name and messages are required'}), 400
-    
+
+    # Additional validation: prevent UUID-like or wizard-session agent names from triggering saves
+    if agent_name.startswith('wizard-session') or re.match(r'^[0-9a-f]{32}$', agent_name):
+        logger.warning(f"BLOCKED: Suspicious agent name in chat save: '{agent_name}' by user {user.id}, session: {client_session_id}")
+        return jsonify({'success': True, 'chatId': None, 'message': 'Invalid agent name pattern'}), 200
+
     client = get_supabase_client()
     if not client: return jsonify({'error': 'Database not available'}), 503
     agent_result = client.table('agents').select('id').eq('name', agent_name).single().execute()
