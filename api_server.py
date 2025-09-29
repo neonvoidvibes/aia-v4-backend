@@ -816,7 +816,7 @@ SEGMENT_RETRY_MAX_ATTEMPTS = int(os.getenv("SEGMENT_RETRY_MAX_ATTEMPTS", "3"))
 MAX_PENDING_SEGMENTS = int(os.getenv("MAX_PENDING_SEGMENTS", "20"))
 SEGMENT_GAP_TIMEOUT_SEC = int(os.getenv("SEGMENT_GAP_TIMEOUT_SEC", "120"))
 
-PCM_SEGMENT_TARGET_MS_DEFAULT = int(os.getenv("PCM_SEGMENT_TARGET_MS", "3000"))
+PCM_SEGMENT_TARGET_MS_DEFAULT = int(os.getenv("PCM_SEGMENT_TARGET_MS", "15000"))
 
 def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
     """Initialize session state for reconnection support with ring buffers."""
