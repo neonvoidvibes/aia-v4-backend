@@ -1619,7 +1619,18 @@ def _finalize_session(session_id: str):
             final_output_wav_path = os.path.join(temp_processing_dir, f"final_audio_{final_segment_uuid}.wav")
             
             try:
-                ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', final_output_wav_path]
+                ffmpeg_command = [
+                    'ffmpeg',
+                    '-loglevel', 'warning',
+                    '-fflags', '+discardcorrupt',
+                    '-err_detect', 'ignore_err',
+                    '-y',
+                    '-i', 'pipe:0',
+                    '-ar', '16000',
+                    '-ac', '1',
+                    '-acodec', 'pcm_s16le',
+                    final_output_wav_path
+                ]
                 logger.info(f"Session {session_id} Finalize: Executing ffmpeg direct WAV: {' '.join(ffmpeg_command)}")
                 process = subprocess.Popen(ffmpeg_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate(input=all_final_segment_bytes)
@@ -2945,7 +2956,18 @@ def audio_stream_socket(ws, session_id: str):
                                 vad_level
                             ):
                                 try:
-                                    ffmpeg_command = ['ffmpeg', '-y', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le', wav_path]
+                                    ffmpeg_command = [
+                                        'ffmpeg',
+                                        '-loglevel', 'warning',
+                                        '-fflags', '+discardcorrupt',
+                                        '-err_detect', 'ignore_err',
+                                        '-y',
+                                        '-i', 'pipe:0',
+                                        '-ar', '16000',
+                                        '-ac', '1',
+                                        '-acodec', 'pcm_s16le',
+                                        wav_path
+                                    ]
                                     logger.info(f"Thread Session {s_id}: Executing ffmpeg: {' '.join(ffmpeg_command)}")
                                     process = subprocess.Popen(ffmpeg_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                                     _, stderr_ffmpeg = process.communicate(input=audio_bytes)
