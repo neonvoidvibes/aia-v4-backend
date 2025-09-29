@@ -5449,32 +5449,54 @@ def pinecone_upsert_proxy(user: SupabaseUser):
 # --- Restored User Chat History Endpoints ---
 
 def generate_chat_title(first_user_message: str) -> str:
-    """Generate a concise title for a chat using Groq GPT-OSS-20B"""
+    """Generate a concise title for a chat using Groq GPT-OSS-20B with retry logic"""
     logger.info(f"generate_chat_title called with message: {first_user_message[:100] if first_user_message else 'None'}")
-    try:
-        logger.info("Calling Groq API for title generation...")
-        logger.info(f"Request details - Model: openai/gpt-oss-20b, Max tokens: 50, Temperature: 0.9")
-        logger.info(f"System instruction: 'Generate a concise, descriptive title (max 4 words) for this chat based on the user's first message. Return only the title, no quotes or extra text.'")
-        logger.info(f"User message: '{first_user_message}'")
 
-        title = _call_groq_non_stream_with_retry(
-            model_name="openai/gpt-oss-20b",
-            max_tokens=50,
-            system_instruction="Generate only a 3-4 word title using short words based on the first user message. No explanation, no quotes, just the title.",
-            messages=[{"role": "user", "content": f"Create a title for: {first_user_message}"}],
-            api_key=os.getenv('GROQ_API_KEY'), # Use global key for this utility
-            temperature=0.3,
-            reasoning_effort="low"
-        )
-        logger.info(f"Raw Groq response: '{title}'")
-        final_title = title.strip().strip('"')[:100] if title else "Untitled Chat"
-        logger.info(f"Final processed title: '{final_title}'")
-        return final_title
-    except Exception as e:
-        logger.error(f"Error generating chat title: {e}", exc_info=True)
-        fallback = first_user_message[:50] + "..." if len(first_user_message) > 50 else first_user_message
-        logger.info(f"Using fallback title: '{fallback}'")
-        return fallback
+    max_retries = 3
+    retry_delay = 1  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                logger.info(f"Retry attempt {attempt + 1}/{max_retries} for title generation")
+                import time
+                time.sleep(retry_delay * attempt)  # Exponential backoff
+
+            logger.info("Calling Groq API for title generation...")
+            logger.info(f"Request details - Model: openai/gpt-oss-20b, Max tokens: 50, Temperature: 0.3")
+            logger.info(f"System instruction: 'Generate only a 3-4 word title using short words based on the first user message. No explanation, no quotes, just the title.'")
+            logger.info(f"User message: '{first_user_message}'")
+
+            title = _call_groq_non_stream_with_retry(
+                model_name="openai/gpt-oss-20b",
+                max_tokens=50,
+                system_instruction="Generate only a 3-4 word title using short words based on the first user message. No explanation, no quotes, just the title.",
+                messages=[{"role": "user", "content": f"Create a title for: {first_user_message}"}],
+                api_key=os.getenv('GROQ_API_KEY'), # Use global key for this utility
+                temperature=0.3,
+                reasoning_effort="low"
+            )
+            logger.info(f"Raw Groq response: '{title}'")
+
+            # Validate title quality before accepting
+            if title and title.strip() and title.strip().strip('"'):
+                final_title = title.strip().strip('"')[:100]
+                logger.info(f"Final processed title (attempt {attempt + 1}): '{final_title}'")
+                return final_title
+            else:
+                logger.warning(f"Groq returned empty/invalid title on attempt {attempt + 1}")
+                if attempt < max_retries - 1:
+                    continue  # Retry
+
+        except Exception as e:
+            logger.error(f"Error generating chat title (attempt {attempt + 1}/{max_retries}): {e}", exc_info=True)
+            if attempt < max_retries - 1:
+                continue  # Retry
+
+    # All retries exhausted, use fallback
+    fallback = first_user_message[:50] + "..." if len(first_user_message) > 50 else first_user_message
+    logger.warning(f"All title generation attempts failed. Using fallback title: '{fallback}'")
+    return fallback
 
 @app.route('/api/chat/history/save', methods=['POST'])
 @supabase_auth_required(agent_required=True)
@@ -5555,8 +5577,28 @@ def save_chat_history(user: SupabaseUser):
             except Exception:
                 return incoming_list or existing_list or []
         if chat_id:
+            # Defensive: Fetch existing title to avoid overwriting good titles with fallbacks
+            existing_title = None
+            try:
+                existing_res = client.table('chat_history').select('messages, title').eq('id', chat_id).eq('user_id', user.id).single().execute()
+                existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
+                existing_title = existing_res.data.get('title') if existing_res and existing_res.data else None
+            except Exception:
+                existing_msgs = []
+                existing_title = None
+
+            # Defensive logic: Never overwrite a good title with "Untitled Chat" or empty title
+            # Keep existing title if incoming title is default/fallback and existing is better
+            is_incoming_fallback = not title or title == "Untitled Chat" or title == "New Chat"
+            is_existing_good = existing_title and existing_title not in ["Untitled Chat", "New Chat"]
+
+            final_title = title
+            if is_incoming_fallback and is_existing_good:
+                final_title = existing_title
+                logger.info(f"Preserving existing title '{existing_title}' instead of overwriting with '{title}'")
+
             update_payload = {
-                'title': title,
+                'title': final_title,
                 'messages': messages,
                 'updated_at': 'now()',
                 'last_message_at': 'now()',
@@ -5564,13 +5606,8 @@ def save_chat_history(user: SupabaseUser):
             if last_message_id:
                 update_payload['last_message_id_at_save'] = last_message_id
             # Merge with existing to avoid losing messages on partial saves
-            try:
-                existing_res = client.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
-                existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
-                merged_msgs = _merge_messages(existing_msgs, messages)
-                update_payload['messages'] = merged_msgs
-            except Exception:
-                pass
+            merged_msgs = _merge_messages(existing_msgs, messages)
+            update_payload['messages'] = merged_msgs
             # Attempt to include event_id if column exists
             try:
                 update_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
