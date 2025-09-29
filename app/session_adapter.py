@@ -4,6 +4,7 @@ import re
 import threading
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional, Dict, List, Tuple
 
 from app.pipeline_wiring import build_pipeline
@@ -29,12 +30,17 @@ class SessionAdapter:
         self._locks: Dict[str, threading.Lock] = {}
         self._legacy_keys: Dict[str, str] = {}
         self._legacy_prefix_counts: Dict[str, Dict[str, int]] = {}
+        self._legacy_timezones: Dict[str, str] = {}
         self._global_lock = threading.Lock()
 
-    def register_session(self, session_id: str, transcript_key: str) -> None:
+    def register_session(self, session_id: str, transcript_key: str, timezone_name: Optional[str] = None) -> None:
         with self._global_lock:
             self._legacy_keys[session_id] = transcript_key
             self._legacy_prefix_counts.pop(session_id, None)
+            if timezone_name:
+                self._legacy_timezones[session_id] = timezone_name
+            else:
+                self._legacy_timezones.pop(session_id, None)
             logger.debug("Session %s: registered legacy transcript %s", session_id, transcript_key)
 
     def on_segment(self, *, session_id: str, raw_path: str, captured_ts: float,
@@ -65,6 +71,7 @@ class SessionAdapter:
             self._locks.pop(session_id, None)
             self._legacy_keys.pop(session_id, None)
             self._legacy_prefix_counts.pop(session_id, None)
+            self._legacy_timezones.pop(session_id, None)
         logger.debug("Session %s: finalized", session_id)
 
     def _append_legacy_transcript(self, session_id: str, chunk: TranscriptChunk) -> None:
@@ -84,7 +91,7 @@ class SessionAdapter:
             logger.debug("Session %s: chunk seq=%s reduced to empty after prefix strip", session_id, chunk.seq)
             return
 
-        timestamp = datetime.fromtimestamp(chunk.captured_ts, tz=timezone.utc).strftime("[%H:%M:%S]")
+        timestamp = self._format_timestamp(session_id, chunk.captured_ts)
         line = format_transcript_line(timestamp, clean_text, chunk.meta)
         try:
             obj = self._s3.get_object(Bucket=self._bucket, Key=key)
@@ -96,6 +103,21 @@ class SessionAdapter:
         updated = f"{existing}{line}\n"
         self._s3.put_object(Bucket=self._bucket, Key=key, Body=updated.encode("utf-8"))
         logger.debug("Session %s: appended chunk seq=%s to legacy transcript (len=%s)", session_id, chunk.seq, len(updated))
+
+    def _format_timestamp(self, session_id: str, captured_ts: float) -> str:
+        """Return a [HH:MM:SS ZZZ] timestamp string in the session's timezone."""
+        tz_name = self._legacy_timezones.get(session_id) or "UTC"
+        try:
+            tzinfo = ZoneInfo(tz_name)
+        except Exception:
+            logger.debug("Session %s: invalid timezone '%s', falling back to UTC", session_id, tz_name)
+            tzinfo = timezone.utc
+            tz_name = "UTC"
+
+        utc_dt = datetime.fromtimestamp(captured_ts, tz=timezone.utc)
+        local_dt = utc_dt.astimezone(tzinfo)
+        tz_abbr = local_dt.tzname() or tz_name or "UTC"
+        return f"[{local_dt.strftime('%H:%M:%S')} {tz_abbr}]"
 
     def _strip_repeated_prefix(self, session_id: str, text: str) -> str:
         stripped = text.lstrip()

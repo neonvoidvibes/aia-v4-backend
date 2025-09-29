@@ -4,6 +4,7 @@ import boto3
 import logging
 import re
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional, Dict, List
 from dateutil import parser
 
@@ -24,9 +25,26 @@ class RollingTranscriptWindow:
             return ""
 
         lines = full_text.splitlines()
-        now = datetime.now(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
         window_delta = timedelta(seconds=window_seconds)
         filtered_lines = []
+
+        session_tzinfo = timezone.utc
+
+        for header_line in lines:
+            if header_line.lower().startswith('session timezone:'):
+                tz_value = header_line.split(':', 1)[1].strip()
+                if tz_value:
+                    tz_name = tz_value.split('(', 1)[0].strip() or 'UTC'
+                    try:
+                        session_tzinfo = ZoneInfo(tz_name)
+                    except Exception:
+                        logger.warning(f"Unknown session timezone '{tz_name}', defaulting to UTC")
+                        session_tzinfo = timezone.utc
+                break
+
+        now_local = now_utc.astimezone(session_tzinfo)
+        today_local = now_local.date()
 
         for line in lines:
             # Skip headers and metadata lines
@@ -34,26 +52,21 @@ class RollingTranscriptWindow:
                 continue
 
             try:
-                # Extract timestamp from line format "[HH:MM:SS - ...]" or "[HH:MM:SS.mmm UTC]"
-                timestamp_match = re.search(r'\[([0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?)', line)
+                timestamp_match = re.search(r'\[([0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?)(?:\s+[^\]]+)?\]', line)
                 if not timestamp_match:
                     continue
 
                 timestamp_str = timestamp_match.group(1)
 
-                # Parse timestamp - assume it's from today for simplicity
-                today = now.date()
                 if '.' in timestamp_str:
-                    # Format: HH:MM:SS.mmm
                     time_part = datetime.strptime(timestamp_str, "%H:%M:%S.%f").time()
                 else:
-                    # Format: HH:MM:SS
                     time_part = datetime.strptime(timestamp_str, "%H:%M:%S").time()
 
-                timestamp = datetime.combine(today, time_part).replace(tzinfo=timezone.utc)
+                timestamp_local = datetime.combine(today_local, time_part).replace(tzinfo=session_tzinfo)
+                timestamp_utc = timestamp_local.astimezone(timezone.utc)
 
-                # Keep lines within the window
-                if now - timestamp <= window_delta:
+                if now_utc - timestamp_utc <= window_delta:
                     filtered_lines.append(line)
 
             except Exception as e:

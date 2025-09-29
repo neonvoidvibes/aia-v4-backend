@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import json
 from datetime import datetime, timezone, timedelta # Ensure datetime, timezone, timedelta are imported
+from zoneinfo import ZoneInfo
 import urllib.parse 
 from functools import wraps 
 from typing import Optional, List, Dict, Any, Tuple, Union 
@@ -211,6 +212,24 @@ def format_language_for_header(language_code: str) -> str:
         'ko': 'Korean'
     }
     return language_map.get(language_code, language_code.upper())
+
+
+def _resolve_client_timezone(tz_name: Optional[str], reference_utc: datetime) -> Tuple[str, str, datetime]:
+    """Resolve a client-supplied timezone into canonical name, abbreviation, and local start time."""
+    fallback_zone = ZoneInfo("UTC")
+    zone = fallback_zone
+    zone_name = "UTC"
+
+    if tz_name:
+        try:
+            zone = ZoneInfo(tz_name)
+            zone_name = tz_name
+        except Exception:
+            logger.warning(f"Received invalid timezone '{tz_name}', defaulting to UTC")
+
+    local_dt = reference_utc.astimezone(zone)
+    tz_abbr = local_dt.tzname() or zone_name or "UTC"
+    return zone_name, tz_abbr, local_dt
 
 # Mobile recording uses custom magic number detection (no external dependencies needed)
 
@@ -1298,6 +1317,10 @@ def start_recording_route(user: SupabaseUser):
 
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
+    client_timezone_raw = data.get('clientTimezone')
+    client_timezone_name, client_timezone_abbr, session_start_time_local = _resolve_client_timezone(
+        client_timezone_raw, session_start_time_utc
+    )
     # Fetch agent-specific API keys or fall back to globals
     agent_openai_key = get_api_key(agent_name, 'openai')
     agent_anthropic_key = get_api_key(agent_name, 'anthropic')
@@ -1329,6 +1352,7 @@ def start_recording_route(user: SupabaseUser):
         "language_setting_from_client": language_setting, # Store the new setting
         "vad_aggressiveness_from_client": vad_aggressiveness, # Store VAD aggressiveness level
         "session_start_time_utc": session_start_time_utc,
+        "session_start_time_local": session_start_time_local,
         "s3_transcript_key": s3_transcript_key,
         "temp_audio_session_dir": temp_audio_base_dir,
         "openai_api_key": agent_openai_key,       # Store the potentially agent-specific key
@@ -1353,9 +1377,11 @@ def start_recording_route(user: SupabaseUser):
         "max_pending_segments": MAX_PENDING_SEGMENTS,
         "current_provider": get_current_transcription_provider(),
         "fallback_active": False,
+        "client_timezone_name": client_timezone_name,
+        "client_timezone_abbr": client_timezone_abbr,
         **reconnect_state  # Add reconnection fields
     }
-    SESSION_ADAPTER.register_session(session_id, s3_transcript_key)
+    SESSION_ADAPTER.register_session(session_id, s3_transcript_key, client_timezone_name)
     logger.info(f"Transcript session {session_id} started for agent {agent_name}, event {event_id} by user {user.id}.")
     logger.info(f"Session temp audio dir: {temp_audio_base_dir}, S3 transcript key: {s3_transcript_key}")
     
@@ -1379,7 +1405,17 @@ def start_recording_route(user: SupabaseUser):
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if s3 and aws_s3_bucket:
-        header = f"# Transcript - Session {session_id}\nAgent: {agent_name}, Event: {event_id}\nUser: {user.id}\nLanguage: {format_language_for_header(language_setting)}\nProvider: {get_current_transcription_provider()}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
+        timezone_line = client_timezone_name if client_timezone_name == client_timezone_abbr else f"{client_timezone_name} ({client_timezone_abbr})"
+        header = (
+            f"# Transcript - Session {session_id}\n"
+            f"Agent: {agent_name}, Event: {event_id}\n"
+            f"User: {user.id}\n"
+            f"Language: {format_language_for_header(language_setting)}\n"
+            f"Provider: {get_current_transcription_provider()}\n"
+            f"Session Started (UTC): {session_start_time_utc.isoformat()}\n"
+            f"Session Timezone: {timezone_line}\n"
+            f"Session Started (Local): {session_start_time_local.isoformat()}\n\n"
+        )
         try:
             s3.put_object(Bucket=aws_s3_bucket, Key=s3_transcript_key, Body=header.encode('utf-8'))
             logger.info(f"Initialized S3 transcript file: {s3_transcript_key}")
@@ -1412,6 +1448,10 @@ def start_audio_recording(user: SupabaseUser):
 
     session_id = uuid.uuid4().hex
     session_start_time_utc = datetime.now(timezone.utc)
+    client_timezone_raw = data.get('clientTimezone')
+    client_timezone_name, client_timezone_abbr, session_start_time_local = _resolve_client_timezone(
+        client_timezone_raw, session_start_time_utc
+    )
     
     agent_openai_key = get_api_key(agent_name, 'openai')
     agent_anthropic_key = get_api_key(agent_name, 'anthropic')
@@ -1430,6 +1470,7 @@ def start_audio_recording(user: SupabaseUser):
         "language_setting_from_client": language_setting,
         "vad_aggressiveness_from_client": vad_aggressiveness, # Store VAD aggressiveness level
         "session_start_time_utc": session_start_time_utc,
+        "session_start_time_local": session_start_time_local,
         "s3_transcript_key": s3_recording_key, # Re-use the same key name for compatibility
         "temp_audio_session_dir": temp_audio_base_dir,
         "openai_api_key": agent_openai_key,
@@ -1455,14 +1496,24 @@ def start_audio_recording(user: SupabaseUser):
         "silence_seconds": 0,
         "last_audio_ts": None,
         "recent_events": deque(maxlen=200),
+        "client_timezone_name": client_timezone_name,
+        "client_timezone_abbr": client_timezone_abbr,
     }
-    SESSION_ADAPTER.register_session(session_id, s3_recording_key)
+    SESSION_ADAPTER.register_session(session_id, s3_recording_key, client_timezone_name)
     logger.info(f"Audio recording session {session_id} started for agent {agent_name} by user {user.id}.")
     
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if s3 and aws_s3_bucket:
-        header = f"# Recording - Session {session_id}\nAgent: {agent_name}\nUser: {user.id}\nSession Started (UTC): {session_start_time_utc.isoformat()}\n\n"
+        timezone_line = client_timezone_name if client_timezone_name == client_timezone_abbr else f"{client_timezone_name} ({client_timezone_abbr})"
+        header = (
+            f"# Recording - Session {session_id}\n"
+            f"Agent: {agent_name}\n"
+            f"User: {user.id}\n"
+            f"Session Started (UTC): {session_start_time_utc.isoformat()}\n"
+            f"Session Timezone: {timezone_line}\n"
+            f"Session Started (Local): {session_start_time_local.isoformat()}\n\n"
+        )
         try:
             s3.put_object(Bucket=aws_s3_bucket, Key=s3_recording_key, Body=header.encode('utf-8'))
             logger.info(f"Initialized S3 recording file: {s3_recording_key}")
