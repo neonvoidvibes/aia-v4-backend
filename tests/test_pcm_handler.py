@@ -6,7 +6,7 @@ import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import api_server as server
+from utils import pcm_stream as pcm
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def session_data(tmp_path):
 def _build_pcm_frame(seq: int, payload: bytes, frame_duration_ms: int = 20, frame_samples: int = 320):
     header = struct.pack(
         '<IIdHHIHHI',
-        server.PCM_FRAME_MAGIC,
+        pcm.PCM_FRAME_MAGIC,
         seq,
         float(seq),
         frame_samples,
@@ -46,16 +46,17 @@ def test_handle_pcm_frame_dispatches_when_threshold_met(monkeypatch, session_dat
         captured["sample_rate"] = sample_rate
         captured["channels"] = channels
 
-    monkeypatch.setattr(server, "_dispatch_pcm_segment", fake_dispatch)
+    def dispatch_fn(*args):
+        fake_dispatch(*args)
 
     payload = (b"\x01\x00" * 320)
     frame = _build_pcm_frame(1, payload)
 
-    assert server._handle_pcm_frame("sess", session_data, frame) is True
+    assert pcm.handle_pcm_frame("sess", session_data, frame, dispatch_fn) is True
     assert not captured  # buffer not flushed yet
 
     frame2 = _build_pcm_frame(2, payload)
-    assert server._handle_pcm_frame("sess", session_data, frame2) is True
+    assert pcm.handle_pcm_frame("sess", session_data, frame2, dispatch_fn) is True
 
     assert captured, "expected PCM segment to be dispatched"
     assert len(captured["pcm_bytes"]) == len(payload) * 2

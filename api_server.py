@@ -26,7 +26,6 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import uuid 
 from collections import defaultdict, deque
 import subprocess 
-import struct
 import wave
 import shutil
 import re
@@ -489,87 +488,6 @@ def _dispatch_pcm_segment(
     threading.Thread(target=_process_pcm_segment, name=f"pcm-segment-{session_id}", daemon=True).start()
 
 
-def _handle_pcm_frame(session_id: str, session_data: Dict[str, Any], frame_bytes: bytes) -> bool:
-    """Parse a PCM frame from the client and dispatch segments when enough audio is buffered."""
-    if len(frame_bytes) < PCM_FRAME_HEADER_BYTES:
-        logger.warning(f"Session {session_id}: Received undersized PCM frame ({len(frame_bytes)} bytes)")
-        stats = session_data.setdefault("pcm_frame_stats", {"frames_received": 0, "frames_dropped": 0, "out_of_order": 0})
-        stats["frames_dropped"] = stats.get("frames_dropped", 0) + 1
-        return True
-
-    try:
-        (
-            magic,
-            seq,
-            timestamp_ms,
-            frame_samples,
-            frame_duration_ms,
-            sample_rate,
-            channels,
-            format_code,
-            payload_length,
-        ) = struct.unpack('<IIdHHIHHI', frame_bytes[:PCM_FRAME_HEADER_BYTES])
-    except struct.error as exc:
-        logger.warning(f"Session {session_id}: Failed to unpack PCM frame header: {exc}")
-        return False
-
-    if magic != PCM_FRAME_MAGIC:
-        return False
-
-    stats = session_data.setdefault("pcm_frame_stats", {"frames_received": 0, "frames_dropped": 0, "out_of_order": 0})
-    stats["frames_received"] = stats.get("frames_received", 0) + 1
-
-    available_payload = len(frame_bytes) - PCM_FRAME_HEADER_BYTES
-    if payload_length <= 0 or payload_length > available_payload:
-        logger.warning(
-            f"Session {session_id}: PCM frame payload truncated (expected {payload_length} bytes, have {available_payload})"
-        )
-        stats["frames_dropped"] = stats.get("frames_dropped", 0) + 1
-        return True
-
-    if format_code != 1:
-        logger.warning(f"Session {session_id}: Unsupported PCM format code {format_code}, expected 1 (pcm16)")
-        stats["frames_dropped"] = stats.get("frames_dropped", 0) + 1
-        return True
-
-    payload = frame_bytes[PCM_FRAME_HEADER_BYTES:PCM_FRAME_HEADER_BYTES + payload_length]
-    last_seq = session_data.get("pcm_last_seq", 0)
-    expected_seq = last_seq + 1
-    if seq != expected_seq:
-        stats["out_of_order"] = stats.get("out_of_order", 0) + 1
-        logger.warning(f"Session {session_id}: PCM frame out of order (expected {expected_seq}, got {seq})")
-    session_data["pcm_last_seq"] = seq
-    session_data["pcm_last_frame_ts"] = timestamp_ms
-
-    buffer = session_data.setdefault("pcm_frame_buffer", bytearray())
-    buffer.extend(payload)
-
-    effective_frame_samples = frame_samples or (payload_length // 2)
-    if frame_duration_ms <= 0 and sample_rate:
-        frame_duration_ms = int((effective_frame_samples / sample_rate) * 1000)
-
-    session_data["pcm_accumulated_duration_ms"] = session_data.get("pcm_accumulated_duration_ms", 0.0) + max(frame_duration_ms, 0)
-    session_data["pcm_samples_buffered"] = session_data.get("pcm_samples_buffered", 0) + effective_frame_samples
-    session_data["pcm_sample_rate"] = sample_rate or session_data.get("pcm_sample_rate", 16000)
-    session_data["pcm_channels"] = channels or session_data.get("pcm_channels", 1)
-
-    target_ms = session_data.get("pcm_segment_target_ms", PCM_SEGMENT_TARGET_MS_DEFAULT)
-    if session_data["pcm_accumulated_duration_ms"] >= max(target_ms, frame_duration_ms or 1):
-        pcm_bytes = bytes(buffer)
-        if pcm_bytes:
-            buffer.clear()
-            total_samples = session_data.get("pcm_samples_buffered", len(pcm_bytes) // 2)
-            session_data["pcm_samples_buffered"] = 0
-            session_data["pcm_accumulated_duration_ms"] = 0.0
-            sample_rate = session_data.get("pcm_sample_rate", 16000)
-            channels = session_data.get("pcm_channels", 1)
-            try:
-                duration_s = total_samples / sample_rate if sample_rate else len(pcm_bytes) / (16000 * 2)
-            except Exception:
-                duration_s = len(pcm_bytes) / (16000 * 2)
-            _dispatch_pcm_segment(session_id, session_data, pcm_bytes, duration_s, sample_rate, channels)
-    return True
-
 def _estimate_audio_duration(audio_bytes: bytes, content_type: str) -> float:
     """Estimate audio duration in seconds based on format and size."""
     try:
@@ -768,8 +686,6 @@ SEGMENT_RETRY_MAX_ATTEMPTS = int(os.getenv("SEGMENT_RETRY_MAX_ATTEMPTS", "3"))
 MAX_PENDING_SEGMENTS = int(os.getenv("MAX_PENDING_SEGMENTS", "20"))
 SEGMENT_GAP_TIMEOUT_SEC = int(os.getenv("SEGMENT_GAP_TIMEOUT_SEC", "120"))
 
-PCM_FRAME_MAGIC = 0x314D4350  # 'PCM1' little-endian
-PCM_FRAME_HEADER_BYTES = 32
 PCM_SEGMENT_TARGET_MS_DEFAULT = int(os.getenv("PCM_SEGMENT_TARGET_MS", "3000"))
 
 def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
@@ -3021,7 +2937,21 @@ def audio_stream_socket(ws, session_id: str):
                         continue
 
                     if session_data.get("supports_pcm_stream", False) and not drop_chunk:
-                        handled_pcm = _handle_pcm_frame(session_id, session_data, message)
+                        handled_pcm = handle_pcm_frame(
+                            session_id,
+                            session_data,
+                            message,
+                            lambda sid, sdata, pcm_bytes, duration_s, sample_rate, channels: _dispatch_pcm_segment(
+                                sid,
+                                sdata,
+                                pcm_bytes,
+                                duration_s,
+                                sample_rate,
+                                channels,
+                            ),
+                            logger=logger,
+                            default_segment_target_ms=PCM_SEGMENT_TARGET_MS_DEFAULT,
+                        )
                         if handled_pcm:
                             session_data.setdefault("content_type", "audio/pcm")
                             session_data["codec_detected_from_bytes"] = True
