@@ -2,6 +2,7 @@ import json
 import math
 import os
 import sys
+import time
 import wave
 from array import array
 import shutil
@@ -138,3 +139,38 @@ def test_session_adapter_allows_speech(monkeypatch, raw_wav):
     assert pipe.calls, "expected pipeline to run when speech passes gate"
     assert not fake_s3.put_calls
     assert calls, "expected trimming to be invoked for voiced segment"
+
+
+def test_on_segment_skips_normalization_for_pcm(monkeypatch, raw_wav):
+    pipe = _Pipeline()
+    monkeypatch.setattr(sa, "build_pipeline", lambda **kwargs: pipe)
+    fake_s3 = _FakeS3()
+
+    def _fail_normalization(*_args, **_kwargs):  # pragma: no cover - defensive
+        raise AssertionError("Normalization should not run for wav16k input")
+
+    monkeypatch.setattr(sa, "to_mono16k_pcm", _fail_normalization)
+
+    adapter = sa.SessionAdapter(dg_client=None, whisper_client=None, s3_client=fake_s3,
+                                bucket="bucket", base_prefix="prefix")
+    adapter._silence_gate_enabled = False
+
+    session_id = "pcm-test"
+    target_dir = os.path.join("tmp", "sessions", session_id)
+    shutil.rmtree(target_dir, ignore_errors=True)
+
+    result = adapter.on_segment(
+        session_id=session_id,
+        raw_path=str(raw_wav),
+        captured_ts=time.time(),
+        duration_s=0.1,
+        language=None,
+        input_format='wav16k',
+    )
+
+    assert result is None
+    assert pipe.calls, "pipeline should receive the PCM segment"
+    expected_path = os.path.join("tmp", "sessions", session_id, "blobs", "000000000000.wav")
+    assert os.path.exists(expected_path)
+
+    shutil.rmtree(target_dir, ignore_errors=True)

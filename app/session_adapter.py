@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import re
+import shutil
 import threading
 import logging
 from datetime import datetime, timezone
@@ -132,7 +133,8 @@ class SessionAdapter:
 
     def on_segment(self, *, session_id: str, raw_path: str, captured_ts: float,
                    duration_s: float, language: Optional[str],
-                   vad_aggressiveness: Optional[int] = None) -> Optional[TranscriptChunk]:
+                   vad_aggressiveness: Optional[int] = None,
+                   input_format: str = 'file') -> Optional[TranscriptChunk]:
         with self._global_lock:
             lock = self._locks.setdefault(session_id, threading.Lock())
         with lock:
@@ -140,7 +142,16 @@ class SessionAdapter:
             self._seq[session_id] = seq
         wav_path = f"tmp/sessions/{session_id}/blobs/{seq:012d}.wav"
         os.makedirs(os.path.dirname(wav_path), exist_ok=True)
-        to_mono16k_pcm(raw_path, wav_path)
+
+        if input_format == 'wav16k':
+            src = os.path.abspath(raw_path)
+            dst = os.path.abspath(wav_path)
+            if src != dst:
+                shutil.copyfile(src, dst)
+            logger.debug("Session %s: accepted PCM segment seq=%s without re-encoding", session_id, seq)
+        else:
+            logger.debug("Session %s: normalizing segment seq=%s via ffmpeg", session_id, seq)
+            to_mono16k_pcm(raw_path, wav_path)
 
         if self._silence_gate_enabled:
             aggr = self._resolve_aggressiveness(vad_aggressiveness)
