@@ -61,6 +61,7 @@ from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_sum
 from utils.pinecone_utils import init_pinecone, create_namespace
 from utils.embedding_handler import EmbeddingHandler
 from utils.webm_header import extract_webm_header
+from utils.pcm_stream import handle_pcm_frame
 from pinecone.exceptions import NotFoundException
 from anthropic import Anthropic, APIStatusError, AnthropicError, APIConnectionError
 from groq import APIError as GroqAPIError
@@ -487,6 +488,135 @@ def _dispatch_pcm_segment(
 
     threading.Thread(target=_process_pcm_segment, name=f"pcm-segment-{session_id}", daemon=True).start()
 
+
+def _process_webm_segment_thread(
+    session_id: str,
+    session_data: Dict[str, Any],
+    lock_ref: threading.RLock,
+    audio_bytes: bytes,
+    wav_path: str,
+    openai_key: Optional[str],
+    anthropic_key: Optional[str],
+    vad_level: Optional[int],
+) -> None:
+    try:
+        ffmpeg_command = [
+            'ffmpeg',
+            '-loglevel', 'warning',
+            '-fflags', '+discardcorrupt',
+            '-err_detect', 'ignore_err',
+            '-y',
+            '-i', 'pipe:0',
+            '-ar', '16000',
+            '-ac', '1',
+            '-acodec', 'pcm_s16le',
+            wav_path,
+        ]
+        logger.info("Thread Session %s: Executing ffmpeg: %s", session_id, ' '.join(ffmpeg_command))
+        process = subprocess.Popen(
+            ffmpeg_command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        _, stderr_ffmpeg = process.communicate(input=audio_bytes)
+
+        if process.returncode != 0:
+            logger.error(
+                "Thread Session %s: ffmpeg failed. RC: %s, Err: %s",
+                session_id,
+                process.returncode,
+                stderr_ffmpeg.decode('utf-8', 'ignore'),
+            )
+            return
+
+        logger.info("Thread Session %s: Successfully converted to %s", session_id, wav_path)
+
+        ffprobe_command = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            wav_path,
+        ]
+        actual_segment_dur = 0.0
+        try:
+            duration_result = subprocess.run(
+                ffprobe_command,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            actual_segment_dur = float(duration_result.stdout.strip())
+            logger.info(
+                "Thread Session %s: Actual duration of WAV %s is %.2fs",
+                session_id,
+                wav_path,
+                actual_segment_dur,
+            )
+        except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
+            logger.error(
+                "Thread Session %s: ffprobe failed for %s: %s. Estimating.",
+                session_id,
+                wav_path,
+                ffprobe_err,
+            )
+            bytes_per_second = 16000 * 2
+            estimated_dur = len(audio_bytes) / bytes_per_second if bytes_per_second > 0 else 0
+            actual_segment_dur = estimated_dur
+            logger.warning(
+                "Thread Session %s: Using rough estimated duration: %.2fs",
+                session_id,
+                actual_segment_dur,
+            )
+
+        with lock_ref:
+            if session_id in active_sessions:
+                active_sessions[session_id]['actual_segment_duration_seconds'] = actual_segment_dur
+            else:
+                logger.warning(
+                    "Thread Session %s: Session data missing when trying to update actual_segment_duration.",
+                    session_id,
+                )
+                session_data['actual_segment_duration_seconds'] = actual_segment_dur
+
+        try:
+            SESSION_ADAPTER.on_segment(
+                session_id=session_id,
+                raw_path=wav_path,
+                captured_ts=time.time(),
+                duration_s=actual_segment_dur,
+                language=session_data.get('language_setting_from_client'),
+                vad_aggressiveness=vad_level,
+            )
+        except Exception as adapter_err:
+            logger.error(
+                "Thread Session %s: Adapter processing failed for segment %s: %s",
+                session_id,
+                wav_path,
+                adapter_err,
+                exc_info=True,
+            )
+        finally:
+            try:
+                with lock_ref:
+                    session_data['pending_segments'] = max(
+                        0,
+                        int(session_data.get('pending_segments', 1)) - 1,
+                    )
+            except Exception as pending_err:
+                logger.debug(
+                    "Thread Session %s: Failed to decrement pending segments: %s",
+                    session_id,
+                    pending_err,
+                )
+    except Exception as thread_e:
+        logger.error(
+            "Thread Session %s: Error during threaded segment processing: %s",
+            session_id,
+            thread_e,
+            exc_info=True,
+        )
 
 def _estimate_audio_duration(audio_bytes: bytes, content_type: str) -> float:
     """Estimate audio duration in seconds based on format and size."""
@@ -3108,153 +3238,10 @@ def audio_stream_socket(ws, session_id: str):
                                     logger.warning(f"Session {session_id}: Combined bytes for FFmpeg is empty. Skipping.")
                                     continue
 
-                                temp_processing_dir_thread = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
-                                os.makedirs(temp_processing_dir_thread, exist_ok=True)
-                                segment_uuid_thread = uuid.uuid4().hex
-                                final_output_wav_path_thread = os.path.join(temp_processing_dir_thread, f"final_audio_{segment_uuid_thread}.wav")
-
-                                def process_segment_in_thread(
-                                    s_id,
-                                    s_data_ref,
-                                    lock_ref,
-                                    audio_bytes,
-                                    wav_path,
-                                    openai_key,
-                                    anthropic_key,
-                                    vad_level,
-                                ):
-                                    try:
-                                        ffmpeg_command = [
-                                            'ffmpeg',
-                                            '-loglevel', 'warning',
-                                            '-fflags', '+discardcorrupt',
-                                            '-err_detect', 'ignore_err',
-                                            '-y',
-                                            '-i', 'pipe:0',
-                                            '-ar', '16000',
-                                            '-ac', '1',
-                                            '-acodec', 'pcm_s16le',
-                                            wav_path,
-                                        ]
-                                        logger.info(
-                                            "Thread Session %s: Executing ffmpeg: %s",
-                                            s_id,
-                                            ' '.join(ffmpeg_command),
-                                        )
-                                        process = subprocess.Popen(
-                                            ffmpeg_command,
-                                            stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE,
-                                            stderr=subprocess.PIPE,
-                                        )
-                                        _, stderr_ffmpeg = process.communicate(input=audio_bytes)
-
-                                        if process.returncode != 0:
-                                            logger.error(
-                                                "Thread Session %s: ffmpeg failed. RC: %s, Err: %s",
-                                                s_id,
-                                                process.returncode,
-                                                stderr_ffmpeg.decode('utf-8', 'ignore'),
-                                            )
-                                            return
-
-                                        logger.info(
-                                            "Thread Session %s: Successfully converted to %s",
-                                            s_id,
-                                            wav_path,
-                                        )
-
-                                        ffprobe_command = [
-                                            'ffprobe',
-                                            '-v', 'error',
-                                            '-show_entries', 'format=duration',
-                                            '-of', 'default=noprint_wrappers=1:nokey=1',
-                                            wav_path,
-                                        ]
-                                        actual_segment_dur = 0.0
-                                        try:
-                                            duration_result = subprocess.run(
-                                                ffprobe_command,
-                                                capture_output=True,
-                                                text=True,
-                                                check=True,
-                                            )
-                                            actual_segment_dur = float(duration_result.stdout.strip())
-                                            logger.info(
-                                                "Thread Session %s: Actual duration of WAV %s is %.2fs",
-                                                s_id,
-                                                wav_path,
-                                                actual_segment_dur,
-                                            )
-                                        except (subprocess.CalledProcessError, ValueError) as ffprobe_err:
-                                            logger.error(
-                                                "Thread Session %s: ffprobe failed for %s: %s. Estimating.",
-                                                s_id,
-                                                wav_path,
-                                                ffprobe_err,
-                                            )
-                                            bytes_per_second = 16000 * 2
-                                            estimated_dur = (
-                                                len(audio_bytes) / bytes_per_second if bytes_per_second > 0 else 0
-                                            )
-                                            actual_segment_dur = estimated_dur
-                                            logger.warning(
-                                                "Thread Session %s: Using rough estimated duration: %.2fs",
-                                                s_id,
-                                                actual_segment_dur,
-                                            )
-
-                                        with lock_ref:
-                                            if s_id in active_sessions:
-                                                active_sessions[s_id][
-                                                    'actual_segment_duration_seconds'
-                                                ] = actual_segment_dur
-                                            else:
-                                                logger.warning(
-                                                    "Thread Session %s: Session data missing when trying to update actual_segment_duration.",
-                                                    s_id,
-                                                )
-                                                s_data_ref['actual_segment_duration_seconds'] = actual_segment_dur
-
-                                        try:
-                                            SESSION_ADAPTER.on_segment(
-                                                session_id=s_id,
-                                                raw_path=wav_path,
-                                                captured_ts=time.time(),
-                                                duration_s=actual_segment_dur,
-                                                language=s_data_ref.get('language_setting_from_client'),
-                                                vad_aggressiveness=vad_level,
-                                            )
-                                        except Exception as adapter_err:
-                                            logger.error(
-                                                "Thread Session %s: Adapter processing failed for segment %s: %s",
-                                                s_id,
-                                                wav_path,
-                                                adapter_err,
-                                                exc_info=True,
-                                            )
-                                        finally:
-                                            try:
-                                                with lock_ref:
-                                                    s_data_ref['pending_segments'] = max(
-                                                        0,
-                                                        int(s_data_ref.get('pending_segments', 1)) - 1,
-                                                    )
-                                            except Exception as pending_err:
-                                                logger.debug(
-                                                    "Thread Session %s: Failed to decrement pending segments: %s",
-                                                    s_id,
-                                                    pending_err,
-                                                )
-                                    except Exception as thread_e:
-                                        logger.error(
-                                            "Thread Session %s: Error during threaded segment processing: %s",
-                                            s_id,
-                                            thread_e,
-                                            exc_info=True,
-                                        )
-                                    finally:
-                                        pass
+                            temp_processing_dir_thread = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
+                            os.makedirs(temp_processing_dir_thread, exist_ok=True)
+                            segment_uuid_thread = uuid.uuid4().hex
+                            final_output_wav_path_thread = os.path.join(temp_processing_dir_thread, f"final_audio_{segment_uuid_thread}.wav")
                             
                             try:
                                 session_data["pending_segments"] = int(session_data.get("pending_segments", 0)) + 1
@@ -3262,17 +3249,17 @@ def audio_stream_socket(ws, session_id: str):
                                 logger.debug(f"Session {session_id}: Unable to increment pending segments before transcription: {pending_err}")
 
                             processing_thread = threading.Thread(
-                                target=process_segment_in_thread,
+                                target=_process_webm_segment_thread,
                                 args=(
                                     session_id,
-                                    session_data, 
-                                    session_locks[session_id], 
+                                    session_data,
+                                    session_locks[session_id],
                                     all_segment_bytes_for_ffmpeg_thread,
                                     final_output_wav_path_thread,
                                     session_data.get("openai_api_key"),
                                     session_data.get("anthropic_api_key"),
-                                    session_data.get("vad_aggressiveness_from_client")
-                                )
+                                    session_data.get("vad_aggressiveness_from_client"),
+                                ),
                             )
                             processing_thread.start()
                             logger.info(f"Session {session_id}: Started processing thread for segment {segment_uuid_thread}")
