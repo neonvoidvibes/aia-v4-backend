@@ -1006,24 +1006,46 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
     event_doc_match = parse_event_doc_key(s3_key)
     if event_doc_match:
         agent_name, event_id, filename = event_doc_match
-        if has_user_agent_access(user.id, agent_name):
-            logger.debug(
-                f"S3 Ownership check PASSED for user {user.id} on agent {agent_name} event doc key {s3_key}"
+        if not has_user_agent_access(user.id, agent_name):
+            logger.warning(
+                f"SECURITY: User {user.id} tried to access {agent_name} event docs without agent access. Key: {s3_key}"
             )
-            return True
-        logger.warning(
-            f"SECURITY: User {user.id} tried to access {agent_name} event docs without agent access. Key: {s3_key}"
+            return False
+
+        profile = get_event_access_profile(agent_name, user.id)
+        if profile and event_id not in profile.get('allowed_events', set()):
+            logger.warning(
+                "SECURITY: User %s denied event doc %s/%s (event '%s' not in allow-list)",
+                user.id,
+                agent_name,
+                filename,
+                event_id,
+            )
+            return False
+
+        logger.debug(
+            f"S3 Ownership check PASSED for user {user.id} on agent {agent_name} event doc key {s3_key}"
         )
-        return False
+        return True
 
     # Allow access to agent transcripts/recordings if user has access to the agent
     # Path patterns: organizations/river/agents/{agent_name}/events/{event_id}/transcripts/...
     #                organizations/river/agents/{agent_name}/events/{event_id}/recordings/...
-    agent_transcript_match = re.search(r'/agents/([^/]+)/events/[^/]+/(transcripts|recordings)/', s3_key)
+    agent_transcript_match = re.search(r'/agents/([^/]+)/events/([^/]+)/(transcripts|recordings)/', s3_key)
     if agent_transcript_match:
         agent_name = agent_transcript_match.group(1)
+        event_id = agent_transcript_match.group(2)
         # Check if user has access to this agent
         if has_user_agent_access(user.id, agent_name):
+            profile = get_event_access_profile(agent_name, user.id)
+            if profile and event_id not in profile.get('allowed_events', set()):
+                logger.warning(
+                    "SECURITY: User %s denied transcript/recording access for %s/%s",
+                    user.id,
+                    agent_name,
+                    event_id,
+                )
+                return False
             logger.debug(f"S3 Ownership check PASSED for user {user.id} on agent {agent_name} transcript/recording key {s3_key}")
             return True
         else:
