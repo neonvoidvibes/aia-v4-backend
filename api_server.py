@@ -1465,6 +1465,17 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
     allowed_personal_events: Set[str] = set()
     allow_cross_group_read = False
 
+    # Fetch cross_group_read_enabled from agents table (agent-level policy, not event-specific)
+    client = get_supabase_client()
+    if client:
+        try:
+            agent_res = client.table("agents").select("cross_group_read_enabled").eq("name", agent_name).limit(1).execute()
+            if agent_res.data and len(agent_res.data) > 0:
+                allow_cross_group_read = bool(agent_res.data[0].get("cross_group_read_enabled", False))
+        except Exception as exc:
+            logger.warning("Failed to fetch cross_group_read_enabled for agent '%s': %s", agent_name, exc)
+            allow_cross_group_read = False
+
     for row in event_rows:
         event_id = row.get("event_id")
         if not event_id:
@@ -1521,9 +1532,6 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
 
         if visible and event_id not in visible_events:
             visible_events.append(event_id)
-
-        if event_id == '0000':
-            allow_cross_group_read = bool(event_labels_data.get('allow_cross_group_read'))
 
     # Always ensure the shared event is allowed/visible
     allowed_events.add("0000")

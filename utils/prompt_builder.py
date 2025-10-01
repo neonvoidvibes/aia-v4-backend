@@ -23,7 +23,8 @@ def _identity_header(agent: str, event: str) -> str:
         )
     return (
         f"You are the assistant for {agent}.\n"
-        f"Primary: answer from shared {agent} (0000) materials."
+        f"Primary: answer from shared {agent} (0000) materials.\n"
+        f"Note: When I say 'other events', I mean 'other sub agents (other event IDs) within this agent'."
     )
 
 
