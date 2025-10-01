@@ -1397,7 +1397,7 @@ def _fetch_agent_event_rows(agent_name: str) -> List[Dict[str, Any]]:
         return []
     try:
         res = client.table("agent_events").select(
-            "event_id,type,visibility_hidden,owner_user_id,event_labels,workspace_id,created_at"
+            "event_id,type,visibility_hidden,owner_user_id,workspace_id,created_at"
         ).eq("agent_name", agent_name).execute()
         if getattr(res, "error", None):
             logger.error(
@@ -1486,12 +1486,6 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         owner_user_id = row.get("owner_user_id")
         is_owner = owner_user_id == user_id if owner_user_id else False
         is_member = event_id in memberships
-        event_labels_data = row.get("event_labels") or {}
-        if isinstance(event_labels_data, str):
-            try:
-                event_labels_data = json.loads(event_labels_data)
-            except Exception:
-                event_labels_data = {}
 
         event_metadata[event_id] = row
         event_types[event_id] = event_type
