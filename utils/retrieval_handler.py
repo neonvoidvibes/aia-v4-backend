@@ -80,6 +80,7 @@ class RetrievalHandler:
         event_type: Optional[str] = None,
         personal_event_id: Optional[str] = None,
         allowed_tier3_events: Optional[Iterable[str]] = None,
+        include_personal_tier: bool = False,
     ):
         """Initialize retrieval handler."""
         if not agent_name: raise ValueError("agent_name required")
@@ -95,7 +96,7 @@ class RetrievalHandler:
         self.embedding_model_name = os.getenv('RETRIEVAL_EMBED_MODEL', 'text-embedding-3-small')
         self.anthropic_api_key = anthropic_api_key
         self.personal_event_id = personal_event_id if personal_event_id and personal_event_id != '0000' else None
-        self.include_personal_tier = self.personal_event_id is not None
+        self.include_personal_tier = bool(include_personal_tier and self.personal_event_id)
         inferred_event_type = (event_type or "").lower()
         if not inferred_event_type:
             if self.event_id and self.personal_event_id and self.event_id == self.personal_event_id:

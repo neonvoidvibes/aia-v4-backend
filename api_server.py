@@ -1013,15 +1013,38 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
             return False
 
         profile = get_event_access_profile(agent_name, user.id)
-        if profile and event_id not in profile.get('allowed_events', set()):
-            logger.warning(
-                "SECURITY: User %s denied event doc %s/%s (event '%s' not in allow-list)",
-                user.id,
-                agent_name,
-                filename,
-                event_id,
-            )
-            return False
+        if profile:
+            allowed_events_profile = profile.get('allowed_events', set())
+            if event_id not in allowed_events_profile:
+                logger.warning(
+                    "SECURITY: User %s denied event doc %s/%s (event '%s' not in allow-list)",
+                    user.id,
+                    agent_name,
+                    filename,
+                    event_id,
+                )
+                return False
+
+            event_type = (profile.get('event_types', {}) or {}).get(event_id)
+            if event_type == 'personal' and event_id not in profile.get('allowed_personal_events', set()):
+                logger.warning(
+                    "SECURITY: User %s denied access to personal event doc %s/%s",
+                    user.id,
+                    agent_name,
+                    filename,
+                )
+                return False
+            if event_type == 'group':
+                allow_cross = profile.get('allow_cross_group_read', False)
+                is_member = event_id in profile.get('allowed_group_events', set())
+                if not is_member and not allow_cross:
+                    logger.warning(
+                        "SECURITY: User %s denied group event doc %s/%s (cross-read disabled)",
+                        user.id,
+                        agent_name,
+                        filename,
+                    )
+                    return False
 
         logger.debug(
             f"S3 Ownership check PASSED for user {user.id} on agent {agent_name} event doc key {s3_key}"
@@ -1038,14 +1061,38 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
         # Check if user has access to this agent
         if has_user_agent_access(user.id, agent_name):
             profile = get_event_access_profile(agent_name, user.id)
-            if profile and event_id not in profile.get('allowed_events', set()):
-                logger.warning(
-                    "SECURITY: User %s denied transcript/recording access for %s/%s",
-                    user.id,
-                    agent_name,
-                    event_id,
-                )
-                return False
+            if profile:
+                allowed_events_profile = profile.get('allowed_events', set())
+                if event_id not in allowed_events_profile:
+                    logger.warning(
+                        "SECURITY: User %s denied transcript/recording access for %s/%s",
+                        user.id,
+                        agent_name,
+                        event_id,
+                    )
+                    return False
+
+                event_type = (profile.get('event_types', {}) or {}).get(event_id)
+                if event_type == 'personal' and event_id not in profile.get('allowed_personal_events', set()):
+                    logger.warning(
+                        "SECURITY: User %s denied access to personal transcripts %s/%s",
+                        user.id,
+                        agent_name,
+                        event_id,
+                    )
+                    return False
+                if event_type == 'group':
+                    allow_cross = profile.get('allow_cross_group_read', False)
+                    is_member = event_id in profile.get('allowed_group_events', set())
+                    if not is_member and not allow_cross:
+                        logger.warning(
+                            "SECURITY: User %s denied group transcripts %s/%s (cross-read disabled)",
+                            user.id,
+                            agent_name,
+                            event_id,
+                        )
+                        return False
+
             logger.debug(f"S3 Ownership check PASSED for user {user.id} on agent {agent_name} transcript/recording key {s3_key}")
             return True
         else:
@@ -1416,6 +1463,7 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
     personal_event_id: Optional[str] = None
     allowed_group_events: Set[str] = set()
     allowed_personal_events: Set[str] = set()
+    allow_cross_group_read = False
 
     for row in event_rows:
         event_id = row.get("event_id")
@@ -1427,6 +1475,12 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         owner_user_id = row.get("owner_user_id")
         is_owner = owner_user_id == user_id if owner_user_id else False
         is_member = event_id in memberships
+        event_labels_data = row.get("event_labels") or {}
+        if isinstance(event_labels_data, str):
+            try:
+                event_labels_data = json.loads(event_labels_data)
+            except Exception:
+                event_labels_data = {}
 
         event_metadata[event_id] = row
         event_types[event_id] = event_type
@@ -1466,6 +1520,9 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         if visible and event_id not in visible_events:
             visible_events.append(event_id)
 
+        if event_id == '0000':
+            allow_cross_group_read = bool(is_admin or event_labels_data.get('allow_cross_group_read'))
+
     # Always ensure the shared event is allowed/visible
     allowed_events.add("0000")
     event_types.setdefault("0000", "shared")
@@ -1491,6 +1548,7 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         "allowed_group_events": allowed_group_events,
         "allowed_personal_events": allowed_personal_events,
         "user_role": user_role,
+        "allow_cross_group_read": allow_cross_group_read,
     }
 
 
@@ -4191,6 +4249,7 @@ def list_s3_events(user: SupabaseUser):
         personal_event_id = profile.get('personal_event_id')
         if personal_event_id:
             response_payload["personalEventId"] = personal_event_id
+        response_payload["allowCrossGroupRead"] = bool(profile.get('allow_cross_group_read'))
         return jsonify(response_payload), 200
 
     prefix = f"organizations/river/agents/{agent_name}/events/"
@@ -4865,6 +4924,7 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                             event_type=current_event_type,
                             personal_event_id=personal_event_id,
                             allowed_tier3_events=tier3_allow_events,
+                            include_personal_tier=(current_event_type == 'personal'),
                         )
                         # Event-scoped tiered retrieval with caps and MMR
                         tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '4,12,6,6,4').split(',')
