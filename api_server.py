@@ -55,7 +55,7 @@ from utils.s3_utils import (
     get_agent_docs, get_event_docs, parse_event_doc_key, save_chat_to_s3, format_chat_history, get_s3_client,
     list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries, get_objective_function,
     write_agent_doc, write_event_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure,
-    get_personal_agent_layer,
+    get_personal_agent_layer, list_saved_transcripts_multi, get_transcript_summaries_multi, get_event_docs_multi,
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript
@@ -4819,12 +4819,21 @@ def handle_chat(user: SupabaseUser):
     current_event_type = event_types_map.get(event_id, 'shared')
     personal_agent_layer_content = get_personal_agent_layer(agent_name, personal_event_id) if agent_name else None
 
-    # Tier3 allow-list excludes current event and shared namespace by default
+    # Tier3 allow-list: cross-group read logic
+    # If user is in event 0000 and allow_cross_group_read is true, include all group events
     tier3_allow_events: Set[str] = set()
-    if allowed_events:
-        tier3_allow_events = {ev for ev in allowed_events if ev not in {event_id, '0000'}}
-    if allowed_group_events:
-        tier3_allow_events = {ev for ev in tier3_allow_events if ev in allowed_group_events}
+    allow_cross_group_read = event_profile.get('allow_cross_group_read', False) if event_profile else False
+
+    if event_id == '0000' and allow_cross_group_read and allowed_group_events:
+        # Cross-group read enabled: include all accessible group events (excluding personal)
+        tier3_allow_events = set(allowed_group_events)
+        logger.info(f"Cross-group read enabled for event 0000: tier3 includes {len(tier3_allow_events)} group events")
+    else:
+        # Standard tier3 logic: excludes current event and shared namespace
+        if allowed_events:
+            tier3_allow_events = {ev for ev in allowed_events if ev not in {event_id, '0000'}}
+        if allowed_group_events:
+            tier3_allow_events = {ev for ev in tier3_allow_events if ev in allowed_group_events}
 
     def generate_stream():
         """
@@ -5092,7 +5101,12 @@ When you identify information that should be permanently stored in your agent do
                 if agent_docs:
                     historical_context_parts.append(f"=== AGENT DOCUMENTATION ===\n{agent_docs}\n=== END AGENT DOCUMENTATION ===")
                 if feature_event_docs and event_id:
-                    event_docs = get_event_docs(agent_name, event_id)
+                    # Use multi-event docs when cross-group read is enabled and in event 0000
+                    if event_id == '0000' and allow_cross_group_read and tier3_allow_events:
+                        logger.info(f"Cross-group read: fetching docs from {len(tier3_allow_events)} events")
+                        event_docs = get_event_docs_multi(agent_name, list(tier3_allow_events))
+                    else:
+                        event_docs = get_event_docs(agent_name, event_id)
                     if event_docs:
                         historical_context_parts.append(
                             f"=== EVENT DOCUMENTATION ===\n{event_docs}\n=== END EVENT DOCUMENTATION ==="
@@ -5124,8 +5138,14 @@ When you identify information that should be permanently stored in your agent do
                 if saved_transcript_memory_mode == 'all' or (saved_transcript_memory_mode == 'some' and individual_memory_toggle_states):
                     summaries_to_add = []
                     if saved_transcript_memory_mode == 'all':
-                        summaries_to_add = get_transcript_summaries(agent_name, event_id)
+                        # Use multi-event summaries when cross-group read is enabled and in event 0000
+                        if event_id == '0000' and allow_cross_group_read and tier3_allow_events:
+                            logger.info(f"Cross-group read: fetching summaries from {len(tier3_allow_events)} events")
+                            summaries_to_add = get_transcript_summaries_multi(agent_name, list(tier3_allow_events))
+                        else:
+                            summaries_to_add = get_transcript_summaries(agent_name, event_id)
                     else: # 'some'
+                        # For 'some' mode, still fetch from single event (cross-group not applicable here)
                         all_summaries = get_transcript_summaries(agent_name, event_id)
                         summaries_to_add = []
                         logger.info(f"Filtering summaries in 'some' mode. Available summaries: {len(all_summaries)}, Toggle states: {individual_memory_toggle_states}")

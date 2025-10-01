@@ -883,7 +883,7 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
 
     # 2. Cache miss, fetch from S3
     logger.info(f"CACHE MISS for {description} ('{cache_key}')")
-    
+
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
@@ -892,7 +892,7 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
 
     summaries_prefix = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/"
     logger.info(f"Fetching transcript summaries from S3 prefix: {summaries_prefix}")
-    
+
     parsed_summaries = []
     try:
         paginator = s3.get_paginator('list_objects_v2')
@@ -923,7 +923,7 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
                         logger.error(f"Failed to parse JSON for summary file {s3_key}: {e_json}")
                     except Exception as e_read:
                         logger.error(f"Failed to read or process summary file {s3_key}: {e_read}")
-        
+
         logger.info(f"Fetched and parsed {len(parsed_summaries)} transcript summaries for {agent_name}/{event_id}.")
         # Optional: Sort summaries, e.g., by a timestamp within their metadata if available
         # For now, returning in S3 list order.
@@ -945,9 +945,159 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
                     'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_NOT_FOUND
                 }
                 logger.info(f"CACHE SET (None) for {description} ('{cache_key}').")
-        
+
         return parsed_summaries
 
     except Exception as e:
         logger.error(f"Error listing or fetching transcript summaries from '{summaries_prefix}': {e}", exc_info=True)
         return []
+
+
+# Multi-event S3 transcript retrieval functions for cross-group read support
+def list_saved_transcripts_multi(agent: str, event_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    List saved transcripts across multiple events for an agent.
+
+    Returns a list of transcript metadata dicts with added 'event_id' field,
+    sorted by LastModified (most recent first).
+    """
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("S3 client or bucket not available for listing multi-event transcripts.")
+        return []
+
+    all_items: List[Dict[str, Any]] = []
+    for event_id in event_ids:
+        base_prefix = f"organizations/river/agents/{agent}/events/{event_id}/transcripts/saved/"
+        try:
+            paginator = s3.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_prefix):
+                for obj in page.get('Contents', []):
+                    key = obj['Key']
+                    if key == base_prefix:
+                        continue
+                    rel = key[len(base_prefix):]
+                    if '/' in rel:
+                        continue  # only immediate files
+                    filename = os.path.basename(key)
+                    if not filename.startswith('transcript_'):
+                        continue
+                    # Parse meeting date
+                    meeting_date = None
+                    try:
+                        if '_D' in filename:
+                            seg = filename.split('_D', 1)[1]
+                            ymd = seg.split('-', 1)[0]
+                            if len(ymd) >= 8:
+                                meeting_date = f"{ymd[0:4]}-{ymd[4:6]}-{ymd[6:8]}"
+                    except Exception:
+                        meeting_date = None
+                    all_items.append({
+                        'Key': key,
+                        'LastModified': obj.get('LastModified'),
+                        'Size': obj.get('Size', 0),
+                        'filename': filename,
+                        'meeting_date': meeting_date,
+                        'event_id': event_id,  # Add event_id for tracking
+                    })
+        except Exception as e:
+            logger.error(f"Error listing saved transcripts for event {event_id}: {e}", exc_info=True)
+            continue
+
+    # Sort by LastModified, most recent first
+    all_items.sort(key=lambda x: x.get('LastModified') or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    logger.info(f"list_saved_transcripts_multi: Found {len(all_items)} transcripts across {len(event_ids)} events")
+    return all_items
+
+
+def get_transcript_summaries_multi(agent_name: str, event_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Fetch transcript summaries across multiple events for an agent.
+
+    Returns a combined list of parsed JSON summaries with event_id added to metadata,
+    sorted by creation time (most recent first) if available.
+    """
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("S3 client or bucket not available for multi-event summaries.")
+        return []
+
+    all_summaries: List[Dict[str, Any]] = []
+    for event_id in event_ids:
+        summaries_prefix = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/"
+        try:
+            paginator = s3.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=summaries_prefix):
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        s3_key = obj['Key']
+                        if not s3_key.endswith('.json'):
+                            continue
+
+                        filename = os.path.basename(s3_key)
+                        try:
+                            summary_content_str = read_file_content(s3_key, f"summary file {filename}")
+                            if summary_content_str:
+                                summary_data = json.loads(summary_content_str)
+                                # Add event_id and filename to metadata
+                                if 'metadata' not in summary_data or not isinstance(summary_data['metadata'], dict):
+                                    summary_data['metadata'] = {}
+                                summary_data['metadata']['event_id'] = event_id
+                                summary_data['metadata']['summary_filename'] = filename
+                                all_summaries.append(summary_data)
+                        except (json.JSONDecodeError, Exception) as e:
+                            logger.error(f"Failed to read/parse summary {s3_key}: {e}")
+        except Exception as e:
+            logger.error(f"Error fetching summaries for event {event_id}: {e}", exc_info=True)
+            continue
+
+    logger.info(f"get_transcript_summaries_multi: Found {len(all_summaries)} summaries across {len(event_ids)} events")
+    return all_summaries
+
+
+def get_event_docs_multi(agent_name: str, event_ids: List[str]) -> Optional[str]:
+    """
+    Get event-specific documentation files across multiple events.
+
+    Returns combined docs as a single string with event_id labels,
+    or None if no docs found.
+    """
+    s3 = get_s3_client()
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not s3 or not aws_s3_bucket:
+        logger.error("S3 unavailable for getting multi-event docs.")
+        return None
+
+    all_docs: List[str] = []
+    for event_id in event_ids:
+        prefix = f"organizations/river/agents/{agent_name}/events/{event_id}/docs/"
+        try:
+            paginator = s3.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=prefix):
+                if 'Contents' not in page:
+                    continue
+                for obj in page['Contents']:
+                    key = obj['Key']
+                    if key == prefix or key.endswith('/'):
+                        continue
+                    relative_path = key[len(prefix):]
+                    if '/' in relative_path:
+                        continue
+                    filename = os.path.basename(key)
+                    content = read_file_content(key, f'event doc ({filename})')
+                    if content:
+                        all_docs.append(
+                            f"--- START Doc: {filename} (event: {event_id}) ---\n{content}\n--- END Doc: {filename} ---"
+                        )
+        except Exception as e:
+            logger.error(f"Error getting docs for event {event_id}: {e}", exc_info=True)
+            continue
+
+    if not all_docs:
+        logger.info(f"No documentation found across {len(event_ids)} events")
+        return None
+
+    logger.info(f"Loaded {len(all_docs)} docs across {len(event_ids)} events")
+    return "\n\n".join(all_docs)
