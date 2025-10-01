@@ -4183,9 +4183,42 @@ def generate_presigned_url(user: SupabaseUser):
 @app.route('/api/s3/list', methods=['GET'])
 @supabase_auth_required(agent_required=False)
 def list_s3_documents(user: SupabaseUser):
-    logger.info(f"Received request /api/s3/list from user: {user.id}") 
+    logger.info(f"Received request /api/s3/list from user: {user.id}")
     s3_prefix = request.args.get('prefix')
-    if not s3_prefix: return jsonify({"error": "Missing 'prefix' query parameter"}), 400
+    agent_name = request.args.get('agent')
+    event_id = request.args.get('event', '0000')
+
+    # Multi-event listing for cross-group read
+    # Check if this is a saved transcripts request that should use multi-event
+    if agent_name and '/transcripts/saved/' in (s3_prefix or ''):
+        event_profile = get_event_access_profile(agent_name, user.id) if agent_name else None
+        if event_profile:
+            allow_cross_group_read = event_profile.get('allow_cross_group_read', False)
+            allowed_group_events = event_profile.get('allowed_group_events', set())
+
+            if event_id == '0000' and allow_cross_group_read and allowed_group_events:
+                # Use multi-event listing
+                logger.info(f"Cross-group read: listing saved transcripts from {len(allowed_group_events)} events")
+                try:
+                    items = list_saved_transcripts_multi(agent_name, list(allowed_group_events))
+                    formatted_files = []
+                    for item in items:
+                        formatted_files.append({
+                            "name": item['filename'],
+                            "size": item['Size'],
+                            "lastModified": item['LastModified'].isoformat() if item.get('LastModified') else None,
+                            "s3Key": item['Key'],
+                            "type": "text/plain",
+                            "event_id": item.get('event_id', '0000')  # Include event_id for UI labeling
+                        })
+                    return jsonify(formatted_files), 200
+                except Exception as e:
+                    logger.error(f"Error in multi-event listing: {e}", exc_info=True)
+                    return jsonify({"error": "Internal server error listing multi-event transcripts"}), 500
+
+    # Standard single-prefix listing
+    if not s3_prefix:
+        return jsonify({"error": "Missing 'prefix' query parameter"}), 400
     try:
         s3_objects = list_s3_objects_metadata(s3_prefix)
         formatted_files = []
@@ -4213,7 +4246,7 @@ def list_s3_documents(user: SupabaseUser):
             })
         if "transcripts/" in s3_prefix: formatted_files = [f for f in formatted_files if not f['name'].startswith('rolling-')]
         return jsonify(formatted_files), 200
-    except Exception as e: 
+    except Exception as e:
         logger.error(f"Error listing S3 objects for prefix '{s3_prefix}': {e}", exc_info=True)
         return jsonify({"error": "Internal server error listing S3 objects"}), 500
 
@@ -5164,11 +5197,15 @@ When you identify information that should be permanently stored in your agent do
                     try:
                         # Multi-pass retrieval: Phase 1 - Metadata filtering + Phase 2 - Semantic search
                         meeting_retriever = RetrievalHandler(
-                            index_name="river", 
+                            index_name="river",
                             agent_name=agent_name,
                             event_id=event_id,
                             anthropic_api_key=get_api_key(agent_name, 'anthropic'),
-                            openai_api_key=get_api_key(agent_name, 'openai')
+                            openai_api_key=get_api_key(agent_name, 'openai'),
+                            event_type=current_event_type,
+                            personal_event_id=personal_event_id,
+                            allowed_tier3_events=tier3_allow_events,
+                            include_personal_tier=(current_event_type == 'personal')
                         )
                         
                         # Build metadata filter for meeting summaries from this event

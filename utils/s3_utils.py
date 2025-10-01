@@ -953,6 +953,13 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
         return []
 
 
+# Multi-event cache key helper
+def _multi_event_cache_key(agent: str, event_ids: List[str], base: str) -> str:
+    """Generate a stable cache key for multi-event queries."""
+    ev_sig = ",".join(sorted(set(event_ids)))
+    return f"{base}__{agent}__multi__{hash(ev_sig)}"
+
+
 # Multi-event S3 transcript retrieval functions for cross-group read support
 def list_saved_transcripts_multi(agent: str, event_ids: List[str]) -> List[Dict[str, Any]]:
     """
@@ -1018,6 +1025,22 @@ def get_transcript_summaries_multi(agent_name: str, event_ids: List[str]) -> Lis
     Returns a combined list of parsed JSON summaries with event_id added to metadata,
     sorted by creation time (most recent first) if available.
     """
+    cache_key = _multi_event_cache_key(agent_name, event_ids, "transcript_summaries")
+
+    # Check cache first
+    with S3_CACHE_LOCK:
+        cached_item = S3_FILE_CACHE.get(cache_key)
+        if cached_item and cached_item['expiry'] > datetime.now(timezone.utc):
+            logger.info(f"CACHE HIT for multi-event summaries ('{cache_key}')")
+            if cached_item['content'] is None:
+                return []
+            try:
+                return json.loads(cached_item['content'])
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.error(f"CACHE CORRUPT for multi-event summaries: {e}")
+
+    logger.info(f"CACHE MISS for multi-event summaries ('{cache_key}')")
+
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
@@ -1054,6 +1077,23 @@ def get_transcript_summaries_multi(agent_name: str, event_ids: List[str]) -> Lis
             continue
 
     logger.info(f"get_transcript_summaries_multi: Found {len(all_summaries)} summaries across {len(event_ids)} events")
+
+    # Update cache
+    with S3_CACHE_LOCK:
+        if all_summaries:
+            content_to_cache = json.dumps(all_summaries)
+            S3_FILE_CACHE[cache_key] = {
+                'content': content_to_cache,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_DEFAULT
+            }
+            logger.info(f"CACHE SET for multi-event summaries ('{cache_key}').")
+        else:
+            S3_FILE_CACHE[cache_key] = {
+                'content': None,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_NOT_FOUND
+            }
+            logger.info(f"CACHE SET (None) for multi-event summaries ('{cache_key}').")
+
     return all_summaries
 
 
@@ -1064,6 +1104,17 @@ def get_event_docs_multi(agent_name: str, event_ids: List[str]) -> Optional[str]
     Returns combined docs as a single string with event_id labels,
     or None if no docs found.
     """
+    cache_key = _multi_event_cache_key(agent_name, event_ids, "event_docs")
+
+    # Check cache first
+    with S3_CACHE_LOCK:
+        cached_item = S3_FILE_CACHE.get(cache_key)
+        if cached_item and cached_item['expiry'] > datetime.now(timezone.utc):
+            logger.info(f"CACHE HIT for multi-event docs ('{cache_key}')")
+            return cached_item['content']
+
+    logger.info(f"CACHE MISS for multi-event docs ('{cache_key}')")
+
     s3 = get_s3_client()
     aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
     if not s3 or not aws_s3_bucket:
@@ -1095,9 +1146,26 @@ def get_event_docs_multi(agent_name: str, event_ids: List[str]) -> Optional[str]
             logger.error(f"Error getting docs for event {event_id}: {e}", exc_info=True)
             continue
 
+    combined_docs = "\n\n".join(all_docs) if all_docs else None
+
+    # Update cache
+    with S3_CACHE_LOCK:
+        if combined_docs is not None:
+            S3_FILE_CACHE[cache_key] = {
+                'content': combined_docs,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_DEFAULT
+            }
+            logger.info(f"CACHE SET for multi-event docs ('{cache_key}').")
+        else:
+            S3_FILE_CACHE[cache_key] = {
+                'content': None,
+                'expiry': datetime.now(timezone.utc) + S3_CACHE_TTL_NOT_FOUND
+            }
+            logger.info(f"CACHE SET (None) for multi-event docs ('{cache_key}').")
+
     if not all_docs:
         logger.info(f"No documentation found across {len(event_ids)} events")
         return None
 
     logger.info(f"Loaded {len(all_docs)} docs across {len(event_ids)} events")
-    return "\n\n".join(all_docs)
+    return combined_docs
