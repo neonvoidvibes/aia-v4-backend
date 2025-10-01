@@ -1463,18 +1463,23 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
     personal_event_id: Optional[str] = None
     allowed_group_events: Set[str] = set()
     allowed_personal_events: Set[str] = set()
-    allow_cross_group_read = False
+    groups_read_mode = 'none'  # 'latest' | 'none' | 'all'
 
-    # Fetch cross_group_read_enabled from agents table (agent-level policy, not event-specific)
+    # Fetch groups_read_mode from agents table (agent-level policy, not event-specific)
     client = get_supabase_client()
     if client:
         try:
-            agent_res = client.table("agents").select("cross_group_read_enabled").eq("name", agent_name).limit(1).execute()
+            agent_res = client.table("agents").select("groups_read_mode").eq("name", agent_name).limit(1).execute()
             if agent_res.data and len(agent_res.data) > 0:
-                allow_cross_group_read = bool(agent_res.data[0].get("cross_group_read_enabled", False))
+                groups_read_mode = agent_res.data[0].get("groups_read_mode", "none")
+                if groups_read_mode not in ['latest', 'none', 'all']:
+                    groups_read_mode = 'none'
         except Exception as exc:
-            logger.warning("Failed to fetch cross_group_read_enabled for agent '%s': %s", agent_name, exc)
-            allow_cross_group_read = False
+            logger.warning("Failed to fetch groups_read_mode for agent '%s': %s", agent_name, exc)
+            groups_read_mode = 'none'
+
+    # Backward compatibility: convert to boolean for existing code
+    allow_cross_group_read = (groups_read_mode != 'none')
 
     for row in event_rows:
         event_id = row.get("event_id")
@@ -1552,7 +1557,8 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         "allowed_group_events": allowed_group_events,
         "allowed_personal_events": allowed_personal_events,
         "user_role": user_role,
-        "allow_cross_group_read": allow_cross_group_read,
+        "allow_cross_group_read": allow_cross_group_read,  # Backward compatibility
+        "groups_read_mode": groups_read_mode,  # New tri-state mode
     }
 
 
@@ -5289,21 +5295,10 @@ When you identify information that should be permanently stored in your agent do
                 
                 relevant_transcripts_meta = []
                 if effective_transcript_listen_mode == 'latest':
-                    # Use multi-event transcript reading when cross-group read is enabled
-                    if event_id == '0000' and allow_cross_group_read and tier3_allow_events:
-                        logger.info(f"Cross-group read: fetching latest transcripts from {len(tier3_allow_events)} events")
-                        multi_content, success = read_new_transcript_content_multi(agent_name, list(tier3_allow_events))
-                        if success and multi_content:
-                            # Add as a synthetic "latest" transcript entry
-                            relevant_transcripts_meta.append({
-                                'Key': 'multi-event-transcript',
-                                'LastModified': datetime.now(timezone.utc),
-                                '_direct_content': multi_content  # Signal that content is pre-loaded
-                            })
-                    else:
-                        from utils.transcript_utils import get_latest_transcript_file
-                        latest_key = get_latest_transcript_file(agent_name, event_id)
-                        if latest_key:
+                    # Read from 0000's own transcripts
+                    from utils.transcript_utils import get_latest_transcript_file
+                    latest_key = get_latest_transcript_file(agent_name, event_id)
+                    if latest_key:
                             s3 = get_s3_client(); aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
                             if s3 and aws_s3_bucket:
                                 try:
@@ -5357,6 +5352,31 @@ When you identify information that should be permanently stored in your agent do
                         if historical_contents:
                             historical_block = "\n\n".join(historical_contents)
                             final_system_prompt += f"\n\n=== HISTORICAL MEETING TRANSCRIPT (OLDEST FIRST) ===\n{historical_block}\n=== END HISTORICAL MEETING TRANSCRIPT ==="
+
+            # --- Groups Transcript Reading (Independent from 0000's own transcripts) ---
+            if not is_wizard and event_id == '0000' and tier3_allow_events:
+                groups_mode = event_profile.get('groups_read_mode', 'none') if event_profile else 'none'
+
+                if groups_mode == 'latest':
+                    # Read latest transcript from each group
+                    logger.info(f"Groups read mode 'latest': fetching latest from {len(tier3_allow_events)} group events")
+                    multi_content, success = read_new_transcript_content_multi(agent_name, list(tier3_allow_events))
+                    if success and multi_content:
+                        groups_block = f"=== GROUP EVENTS LATEST TRANSCRIPTS ===\n{multi_content}\n=== END GROUP EVENTS LATEST TRANSCRIPTS ==="
+                        final_system_prompt += f"\n\n{groups_block}"
+
+                elif groups_mode == 'all':
+                    # Read all transcripts from all group events
+                    logger.info(f"Groups read mode 'all': fetching all transcripts from {len(tier3_allow_events)} group events")
+                    from utils.transcript_utils import read_all_transcripts_in_folder
+                    groups_contents = []
+                    for group_event_id in tier3_allow_events:
+                        group_transcripts = read_all_transcripts_in_folder(agent_name, group_event_id)
+                        if group_transcripts:
+                            groups_contents.append(f"--- Group Event: {group_event_id} ---\n{group_transcripts}")
+                    if groups_contents:
+                        groups_block = "\n\n--- EVENT SEPARATOR ---\n\n".join(groups_contents)
+                        final_system_prompt += f"\n\n=== ALL GROUP EVENTS TRANSCRIPTS ===\n{groups_block}\n=== END ALL GROUP EVENTS TRANSCRIPTS ==="
 
             # --- Final State & Timestamped History ---
             if not is_wizard:
