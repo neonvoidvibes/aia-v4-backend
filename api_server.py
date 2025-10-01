@@ -1380,6 +1380,9 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         return None
 
     event_rows = _fetch_agent_event_rows(agent_name)
+    if not event_rows:
+        logger.debug("No agent_events rows for agent '%s'; falling back to S3 listing.", agent_name)
+        return None
     memberships = _fetch_user_event_memberships(agent_name, user_id)
     user_role = get_user_role(user_id)
     is_admin = user_role in {"admin", "super user"}
