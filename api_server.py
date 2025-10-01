@@ -4197,28 +4197,62 @@ def list_s3_documents(user: SupabaseUser):
     event_id = request.args.get('event', '0000')
 
     # Multi-event listing for cross-group read
-    # Check if this is a saved transcripts request that should use multi-event
-    if agent_name and '/transcripts/saved/' in (s3_prefix or ''):
+    # Check if this is a saved or summarized transcripts request that should use multi-event
+    if agent_name and ('/transcripts/saved/' in (s3_prefix or '') or '/transcripts/summarized/' in (s3_prefix or '')):
         event_profile = get_event_access_profile(agent_name, user.id) if agent_name else None
         if event_profile:
             allow_cross_group_read = event_profile.get('allow_cross_group_read', False)
             allowed_group_events = event_profile.get('allowed_group_events', set())
 
             if event_id == '0000' and allow_cross_group_read and allowed_group_events:
+                is_summarized = '/transcripts/summarized/' in (s3_prefix or '')
                 # Use multi-event listing
-                logger.info(f"Cross-group read: listing saved transcripts from {len(allowed_group_events)} events")
+                logger.info(f"Cross-group read: listing {'summarized' if is_summarized else 'saved'} transcripts from {len(allowed_group_events)} events")
                 try:
-                    items = list_saved_transcripts_multi(agent_name, list(allowed_group_events))
                     formatted_files = []
-                    for item in items:
-                        formatted_files.append({
-                            "name": item['filename'],
-                            "size": item['Size'],
-                            "lastModified": item['LastModified'].isoformat() if item.get('LastModified') else None,
-                            "s3Key": item['Key'],
-                            "type": "text/plain",
-                            "event_id": item.get('event_id', '0000')  # Include event_id for UI labeling
-                        })
+                    if is_summarized:
+                        # get_transcript_summaries_multi returns parsed JSON summary objects
+                        summaries = get_transcript_summaries_multi(agent_name, list(allowed_group_events))
+                        for summary in summaries:
+                            metadata = summary.get('metadata', {})
+                            event_id_from_meta = metadata.get('event_id', '0000')
+                            filename = metadata.get('summary_filename', 'summary.json')
+                            # Reconstruct S3 key
+                            s3_key = f"organizations/river/agents/{agent_name}/events/{event_id_from_meta}/transcripts/summarized/{filename}"
+                            # Estimate size from JSON string
+                            try:
+                                size = len(json.dumps(summary))
+                            except:
+                                size = 0
+                            # Get timestamp from metadata if available
+                            created_at = metadata.get('created_at')
+                            last_modified = None
+                            if created_at:
+                                try:
+                                    from dateutil import parser as date_parser
+                                    last_modified = date_parser.parse(created_at).isoformat()
+                                except:
+                                    pass
+                            formatted_files.append({
+                                "name": filename,
+                                "size": size,
+                                "lastModified": last_modified,
+                                "s3Key": s3_key,
+                                "type": "application/json",
+                                "event_id": event_id_from_meta
+                            })
+                    else:
+                        # list_saved_transcripts_multi returns S3 object metadata
+                        items = list_saved_transcripts_multi(agent_name, list(allowed_group_events))
+                        for item in items:
+                            formatted_files.append({
+                                "name": item['filename'] if 'filename' in item else os.path.basename(item['Key']),
+                                "size": item['Size'],
+                                "lastModified": item['LastModified'].isoformat() if item.get('LastModified') else None,
+                                "s3Key": item['Key'],
+                                "type": "text/plain",
+                                "event_id": item.get('event_id', '0000')
+                            })
                     return jsonify(formatted_files), 200
                 except Exception as e:
                     logger.error(f"Error in multi-event listing: {e}", exc_info=True)
