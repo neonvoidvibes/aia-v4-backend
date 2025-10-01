@@ -190,8 +190,62 @@ def read_new_transcript_content_multi(agent_name: str, event_ids: List[str]) -> 
 def read_all_transcripts_in_folder(agent_name: str, event_id: str) -> Optional[str]:
     """Read and combine content of all relevant transcripts in the folder. Respects TRANSCRIPT_MODE."""
     s3 = get_s3_client()
-    if not s3: 
+    if not s3:
         logger.error("read_all_transcripts: S3 client unavailable.")
+        return None
+
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not aws_s3_bucket:
+        logger.error("read_all_transcripts: AWS_S3_BUCKET not set.")
+        return None
+
+    base_prefix = f'organizations/river/agents/{agent_name}/events/{event_id}/transcripts/'
+    logger.info(f"Reading all transcripts from: {base_prefix} (Mode: {TRANSCRIPT_MODE})")
+
+    all_content_parts = []
+    transcript_files_metadata: List[Dict[str, Any]] = []
+    try:
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_prefix):
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    key = obj['Key']
+                    if key.startswith(base_prefix) and key != base_prefix and key.endswith('.txt'):
+                         relative_path = key[len(base_prefix):]
+                         if '/' not in relative_path: # Files directly in folder
+                            filename = os.path.basename(key)
+                            # canonical only: transcript_*.txt directly under transcripts/
+                            if filename.startswith('transcript_') and '/transcripts/' in key and '/saved/' not in key:
+                                transcript_files_metadata.append(obj)
+
+        if not transcript_files_metadata:
+            logger.warning(f"No transcript files found in {base_prefix} matching mode '{TRANSCRIPT_MODE}'.")
+            return None
+
+        # Sort by LastModified to process chronologically
+        transcript_files_metadata.sort(key=lambda x: x['LastModified'])
+        logger.info(f"Found {len(transcript_files_metadata)} transcript files to combine.")
+
+        for s3_obj in transcript_files_metadata:
+            key = s3_obj['Key']
+            filename = os.path.basename(key)
+            try:
+                logger.debug(f"Reading content from {key} for combined transcript.")
+                response = s3.get_object(Bucket=aws_s3_bucket, Key=key)
+                text_content = response['Body'].read().decode('utf-8', errors='replace')
+                all_content_parts.append(f"--- Transcript Source: {filename} ---\n{text_content}")
+            except Exception as read_e:
+                logger.error(f"Error reading file {key} for combined transcript: {read_e}")
+
+        if all_content_parts:
+            logger.info(f"Successfully combined content from {len(all_content_parts)} transcript files.")
+            return "\n\n".join(all_content_parts)
+        else:
+            logger.warning("No content was read from any transcript files during 'read_all'.")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error in read_all_transcripts_in_folder for {base_prefix}: {e}", exc_info=True)
         return None
 
 
@@ -247,56 +301,3 @@ def list_saved_transcripts(agent_name: str, event_id: str) -> List[Dict[str, Any
     except Exception as e:
         logger.error(f"list_saved_transcripts: error for prefix {base_prefix}: {e}", exc_info=True)
         return []
-    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-    if not aws_s3_bucket: 
-        logger.error("read_all_transcripts: AWS_S3_BUCKET not set.")
-        return None
-
-    base_prefix = f'organizations/river/agents/{agent_name}/events/{event_id}/transcripts/'
-    logger.info(f"Reading all transcripts from: {base_prefix} (Mode: {TRANSCRIPT_MODE})")
-    
-    all_content_parts = []
-    transcript_files_metadata: List[Dict[str, Any]] = []
-    try:
-        paginator = s3.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=aws_s3_bucket, Prefix=base_prefix):
-            if 'Contents' in page:
-                for obj in page['Contents']:
-                    key = obj['Key']
-                    if key.startswith(base_prefix) and key != base_prefix and key.endswith('.txt'):
-                         relative_path = key[len(base_prefix):]
-                         if '/' not in relative_path: # Files directly in folder
-                            filename = os.path.basename(key)
-                            # canonical only: transcript_*.txt directly under transcripts/
-                            if filename.startswith('transcript_') and '/transcripts/' in key and '/saved/' not in key:
-                                transcript_files_metadata.append(obj)
-                                 
-        if not transcript_files_metadata:
-            logger.warning(f"No transcript files found in {base_prefix} matching mode '{TRANSCRIPT_MODE}'.")
-            return None
-            
-        # Sort by LastModified to process chronologically
-        transcript_files_metadata.sort(key=lambda x: x['LastModified'])
-        logger.info(f"Found {len(transcript_files_metadata)} transcript files to combine.")
-
-        for s3_obj in transcript_files_metadata:
-            key = s3_obj['Key']
-            filename = os.path.basename(key)
-            try:
-                logger.debug(f"Reading content from {key} for combined transcript.")
-                response = s3.get_object(Bucket=aws_s3_bucket, Key=key)
-                text_content = response['Body'].read().decode('utf-8', errors='replace') # Use replace
-                all_content_parts.append(f"--- Transcript Source: {filename} ---\n{text_content}")
-            except Exception as read_e:
-                logger.error(f"Error reading file {key} for combined transcript: {read_e}")
-        
-        if all_content_parts:
-            logger.info(f"Successfully combined content from {len(all_content_parts)} transcript files.")
-            return "\n\n".join(all_content_parts)
-        else:
-            logger.warning("No content was read from any transcript files during 'read_all'.")
-            return None
-            
-    except Exception as e:
-        logger.error(f"Error in read_all_transcripts_in_folder for {base_prefix}: {e}", exc_info=True)
-        return None

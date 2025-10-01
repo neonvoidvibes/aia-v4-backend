@@ -4866,8 +4866,8 @@ def handle_chat(user: SupabaseUser):
     allow_cross_group_read = event_profile.get('allow_cross_group_read', False) if event_profile else False
 
     if event_id == '0000' and allow_cross_group_read and allowed_group_events:
-        # Cross-group read enabled: include all accessible group events (excluding personal)
-        tier3_allow_events = set(allowed_group_events)
+        # Cross-group read enabled: include all accessible group events (excluding personal and 0000 itself)
+        tier3_allow_events = set(allowed_group_events) - {'0000'}
         logger.info(f"Cross-group read enabled for event 0000: tier3 includes {len(tier3_allow_events)} group events")
     else:
         # Standard tier3 logic: excludes current event and shared namespace
