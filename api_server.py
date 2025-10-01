@@ -1489,10 +1489,11 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         visible = False
 
         if is_admin:
-            allowed = True
             if event_type == "personal":
+                allowed = is_owner
                 visible = is_owner  # keep personal dropdown private even for admins
             else:
+                allowed = True
                 visible = not visibility_hidden
         else:
             if event_type == "personal":
@@ -1511,9 +1512,10 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         if allowed:
             allowed_events.add(event_id)
             if event_type == "personal":
-                allowed_personal_events.add(event_id)
-                if is_owner and not personal_event_id:
-                    personal_event_id = event_id
+                if is_owner:
+                    allowed_personal_events.add(event_id)
+                    if not personal_event_id:
+                        personal_event_id = event_id
             elif event_type == "group":
                 allowed_group_events.add(event_id)
 
@@ -1521,7 +1523,7 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
             visible_events.append(event_id)
 
         if event_id == '0000':
-            allow_cross_group_read = bool(is_admin or event_labels_data.get('allow_cross_group_read'))
+            allow_cross_group_read = bool(event_labels_data.get('allow_cross_group_read'))
 
     # Always ensure the shared event is allowed/visible
     allowed_events.add("0000")
