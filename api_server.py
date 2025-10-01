@@ -4902,20 +4902,22 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
             if not is_wizard:
                 final_system_prompt += "\n\n" + build_retrieval_usage_instructions(current_event_type, personal_event_id)
 
-                # Provide a natural index of available meetings (saved/) for the LLM
-                try:
-                    saved_items = list_saved_transcripts(agent_name, event_id)
-                except Exception as _e_idx:
-                    saved_items = []
-                if saved_items:
-                    max_index_items = int(os.getenv('MEETINGS_INDEX_LIMIT', '40'))
-                    lines = []
-                    for itm in saved_items[:max_index_items]:
-                        date_str = itm.get('meeting_date') or 'unknown-date'
-                        fname = itm.get('filename') or 'unknown'
-                        summary_id = f"summary_{fname}"
-                        lines.append(f"- {date_str} — {fname} (id: {summary_id})")
-                    final_system_prompt += "\n\n=== AVAILABLE MEETINGS ===\n" + "\n".join(lines) + "\n=== END AVAILABLE MEETINGS ==="
+                # DISABLED: Do not expose saved/archived transcripts to LLM
+                # These transcripts are only for UI viewing, not for LLM context
+                # # Provide a natural index of available meetings (saved/) for the LLM
+                # try:
+                #     saved_items = list_saved_transcripts(agent_name, event_id)
+                # except Exception as _e_idx:
+                #     saved_items = []
+                # if saved_items:
+                #     max_index_items = int(os.getenv('MEETINGS_INDEX_LIMIT', '40'))
+                #     lines = []
+                #     for itm in saved_items[:max_index_items]:
+                #         date_str = itm.get('meeting_date') or 'unknown-date'
+                #         fname = itm.get('filename') or 'unknown'
+                #         summary_id = f"summary_{fname}"
+                #         lines.append(f"- {date_str} — {fname} (id: {summary_id})")
+                #     final_system_prompt += "\n\n=== AVAILABLE MEETINGS ===\n" + "\n".join(lines) + "\n=== END AVAILABLE MEETINGS ==="
 
                 last_user_message_obj = next((msg for msg in reversed(incoming_messages) if msg.get("role") == "user"), None)
                 last_actual_user_message_for_rag = last_user_message_obj.get("content") if last_user_message_obj else None
