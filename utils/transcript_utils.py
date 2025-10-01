@@ -125,6 +125,68 @@ def read_new_transcript_content(agent_name: str, event_id: str) -> Tuple[Optiona
             return None, False
 
 
+def read_new_transcript_content_multi(agent_name: str, event_ids: List[str]) -> Tuple[Optional[str], bool]:
+    """
+    Read latest transcript content across multiple events for cross-group read.
+    Only supports 'regular' mode (not 'window' mode).
+
+    Returns a tuple: (content: Optional[str], success: bool).
+    - content: Combined content from most recent transcript in each event, or None.
+    - success: True if the operation completed (even if no files were found), False on an error.
+    """
+    if TRANSCRIPT_MODE != "regular":
+        logger.warning(f"read_new_transcript_content_multi: Window mode not supported for multi-event. Returning empty.")
+        return None, True
+
+    s3 = get_s3_client()
+    if not s3:
+        logger.error("read_new_transcript_content_multi: S3 client unavailable.")
+        return None, False
+
+    aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+    if not aws_s3_bucket:
+        logger.error("read_new_transcript_content_multi: AWS_S3_BUCKET not set.")
+        return None, False
+
+    all_transcripts = []
+    for event_id in event_ids:
+        latest_key = get_latest_transcript_file(agent_name, event_id, s3)
+        if not latest_key:
+            logger.info(f"Listen: Multi - No transcript file found for event '{event_id}'")
+            continue
+
+        try:
+            logger.info(f"Listen: Multi - Reading transcript from event '{event_id}': {latest_key}")
+            response = s3.get_object(Bucket=aws_s3_bucket, Key=latest_key)
+            file_content_bytes = response['Body'].read()
+            file_content_str = file_content_bytes.decode('utf-8', errors='replace')
+
+            filename = os.path.basename(latest_key)
+            all_transcripts.append({
+                'content': file_content_str,
+                'filename': filename,
+                'event_id': event_id,
+                'key': latest_key
+            })
+            logger.info(f"Listen: Multi - Read {len(file_content_str)} chars from event '{event_id}'")
+        except Exception as e:
+            logger.error(f"Listen: Multi - Error reading transcript {latest_key} from event '{event_id}': {e}", exc_info=True)
+            continue
+
+    if not all_transcripts:
+        logger.info(f"Listen: Multi - No transcript files found across {len(event_ids)} events")
+        return None, True
+
+    # Combine with event labels
+    combined_parts = []
+    for t in all_transcripts:
+        combined_parts.append(f"(Source: {t['filename']} from event {t['event_id']})\n{t['content']}")
+
+    combined_content = "\n\n--- EVENT SEPARATOR ---\n\n".join(combined_parts)
+    logger.info(f"Listen: Multi - Combined {len(all_transcripts)} transcripts from {len(event_ids)} events, total length: {len(combined_content)}")
+    return combined_content, True
+
+
 def read_all_transcripts_in_folder(agent_name: str, event_id: str) -> Optional[str]:
     """Read and combine content of all relevant transcripts in the folder. Respects TRANSCRIPT_MODE."""
     s3 = get_s3_client()

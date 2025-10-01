@@ -3,9 +3,22 @@
 ## Summary
 Successfully implemented end-to-end cross-group read functionality for the `allow_cross_group_read` flag, fixing three critical blockers that prevented multi-event transcript and context retrieval.
 
-## Three Critical Fixes
+## Four Critical Fixes
 
-### 1. Cache-Key Collision Fix (`utils/s3_utils.py`)
+### 1. Raw Live Transcript Multi-Event Support (`utils/transcript_utils.py`)
+
+**Problem**: Raw live transcripts (`transcript_*.txt` in base `transcripts/` folder) were only fetched from single event, not across multiple group events.
+
+**Solution**:
+- Added `read_new_transcript_content_multi()` function (lines 128-187)
+- Loops through all allowed group events and fetches latest transcript from each
+- Combines transcripts with event labels: `(Source: filename from event event-id)`
+- Uses `--- EVENT SEPARATOR ---` between transcripts for clarity
+- Only supports 'regular' mode (not 'window' mode)
+
+**Code Reference**: `utils/transcript_utils.py:128-187, api_server.py:5291-5300, 5336-5339`
+
+### 2. Cache-Key Collision Fix (`utils/s3_utils.py`)
 
 **Problem**: Single-event cache keys (`event_docs__{agent}_{event}`) collided with multi-event fetches, causing warm-up cache to short-circuit cross-group reads.
 
@@ -19,7 +32,7 @@ Successfully implemented end-to-end cross-group read functionality for the `allo
 
 **Code Reference**: `utils/s3_utils.py:956-971, 1028-1171`
 
-### 2. Multi-Event Listing API (`api_server.py`)
+### 3. Multi-Event Listing API (`api_server.py`)
 
 **Problem**: `/api/s3/list` endpoint always queried single S3 prefix (`events/0000/...`), never expanding to multiple events even when cross-read was enabled.
 
@@ -33,7 +46,7 @@ Successfully implemented end-to-end cross-group read functionality for the `allo
 
 **Code Reference**: `api_server.py:4183-4251`
 
-### 3. Retrieval Handler Integration (`api_server.py`)
+### 4. Retrieval Handler Integration (`api_server.py`)
 
 **Problem**: Main retriever in chat handler was already passing `allowed_tier3_events`, but meeting_retriever was missing it.
 
@@ -67,18 +80,25 @@ Successfully implemented end-to-end cross-group read functionality for the `allo
        event_docs = get_event_docs_multi(agent_name, list(tier3_allow_events))
    ```
 
-3. **Transcript Summaries Retrieval** (`api_server.py:5142-5144`)
+3. **Raw Live Transcripts** (`api_server.py:5291-5300`)
+   ```python
+   if event_id == '0000' and allow_cross_group_read and tier3_allow_events:
+       logger.info(f"Cross-group read: fetching latest transcripts from {len(tier3_allow_events)} events")
+       multi_content, success = read_new_transcript_content_multi(agent_name, list(tier3_allow_events))
+   ```
+
+4. **Transcript Summaries Retrieval** (`api_server.py:5142-5144`)
    ```python
    if event_id == '0000' and allow_cross_group_read and tier3_allow_events:
        summaries_to_add = get_transcript_summaries_multi(agent_name, list(tier3_allow_events))
    ```
 
-4. **Vector Retrieval** (`api_server.py:4972-4983, utils/retrieval_handler.py:574-584`)
+5. **Vector Retrieval** (`api_server.py:4972-4983, utils/retrieval_handler.py:574-584`)
    - RetrievalHandler receives `allowed_tier3_events` parameter
    - Tier 3 filter uses `{'event_id': {'$in': list(allowed_tier3_events)}}`
    - Pinecone queries all allowed group events in parallel
 
-5. **S3 List API** (`api_server.py:4193-4217`)
+6. **S3 List API** (`api_server.py:4193-4217`)
    - Frontend calls `/api/s3/list?agent=X&event=0000&prefix=.../saved/`
    - Backend detects conditions and calls `list_saved_transcripts_multi()`
    - Returns items with `event_id` field for UI display
@@ -112,25 +132,32 @@ All 5 test cases pass:
 
 **Test Cases:**
 
-1. **Chat Retrieval**
+1. **Raw Transcript Retrieval**
+   - [ ] Chat in event 0000 with `transcriptListenMode: 'latest'`
+   - [ ] Verify logs show: "Cross-group read: fetching latest transcripts from N events"
+   - [ ] Verify logs show: "Listen: Multi - Reading transcript from event 'X'" for each event
+   - [ ] Verify logs show: "Listen: Multi - Combined N transcripts from M events"
+   - [ ] Check LLM receives transcripts labeled with event IDs
+
+2. **Chat Retrieval (Docs & Summaries)**
    - [ ] Chat in event 0000 with cross-read enabled
    - [ ] Verify logs show: "Cross-group read enabled for event 0000: tier3 includes N group events"
    - [ ] Verify logs show: "Cross-group read: fetching docs from N events"
    - [ ] Verify logs show: "Cross-group read: fetching summaries from N events"
    - [ ] Check LLM receives content from multiple events (not just 0000)
 
-2. **Transcript List API**
+3. **Transcript List API**
    - [ ] Call `/api/s3/list?agent=X&event=0000&prefix=.../saved/`
    - [ ] Verify response includes `event_id` field
    - [ ] Verify transcripts from multiple group events are returned
    - [ ] Verify personal event transcripts are NOT returned
 
-3. **Cache Behavior**
+4. **Cache Behavior**
    - [ ] First request: verify cache MISS logs for multi-event keys
    - [ ] Second request: verify cache HIT logs (within TTL window)
    - [ ] Verify single-event cache keys don't interfere
 
-4. **Security**
+5. **Security**
    - [ ] Verify personal events never appear in tier3_allow_events set
    - [ ] Verify only user's accessible group events are included
    - [ ] Disable flag, verify standard tier3 behavior resumes
@@ -210,9 +237,10 @@ WHERE agent_name = 'your-agent' AND event_id = '0000';
 
 ## Files Modified
 
-1. `utils/s3_utils.py` - Added multi-event helpers and caching (3 functions, ~180 lines)
-2. `api_server.py` - Updated chat handler, S3 list endpoint, retriever params (~100 lines)
-3. `test_cross_group_read.py` - Logic validation test suite (new file)
+1. `utils/transcript_utils.py` - Added `read_new_transcript_content_multi()` (~60 lines)
+2. `utils/s3_utils.py` - Added multi-event helpers and caching (3 functions, ~180 lines)
+3. `api_server.py` - Updated chat handler, S3 list endpoint, retriever params, raw transcript fetching (~120 lines)
+4. `test_cross_group_read.py` - Logic validation test suite (new file)
 
 ## Migration Path
 
@@ -248,6 +276,9 @@ WHERE event_id = '0000';
 Key log messages to watch:
 
 - `"Cross-group read enabled for event 0000: tier3 includes N group events"` - Indicates flag activated
+- `"Cross-group read: fetching latest transcripts from N events"` - **Raw transcript retrieval**
+- `"Listen: Multi - Reading transcript from event 'X'"` - **Per-event transcript read**
+- `"Listen: Multi - Combined N transcripts from M events"` - **Multi-event merge complete**
 - `"Cross-group read: fetching docs from N events"` - Docs retrieval
 - `"Cross-group read: fetching summaries from N events"` - Summaries retrieval
 - `"Cross-group read: listing saved transcripts from N events"` - API list

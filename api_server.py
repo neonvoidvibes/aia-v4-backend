@@ -48,7 +48,7 @@ from utils.supabase_client import get_supabase_client
 from langchain_core.documents import Document
 from utils.retrieval_handler import RetrievalHandler
 from utils.prompt_builder import prompt_builder
-from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder, list_saved_transcripts
+from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder, list_saved_transcripts, read_new_transcript_content_multi
 from utils.transcript_format import format_transcript_line
 from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
@@ -5287,15 +5287,27 @@ When you identify information that should be permanently stored in your agent do
                 
                 relevant_transcripts_meta = []
                 if effective_transcript_listen_mode == 'latest':
-                    from utils.transcript_utils import get_latest_transcript_file
-                    latest_key = get_latest_transcript_file(agent_name, event_id)
-                    if latest_key:
-                        s3 = get_s3_client(); aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
-                        if s3 and aws_s3_bucket:
-                            try:
-                                head_obj = s3.head_object(Bucket=aws_s3_bucket, Key=latest_key)
-                                relevant_transcripts_meta.append({'Key': latest_key, 'LastModified': head_obj['LastModified']})
-                            except Exception: pass
+                    # Use multi-event transcript reading when cross-group read is enabled
+                    if event_id == '0000' and allow_cross_group_read and tier3_allow_events:
+                        logger.info(f"Cross-group read: fetching latest transcripts from {len(tier3_allow_events)} events")
+                        multi_content, success = read_new_transcript_content_multi(agent_name, list(tier3_allow_events))
+                        if success and multi_content:
+                            # Add as a synthetic "latest" transcript entry
+                            relevant_transcripts_meta.append({
+                                'Key': 'multi-event-transcript',
+                                'LastModified': datetime.now(timezone.utc),
+                                '_direct_content': multi_content  # Signal that content is pre-loaded
+                            })
+                    else:
+                        from utils.transcript_utils import get_latest_transcript_file
+                        latest_key = get_latest_transcript_file(agent_name, event_id)
+                        if latest_key:
+                            s3 = get_s3_client(); aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+                            if s3 and aws_s3_bucket:
+                                try:
+                                    head_obj = s3.head_object(Bucket=aws_s3_bucket, Key=latest_key)
+                                    relevant_transcripts_meta.append({'Key': latest_key, 'LastModified': head_obj['LastModified']})
+                                except Exception: pass
                 
                 elif effective_transcript_listen_mode == 'all':
                     from utils.s3_utils import list_s3_objects_metadata
@@ -5320,7 +5332,12 @@ When you identify information that should be permanently stored in your agent do
                     latest_transcript_meta = relevant_transcripts_meta.pop()
                     latest_key = latest_transcript_meta.get('s3Key') or latest_transcript_meta.get('Key')
                     if latest_key:
-                        latest_content = read_file_content(latest_key, "latest transcript")
+                        # Check if content is pre-loaded (multi-event case)
+                        if '_direct_content' in latest_transcript_meta:
+                            latest_content = latest_transcript_meta['_direct_content']
+                        else:
+                            latest_content = read_file_content(latest_key, "latest transcript")
+
                         if latest_content:
                             latest_block = f"=== LATEST MEETING TRANSCRIPT ===\n{latest_content}\n=== END LATEST MEETING TRANSCRIPT ==="
                             final_llm_messages.append({'role': 'user', 'content': latest_block})
