@@ -1414,7 +1414,10 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
 
         if is_admin:
             allowed = True
-            visible = not visibility_hidden
+            if event_type == "personal":
+                visible = is_owner  # keep personal dropdown private even for admins
+            else:
+                visible = not visibility_hidden
         else:
             if event_type == "personal":
                 if is_owner:
