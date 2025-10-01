@@ -4713,14 +4713,16 @@ def handle_chat(user: SupabaseUser):
         allowed_events.add("0000")
     event_types_map.setdefault("0000", "shared")
 
-    if event_id not in allowed_events:
-        logger.info(
-            "Event '%s' not allowed for user '%s' on agent '%s'. Falling back to '0000'.",
-            event_id,
-            user.id,
-            agent_name,
-        )
-        event_id = '0000'
+    if event_profile:
+        allowed_event_ids_for_user = event_profile.get('allowed_events', set())
+        if event_id not in allowed_event_ids_for_user:
+            logger.info(
+                "Event '%s' not allowed for user '%s' on agent '%s'. Falling back to '0000'.",
+                event_id,
+                user.id,
+                agent_name,
+            )
+            event_id = '0000'
 
     current_event_type = event_types_map.get(event_id, 'shared')
     personal_agent_layer_content = get_personal_agent_layer(agent_name, personal_event_id) if agent_name else None
