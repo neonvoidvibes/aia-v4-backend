@@ -27,23 +27,45 @@ def _identity_header(agent: str, event: str) -> str:
     )
 
 
-def _memory_scope_policy(agent: str, event: str) -> str:
-    return (
-        "When answering:\n"
-        f"1) Prefer {event} materials.\n"
-        f"2) Use {agent}/0000 as shared context if needed.\n"
-        "3) Only use other events if directly relevant; state which event they came from.\n"
-        f"Never let shared context override {event} norms unless user asks for cross-team input."
-    )
+def _memory_scope_policy(agent: str, event: str, event_type: str, personal_event_id: Optional[str]) -> str:
+    event_label = event or '0000'
+    if event_type == 'personal':
+        return (
+            "When answering:\n"
+            f"1) Treat personal workspace {event_label} as your primary memory store.\n"
+            "2) Record new observations in personal memory unless the user explicitly asks you to publish to group memory.\n"
+            f"3) Use shared {agent}/0000 context for comparison, but never transfer personal insights to group channels without consent."
+        )
+
+    lines = [
+        "When answering:",
+        f"1) Prefer {event_label} materials.",
+        f"2) Use {agent}/0000 shared context when it enriches the answer.",
+        "3) Only draw on other events when the user request clearly requires it and label those sources."
+    ]
+    if personal_event_id:
+        lines.append("4) Do not surface personal-memory insights here unless the user explicitly opts in.")
+    return "\n".join(lines)
 
 
-def _rag_routing_policy(agent: str, event: str) -> str:
-    return (
-        f"Query up to 15 chunks:\n"
-        f"- 7 from {event}, 5 from shared 0000, 3 from other events (may be 0).\n"
-        f"Re-rank with MMR. Drop overflow to fit context.\n"
-        f"Label non-event sources inline: [shared-0000] or [other:{{event_id}}]"
-    )
+def _rag_routing_policy(agent: str, event: str, event_type: str, personal_event_id: Optional[str]) -> str:
+    lines = [
+        "Tiered retrieval order:",
+        "- 4 foundational documents from policy / guardrails.",
+    ]
+    if personal_event_id:
+        lines.append(f"- 12 personal-context documents from {personal_event_id} (owner only).")
+    lines.append(f"- 6 documents from current event {event}.")
+    lines.append("- 6 documents from shared event 0000.")
+    lines.append("- 4 documents from other allowed events.")
+    lines.append("Use MMR for diversity and drop overflow before responding.")
+    if personal_event_id:
+        if event_type == 'personal':
+            lines.append("When event_type=personal, treat `RETRIEVED PERSONAL CONTEXT` as primary evidence.")
+        else:
+            lines.append("When event_type=group or event=0000, ignore `RETRIEVED PERSONAL CONTEXT` unless the user explicitly opts in.")
+    lines.append("Label non-current sources inline (e.g., [shared-0000], [other:<event_id>], [personal:<event_id>]).")
+    return "\n".join(lines)
 
 
 def prompt_builder(
@@ -53,6 +75,9 @@ def prompt_builder(
     retrieval_hints: Optional[Dict[str, Any]] = None,
     feature_event_prompts: bool = True,
     feature_event_docs: bool = False,
+    event_type: Optional[str] = None,
+    personal_layer: Optional[str] = None,
+    personal_event_id: Optional[str] = None,
 ) -> str:
     """
     Build a unified system prompt with layers:
@@ -66,6 +91,14 @@ def prompt_builder(
     """
 
     parts: List[str] = []
+    normalized_event_type = (event_type or '').lower()
+    if not normalized_event_type:
+        if personal_event_id and event and personal_event_id == event:
+            normalized_event_type = 'personal'
+        elif event and event != '0000':
+            normalized_event_type = 'group'
+        else:
+            normalized_event_type = 'shared'
 
     # 1) Identity
     parts.append("=== IDENTITY HEADER ===\n" + _identity_header(agent, event) + "\n=== END IDENTITY HEADER ===")
@@ -119,6 +152,9 @@ def prompt_builder(
             block += ["=== END EVENT LAYER ==="]
             parts.append("\n".join(block))
 
+    if personal_layer:
+        parts.append("=== PERSONAL AGENT LAYER ===\n" + personal_layer + "\n=== END PERSONAL AGENT LAYER ===")
+
     # 5.5) Event docs layer (feature-flagged)
     if feature_event_docs and event:
         event_docs = get_event_docs(agent, event)
@@ -150,10 +186,10 @@ def prompt_builder(
         parts.append("=== BASE FRAMEWORKS ===\n" + base_frameworks + "\n=== END BASE FRAMEWORKS ===")
 
     # 8) Memory scope policy
-    parts.append("=== MEMORY_SCOPE_POLICY ===\n" + _memory_scope_policy(agent, event) + "\n=== END MEMORY_SCOPE_POLICY ===")
+    parts.append("=== MEMORY_SCOPE_POLICY ===\n" + _memory_scope_policy(agent, event, normalized_event_type, personal_event_id) + "\n=== END MEMORY_SCOPE_POLICY ===")
 
     # 9) RAG routing policy
-    parts.append("=== RAG_ROUTING_POLICY ===\n" + _rag_routing_policy(agent, event) + "\n=== END RAG_ROUTING_POLICY ===")
+    parts.append("=== RAG_ROUTING_POLICY ===\n" + _rag_routing_policy(agent, event, normalized_event_type, personal_event_id) + "\n=== END RAG_ROUTING_POLICY ===")
 
     # Note: Dynamic content sections (10-20) will be added by api_server.py
     # Note: USER CONTEXT (21) and CURRENT TIME (22) will be added by api_server.py at the end

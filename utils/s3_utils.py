@@ -360,6 +360,41 @@ def get_latest_system_prompt(agent_name: Optional[str] = None) -> Optional[str]:
     logger.info(f"Final system prompt length: {len(system_prompt)}")
     return system_prompt
 
+
+def get_personal_agent_layer(agent_name: str, personal_event_id: Optional[str]) -> Optional[str]:
+    """Fetch the personal agent layer content for a user's personal event, if it exists."""
+    if not personal_event_id:
+        return None
+
+    base_prefix = f"organizations/river/agents/{agent_name}/events/{personal_event_id}/_config"
+    candidate_basenames = [
+        "personal_agent",
+        "personal_agent_layer",
+        f"systemprompt_pID-{personal_event_id}",
+    ]
+
+    for basename in candidate_basenames:
+        pattern = f"{base_prefix}/{basename}"
+
+        def _fetch(p: str = pattern, desc: str = f"personal agent layer for {agent_name}/{personal_event_id}"):
+            return find_file_any_extension(p, desc)
+
+        cache_key = f"{pattern}::personal-layer"
+        content = get_cached_s3_file(
+            cache_key=cache_key,
+            description=f"personal agent layer for {agent_name}/{personal_event_id}",
+            fetch_function=_fetch,
+        )
+        if content:
+            return content
+
+    logger.info(
+        "Personal agent layer not found for agent '%s' personal event '%s'",
+        agent_name,
+        personal_event_id,
+    )
+    return None
+
 def get_latest_frameworks(agent_name: Optional[str] = None) -> Optional[str]:
     """Get and combine frameworks from S3, using a cache."""
     logger.debug(f"Getting frameworks (agent: {agent_name})")

@@ -6,7 +6,7 @@ import traceback
 import time
 import math
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Iterable, Set
 
 # Attempt early tiktoken import
 try: import tiktoken; logging.getLogger(__name__).debug("Imported tiktoken early.")
@@ -73,10 +73,13 @@ class RetrievalHandler:
         agent_name: Optional[str] = None,
         session_id: Optional[str] = None,
         event_id: Optional[str] = None,
-        final_top_k: int = 10,
-        initial_fetch_k: int = 100, # Increased initial pool per request
+        final_top_k: int = 24,
+        initial_fetch_k: int = 120, # Increased initial pool per request
         anthropic_api_key: Optional[str] = None,
-        openai_api_key: Optional[str] = None # Agent-specific key
+        openai_api_key: Optional[str] = None, # Agent-specific key
+        event_type: Optional[str] = None,
+        personal_event_id: Optional[str] = None,
+        allowed_tier3_events: Optional[Iterable[str]] = None,
     ):
         """Initialize retrieval handler."""
         if not agent_name: raise ValueError("agent_name required")
@@ -91,6 +94,31 @@ class RetrievalHandler:
         # Use environment variable or default to text-embedding-3-small
         self.embedding_model_name = os.getenv('RETRIEVAL_EMBED_MODEL', 'text-embedding-3-small')
         self.anthropic_api_key = anthropic_api_key
+        self.personal_event_id = personal_event_id if personal_event_id and personal_event_id != '0000' else None
+        self.include_personal_tier = self.personal_event_id is not None
+        inferred_event_type = (event_type or "").lower()
+        if not inferred_event_type:
+            if self.event_id and self.personal_event_id and self.event_id == self.personal_event_id:
+                inferred_event_type = 'personal'
+            elif self.event_id:
+                inferred_event_type = 'group'
+            else:
+                inferred_event_type = 'shared'
+        self.event_type = inferred_event_type
+        self.allowed_tier3_events: Optional[Set[str]]
+        if allowed_tier3_events is None:
+            self.allowed_tier3_events = None
+        else:
+            self.allowed_tier3_events = {ev for ev in allowed_tier3_events if ev and ev != '0000'}
+        self.default_tier_caps: Dict[str, int] = {
+            't0_foundation': 4,
+            't_personal': 12,
+            't1': 6,
+            't2': 6,
+            't3': 4,
+        }
+        self._last_retrieval_breakdown: Dict[str, List[Document]] = {}
+        self._last_tier_hit_counts: Dict[str, int] = {}
 
         try:
             self.embeddings = get_cached_embeddings(self.embedding_model_name, openai_api_key)
@@ -446,123 +474,242 @@ class RetrievalHandler:
         boosted.sort(key=lambda x: x.score, reverse=True)
         return boosted
 
+    def _resolve_tier_caps(self, override: Optional[Iterable[int]]) -> Dict[str, int]:
+        caps = dict(self.default_tier_caps)
+        if override is None:
+            return caps
+
+        if isinstance(override, dict):
+            for key, value in override.items():
+                if key in caps:
+                    try:
+                        caps[key] = max(int(value), 0)
+                    except (TypeError, ValueError):
+                        continue
+            return caps
+
+        try:
+            iterable_values = list(override)
+        except TypeError:
+            return caps
+
+        if len(iterable_values) <= 4:
+            legacy_order = ['t0_foundation', 't1', 't2', 't3']
+            for idx, value in enumerate(iterable_values):
+                if idx >= len(legacy_order):
+                    break
+                try:
+                    caps[legacy_order[idx]] = max(int(value), 0)
+                except (TypeError, ValueError):
+                    continue
+            return caps
+
+        mapping_order = ['t0_foundation', 't_personal', 't1', 't2', 't3']
+        for idx, value in enumerate(iterable_values):
+            if idx >= len(mapping_order):
+                break
+            try:
+                caps[mapping_order[idx]] = max(int(value), 0)
+            except (TypeError, ValueError):
+                continue
+        return caps
 
     def get_relevant_context_tiered(
         self,
         query: str,
-        tier_caps: List[int] = [7, 6, 6, 4],
-        mmr_k: int = 23,
+        tier_caps: Optional[Iterable[int]] = None,
+        mmr_k: Optional[int] = None,
         mmr_lambda: float = 0.6,
         include_t3: bool = True,
         metadata_filter: Optional[Dict] = None,
     ) -> List[Document]:
-        """Content-type tiered retrieval with foundational document priority.
-        Tier0: {content_category=foundational_document} - Guaranteed foundational docs
-        Tier1: {agent_name, event_id=current} - Current event content
-        Tier2: {agent_name, event_id='0000'} - Shared persistent content
-        Tier3: {agent_name, event_id!=current and !='0000'} - Other events (optional)
-        """
+        """Tiered retrieval that prioritizes personal context when available."""
         if not self.index:
             logger.info("Retriever: Skipping context retrieval as Pinecone index is not available.")
+            self._last_retrieval_breakdown = {}
+            self._last_tier_hit_counts = {}
             return []
 
-        # Prepare embedding for query (transformed)
         transformed_query = self._transform_query(query)
         try:
             query_embedding = self.embeddings.embed_query(transformed_query)
         except Exception as e:
             logger.error(f"Retriever tiered: Embedding error: {e}", exc_info=True)
+            self._last_retrieval_breakdown = {}
+            self._last_tier_hit_counts = {}
             return []
 
-
-        tier_results = []
-        tiers = []
         current_event = self.event_id or '0000'
-        
-        # Tier 0: Foundational Documents (NEW - guaranteed constitutional/policy docs)
-        tier0_filter = {"agent_name": self.namespace, "content_category": "foundational_document"}
-        if metadata_filter:
-            tier0_filter.update(metadata_filter)
-        tiers.append({"filter": tier0_filter, "cap": tier_caps[0] if len(tier_caps)>0 else 7, "label": "t0_foundation"})
-        
-        # Tier 1: Current Event
-        t1_filter = {"agent_name": self.namespace, "event_id": current_event}
-        # Apply non-scoping metadata filters (e.g., content_category) to T1
-        if metadata_filter:
-            for k, v in metadata_filter.items():
-                if k not in ("agent_name", "event_id"):
-                    t1_filter[k] = v
-        tiers.append({"filter": t1_filter, "cap": tier_caps[1] if len(tier_caps)>1 else 6, "label": "t1"})
-        
-        # Tier 2: Shared '0000' 
-        t2_filter = {"agent_name": self.namespace, "event_id": "0000"}
-        # Apply non-scoping metadata filters to T2 as well
-        if metadata_filter:
-            for k, v in metadata_filter.items():
-                if k not in ("agent_name", "event_id"):
-                    t2_filter[k] = v
-        tiers.append({"filter": t2_filter, "cap": tier_caps[2] if len(tier_caps)>2 else 6, "label": "t2"})
-        
-        # Tier 3: Other Events
-        if include_t3:
-            t3_filter = {"agent_name": self.namespace, "event_id": {"$ne": current_event}}
-            if metadata_filter:
-                for k, v in metadata_filter.items():
-                    if k not in ("agent_name", "event_id"):
-                        t3_filter[k] = v
-            tiers.append({"filter": t3_filter, "cap": tier_caps[3] if len(tier_caps)>3 else 4, "label": "t3"})
+        caps = self._resolve_tier_caps(tier_caps)
+        tiers: List[Dict[str, Any]] = []
+        tier_hit_counts = {label: 0 for label in ['t0_foundation', 't_personal', 't1', 't2', 't3']}
+
+        def merge_filter(base: Dict[str, Any]) -> Dict[str, Any]:
+            if not metadata_filter:
+                return base
+            merged = dict(base)
+            for key, value in metadata_filter.items():
+                if key not in ('agent_name', 'event_id'):
+                    merged[key] = value
+            return merged
+
+        if caps['t0_foundation'] > 0:
+            tier0_filter = merge_filter({'agent_name': self.namespace, 'content_category': 'foundational_document'})
+            tiers.append({'filter': tier0_filter, 'cap': caps['t0_foundation'], 'label': 't0_foundation'})
+
+        if self.include_personal_tier and caps['t_personal'] > 0:
+            personal_filter = merge_filter({'agent_name': self.namespace, 'event_id': self.personal_event_id})
+            tiers.append({'filter': personal_filter, 'cap': caps['t_personal'], 'label': 't_personal'})
+
+        if caps['t1'] > 0:
+            t1_filter = merge_filter({'agent_name': self.namespace, 'event_id': current_event})
+            tiers.append({'filter': t1_filter, 'cap': caps['t1'], 'label': 't1'})
+
+        if caps['t2'] > 0:
+            t2_filter = merge_filter({'agent_name': self.namespace, 'event_id': '0000'})
+            tiers.append({'filter': t2_filter, 'cap': caps['t2'], 'label': 't2'})
+
+        if include_t3 and caps['t3'] > 0:
+            if self.allowed_tier3_events is not None:
+                if self.allowed_tier3_events:
+                    t3_event_clause: Optional[Dict[str, Any]] = {'$in': list(self.allowed_tier3_events)}
+                else:
+                    t3_event_clause = None
+            else:
+                t3_event_clause = {'$nin': [current_event, '0000']}
+
+            if t3_event_clause:
+                t3_filter = merge_filter({'agent_name': self.namespace, 'event_id': t3_event_clause})
+                tiers.append({'filter': t3_filter, 'cap': caps['t3'], 'label': 't3'})
 
         all_matches = []
-        tier_hit_counts = {"t0_foundation": 0, "t1": 0, "t2": 0, "t3": 0}
         for tier in tiers:
+            cap = tier['cap']
+            if not cap:
+                continue
+            tier_filter = tier['filter']
+            if isinstance(tier_filter.get('event_id'), dict):
+                clause = tier_filter['event_id']
+                if clause.get('$in') == []:
+                    continue
             try:
                 resp = self.index.query(
                     vector=query_embedding,
-                    top_k=tier["cap"],
+                    top_k=cap,
                     namespace=self.namespace,
-                    filter=tier["filter"],
+                    filter=tier_filter,
                     include_metadata=True,
                     include_values=False,
                 )
                 matches = resp.matches or []
-                tier_hit_counts[tier["label"]] = len(matches)
+                tier_hit_counts[tier['label']] = len(matches)
+                for match in matches:
+                    match.metadata = match.metadata or {}
+                    tiers_list = match.metadata.get('retrieval_tiers') or []
+                    tiers_list.append(tier['label'])
+                    match.metadata['retrieval_tiers'] = tiers_list
+                    if tier['label'] == 't_personal' or 'retrieval_tier' not in match.metadata:
+                        match.metadata['retrieval_tier'] = tier['label']
                 all_matches.extend(matches)
             except Exception as e:
                 logger.error(f"Tiered query error ({tier['label']}): {e}")
 
         if not all_matches:
             logger.info("Retriever tiered: 0 results across tiers")
+            self._last_retrieval_breakdown = {}
+            self._last_tier_hit_counts = tier_hit_counts
             return []
 
-        # Apply filename matching boost before MMR
-        logger.info(f"About to boost {len(all_matches)} matches for query: '{query}'")
-        boosted_matches = self._boost_filename_matches(all_matches, query)
-        logger.info(f"Boost completed, returning {len(boosted_matches)} matches")
-        
-        # Build embeddings for MMR diversity calculation
-        # We'll use metadata-based diversity as a proxy for content diversity
-        selected = self._mmr(boosted_matches, embeddings=self._build_diversity_cache(boosted_matches), k=mmr_k, lambda_mult=mmr_lambda)
+        unique_matches: Dict[str, Any] = {}
+        for match in all_matches:
+            match.metadata = match.metadata or {}
+            tiers_list = list(dict.fromkeys(match.metadata.get('retrieval_tiers') or []))
+            match.metadata['retrieval_tiers'] = tiers_list
+            existing = unique_matches.get(match.id)
+            if not existing:
+                unique_matches[match.id] = match
+                continue
 
-        # Convert to docs
+            existing.metadata = existing.metadata or {}
+            existing_tiers = list(dict.fromkeys(existing.metadata.get('retrieval_tiers') or []))
+            combined_tiers = list(dict.fromkeys(existing_tiers + tiers_list))
+
+            preferred = existing if existing.score >= match.score else match
+            other = match if preferred is existing else existing
+            preferred.metadata = preferred.metadata or {}
+            preferred.metadata['retrieval_tiers'] = combined_tiers
+            if 't_personal' in combined_tiers:
+                preferred.metadata['retrieval_tier'] = 't_personal'
+            else:
+                preferred.metadata.setdefault('retrieval_tier', combined_tiers[0] if combined_tiers else None)
+
+            unique_matches[match.id] = preferred
+
+        for match in unique_matches.values():
+            tiers_list = match.metadata.get('retrieval_tiers') or []
+            if 't_personal' in tiers_list:
+                match.metadata['retrieval_tier'] = 't_personal'
+            elif tiers_list and match.metadata.get('retrieval_tier') not in tiers_list:
+                match.metadata['retrieval_tier'] = tiers_list[0]
+
+        deduped_matches = list(unique_matches.values())
+        if not deduped_matches:
+            logger.info("Retriever tiered: matches removed during deduplication")
+            self._last_retrieval_breakdown = {}
+            self._last_tier_hit_counts = tier_hit_counts
+            return []
+
+        logger.info(f"About to boost {len(deduped_matches)} matches for query: '{query}'")
+        boosted_matches = self._boost_filename_matches(deduped_matches, query)
+        logger.info(f"Boost completed, candidates={len(boosted_matches)}")
+
+        diversity_cache = self._build_diversity_cache(boosted_matches)
+        mmr_target = mmr_k or max(self.final_top_k + 8, 32)
+        selected = self._mmr(boosted_matches, embeddings=diversity_cache, k=mmr_target, lambda_mult=mmr_lambda)
+
+        if self.final_top_k and len(selected) > self.final_top_k:
+            selected = selected[:self.final_top_k]
+
         docs: List[Document] = []
-        for m in selected:
-            if not m.metadata: continue
-            content = m.metadata.get('content')
-            if not content: continue
-            meta = {k: v for (k, v) in m.metadata.items() if k != 'content'}
-            # Label non-event sources inline as requested
+        breakdown: Dict[str, List[Document]] = {}
+        for match in selected:
+            metadata = match.metadata or {}
+            content = metadata.get('content')
+            if not content:
+                continue
+
+            meta = {k: v for (k, v) in metadata.items() if k != 'content'}
+            tier_label = meta.get('retrieval_tier')
             src_event = str(meta.get('event_id', '0000'))
-            if current_event and src_event != current_event:
+
+            if tier_label == 't_personal':
+                meta['source_label'] = f"[personal:{src_event}]"
+            elif current_event and src_event != current_event:
                 if src_event == '0000':
                     meta['source_label'] = '[shared-0000]'
                 else:
                     meta['source_label'] = f"[other:{src_event}]"
-            meta['score'] = m.score
-            meta['vector_id'] = m.id
-            docs.append(Document(page_content=content, metadata=meta))
 
-        logger.info(f"Retriever tiered: hits t0={tier_hit_counts['t0_foundation']} t1={tier_hit_counts['t1']} t2={tier_hit_counts['t2']} t3={tier_hit_counts['t3']}; returning {len(docs)}")
+            meta['score'] = match.score
+            meta['vector_id'] = match.id
+
+            doc = Document(page_content=content, metadata=meta)
+            docs.append(doc)
+            breakdown.setdefault(tier_label or 'unknown', []).append(doc)
+
+        self._last_retrieval_breakdown = breakdown
+        self._last_tier_hit_counts = tier_hit_counts
+        logger.info("Retriever tiered: hits %s; returning %d documents", tier_hit_counts, len(docs))
         return docs
+
+
+
+    def get_last_retrieval_breakdown(self) -> Dict[str, List[Document]]:
+        return self._last_retrieval_breakdown
+
+    def get_last_tier_hit_counts(self) -> Dict[str, int]:
+        return self._last_tier_hit_counts
+
 
     def reinforce_memories(self, docs: List[Document]):
         """Increments the access_count for a list of documents."""

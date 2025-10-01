@@ -22,7 +22,7 @@ from datetime import datetime, timezone, timedelta # Ensure datetime, timezone, 
 from zoneinfo import ZoneInfo
 import urllib.parse 
 from functools import wraps 
-from typing import Optional, List, Dict, Any, Tuple, Union 
+from typing import Optional, List, Dict, Any, Tuple, Union, Set 
 import uuid 
 from collections import defaultdict, deque
 import subprocess 
@@ -54,7 +54,8 @@ from utils.s3_utils import (
     get_latest_system_prompt, get_latest_frameworks, get_latest_context,
     get_agent_docs, get_event_docs, parse_event_doc_key, save_chat_to_s3, format_chat_history, get_s3_client,
     list_agent_names_from_s3, list_s3_objects_metadata, get_transcript_summaries, get_objective_function,
-    write_agent_doc, write_event_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure
+    write_agent_doc, write_event_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure,
+    get_personal_agent_layer,
 )
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript
@@ -1318,6 +1319,185 @@ def get_user_role(user_id: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Unexpected error fetching role for user {user.id}: {e}", exc_info=True)
         return None
+
+
+def _fetch_agent_event_rows(agent_name: str) -> List[Dict[str, Any]]:
+    client = get_supabase_client()
+    if not client:
+        logger.warning("Agent events fetch skipped: Supabase client unavailable.")
+        return []
+    try:
+        res = client.table("agent_events").select(
+            "event_id,type,visibility_hidden,owner_user_id,event_labels,workspace_id,created_at"
+        ).eq("agent_name", agent_name).execute()
+        if getattr(res, "error", None):
+            logger.error(
+                "Error querying agent_events for agent '%s': %s",
+                agent_name,
+                res.error,
+            )
+            return []
+        return res.data or []
+    except Exception as exc:
+        logger.error(
+            "Unexpected error fetching agent_events for agent '%s': %s",
+            agent_name,
+            exc,
+            exc_info=True,
+        )
+        return []
+
+
+def _fetch_user_event_memberships(agent_name: str, user_id: str) -> Set[str]:
+    client = get_supabase_client()
+    if not client:
+        return set()
+    try:
+        res = client.table("event_members").select("event_id").eq("agent_name", agent_name).eq("user_id", user_id).execute()
+        if getattr(res, "error", None):
+            logger.error(
+                "Error querying event_members for agent '%s' user '%s': %s",
+                agent_name,
+                user_id,
+                res.error,
+            )
+            return set()
+        return {row.get("event_id") for row in (res.data or []) if row.get("event_id")}
+    except Exception as exc:
+        logger.error(
+            "Unexpected error fetching event_members for agent '%s' user '%s': %s",
+            agent_name,
+            user_id,
+            exc,
+            exc_info=True,
+        )
+        return set()
+
+
+def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """Return allowed/visible event information for a user+agent pairing."""
+    if not agent_name or not user_id:
+        return None
+
+    event_rows = _fetch_agent_event_rows(agent_name)
+    memberships = _fetch_user_event_memberships(agent_name, user_id)
+    user_role = get_user_role(user_id)
+    is_admin = user_role in {"admin", "super user"}
+
+    allowed_events: Set[str] = set()
+    visible_events: List[str] = []
+    event_metadata: Dict[str, Dict[str, Any]] = {}
+    event_types: Dict[str, str] = {}
+    personal_event_id: Optional[str] = None
+    allowed_group_events: Set[str] = set()
+    allowed_personal_events: Set[str] = set()
+
+    for row in event_rows:
+        event_id = row.get("event_id")
+        if not event_id:
+            continue
+
+        event_type = (row.get("type") or "group").lower()
+        visibility_hidden = bool(row.get("visibility_hidden", True))
+        owner_user_id = row.get("owner_user_id")
+        is_owner = owner_user_id == user_id if owner_user_id else False
+        is_member = event_id in memberships
+
+        event_metadata[event_id] = row
+        event_types[event_id] = event_type
+
+        allowed = False
+        visible = False
+
+        if is_admin:
+            allowed = True
+            visible = not visibility_hidden
+        else:
+            if event_type == "personal":
+                if is_owner:
+                    allowed = True
+                    visible = True
+            elif event_type == "group":
+                if is_member:
+                    allowed = True
+                    visible = not visibility_hidden
+            else:
+                if is_member or is_owner:
+                    allowed = True
+                    visible = not visibility_hidden
+
+        if allowed:
+            allowed_events.add(event_id)
+            if event_type == "personal":
+                allowed_personal_events.add(event_id)
+                if is_owner and not personal_event_id:
+                    personal_event_id = event_id
+            elif event_type == "group":
+                allowed_group_events.add(event_id)
+
+        if visible and event_id not in visible_events:
+            visible_events.append(event_id)
+
+    # Always ensure the shared event is allowed/visible
+    allowed_events.add("0000")
+    event_types.setdefault("0000", "shared")
+
+    if "0000" not in visible_events:
+        visible_events.append("0000")
+
+    # Order visible events: personal first, then shared 0000, then others alphabetically
+    personal_visible = sorted([ev for ev in visible_events if event_types.get(ev) == "personal"])
+    shared_visible = ["0000"]
+    other_visible = sorted([
+        ev for ev in visible_events
+        if ev not in personal_visible and ev != "0000"
+    ])
+    ordered_visible = personal_visible + shared_visible + other_visible
+
+    return {
+        "allowed_events": allowed_events,
+        "visible_events": ordered_visible,
+        "event_metadata": event_metadata,
+        "event_types": event_types,
+        "personal_event_id": personal_event_id,
+        "allowed_group_events": allowed_group_events,
+        "allowed_personal_events": allowed_personal_events,
+        "user_role": user_role,
+    }
+
+
+def build_retrieval_usage_instructions(event_type: str, personal_event_id: Optional[str]) -> str:
+    normalized_type = (event_type or "").lower()
+    lines: List[str] = [
+        "=== INSTRUCTIONS FOR USING RETRIEVED CONTEXT ===",
+    ]
+
+    if personal_event_id:
+        if normalized_type == 'personal':
+            lines.append(
+                f"- **Personal First:** When the `RETRIEVED PERSONAL CONTEXT` block is present, treat it as your primary evidence. Cite any references from it using `[personal:{personal_event_id}]`."
+            )
+        else:
+            lines.append(
+                "- **Personal Context Boundaries:** Do not draw on `RETRIEVED PERSONAL CONTEXT` for group/shared answers unless the user explicitly opts in."
+            )
+            lines.append(
+                f"- If the user does opt in, cite personal sources as `[personal:{personal_event_id}]` and clearly mark the opt-in rationale."
+            )
+        lines.append(
+            "- Never quote, copy, or summarize personal-context material into group channels without explicit permission from the owner."
+        )
+
+    lines.extend([
+        "- **General Retrieved Context:** Use the `RETRIEVED CONTEXT` block to ground answers after applying the personal rules above.",
+        "- **Assess Timeliness:** Use the `(Age: ...)` tags to understand freshness; prioritize recent items unless core guidance applies.",
+        "- **Direct Answers:** If the user asks for facts, lists, or definitions present in the context blocks, surface them directly.",
+        "- **Citations:** Cite supporting documents with Markdown footnotes (e.g., `[^1]`) and list them under `### Sources`.",
+        "- **Gaps:** Only state information is missing when it is absent from all available context blocks and relevant to the request.",
+        "=== END INSTRUCTIONS FOR USING RETRIEVED CONTEXT ===",
+    ])
+
+    return "\n".join(lines)
 
 def admin_or_super_user_required(f):
     """Decorator to protect routes, allowing access only to 'admin' or 'super user' roles."""
@@ -3970,6 +4150,21 @@ def list_s3_events(user: SupabaseUser):
         return jsonify({"error": "Missing agentName"}), 400
     if not s3 or not aws_s3_bucket:
         return jsonify({"error": "S3 service not configured"}), 503
+    profile = get_event_access_profile(agent_name, user.id)
+    if profile:
+        events = list(dict.fromkeys(profile.get('visible_events') or []))
+        if not events:
+            events = ['0000']
+        response_payload = {
+            "events": events,
+            "eventTypes": profile.get('event_types', {}),
+            "allowedEvents": sorted(profile.get('allowed_events', set())),
+        }
+        personal_event_id = profile.get('personal_event_id')
+        if personal_event_id:
+            response_payload["personalEventId"] = personal_event_id
+        return jsonify(response_payload), 200
+
     prefix = f"organizations/river/agents/{agent_name}/events/"
     try:
         paginator = s3.get_paginator('list_objects_v2')
@@ -4492,6 +4687,45 @@ def handle_chat(user: SupabaseUser):
     disable_retrieval = data.get('disableRetrieval', False) # New
     signal_bias = data.get('signalBias', 'medium') # 'low' | 'medium' | 'high'
 
+    event_profile = get_event_access_profile(agent_name, user.id) if agent_name else None
+    allowed_events: Set[str] = {"0000"}
+    event_types_map: Dict[str, str] = {}
+    personal_event_id: Optional[str] = None
+    allowed_group_events: Set[str] = set()
+    allowed_personal_events: Set[str] = set()
+
+    if event_profile:
+        allowed_events = set(event_profile.get('allowed_events') or {"0000"})
+        event_types_map = dict(event_profile.get('event_types') or {})
+        personal_event_id = event_profile.get('personal_event_id')
+        allowed_group_events = set(event_profile.get('allowed_group_events') or set())
+        allowed_personal_events = set(event_profile.get('allowed_personal_events') or set())
+    else:
+        logger.warning("Event profile unavailable for agent '%s'. Falling back to S3 list.", agent_name)
+
+    if "0000" not in allowed_events:
+        allowed_events.add("0000")
+    event_types_map.setdefault("0000", "shared")
+
+    if event_id not in allowed_events:
+        logger.info(
+            "Event '%s' not allowed for user '%s' on agent '%s'. Falling back to '0000'.",
+            event_id,
+            user.id,
+            agent_name,
+        )
+        event_id = '0000'
+
+    current_event_type = event_types_map.get(event_id, 'shared')
+    personal_agent_layer_content = get_personal_agent_layer(agent_name, personal_event_id) if agent_name else None
+
+    # Tier3 allow-list excludes current event and shared namespace by default
+    tier3_allow_events: Set[str] = set()
+    if allowed_events:
+        tier3_allow_events = {ev for ev in allowed_events if ev not in {event_id, '0000'}}
+    if allowed_group_events:
+        tier3_allow_events = {ev for ev in tier3_allow_events if ev in allowed_group_events}
+
     def generate_stream():
         """
         A generator function that prepares data, calls the LLM, and yields the response stream.
@@ -4555,6 +4789,9 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                         retrieval_hints=None,
                         feature_event_prompts=feature_event_prompts,
                         feature_event_docs=feature_event_docs,
+                        event_type=current_event_type,
+                        personal_layer=personal_agent_layer_content,
+                        personal_event_id=personal_event_id,
                     )
                 except Exception as e:
                     logger.error(f"PromptBuilder error; falling back: {e}", exc_info=True)
@@ -4563,15 +4800,7 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
 
             # --- Part 2: Dynamic Task-Specific Context (RAG) ---
             if not is_wizard:
-                rag_usage_instructions = ("\n\n=== INSTRUCTIONS FOR USING RETRIEVED CONTEXT ===\n"
-                                          "1. **Prioritize Info Within `[Retrieved Context]`:** Base answer primarily on info in `[Retrieved Context]` block below, if relevant. \n"
-                                          "2. **Assess Timeliness:** Each source has an `(Age: ...)` tag. Use this to assess relevance. More recent information is generally more reliable, unless it's a 'Core Memory' which is timeless. \n"
-                                          "3. **Direct Extraction for Lists/Facts:** If user asks for list/definition/specific info explicit in `[Retrieved Context]`, present that info directly. Do *not* state info missing if clearly provided. \n"
-                                          "4. **Cite Sources:** Remember cite source file name using Markdown footnotes (e.g., `[^1]`) for info from context, list sources under `### Sources`. \n"
-                                          "5. **Synthesize When Necessary:** If query requires combining info or summarizing, do so, but ground answer in provided context. \n"
-                                          "6. **Acknowledge Missing Info Appropriately:** Only state info missing if truly absent from context and relevant.\n"
-                                          "=== END INSTRUCTIONS FOR USING RETRIEVED CONTEXT ===")
-                final_system_prompt += rag_usage_instructions
+                final_system_prompt += "\n\n" + build_retrieval_usage_instructions(current_event_type, personal_event_id)
 
                 # Provide a natural index of available meetings (saved/) for the LLM
                 try:
@@ -4597,18 +4826,24 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                     normalized_query = (last_actual_user_message_for_rag or "").strip().lower().rstrip('.!?')
                     if normalized_query and normalized_query not in SIMPLE_QUERIES_TO_BYPASS_RAG:
                         retriever = RetrievalHandler(
-                            index_name="river", agent_name=agent_name, session_id=chat_session_id_log,
-                            event_id=event_id, anthropic_api_key=get_api_key(agent_name, 'anthropic'),
-                            openai_api_key=get_api_key(agent_name, 'openai')
+                            index_name="river",
+                            agent_name=agent_name,
+                            session_id=chat_session_id_log,
+                            event_id=event_id,
+                            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                            openai_api_key=get_api_key(agent_name, 'openai'),
+                            event_type=current_event_type,
+                            personal_event_id=personal_event_id,
+                            allowed_tier3_events=tier3_allow_events,
                         )
                         # Event-scoped tiered retrieval with caps and MMR
-                        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,6,6,4').split(',')
+                        tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '4,12,6,6,4').split(',')
                         try:
                             tier_caps = [int(x.strip()) for x in tier_caps_env]
                         except Exception:
-                            tier_caps = [7, 6, 6, 4]
+                            tier_caps = [4, 12, 6, 6, 4]
                         mmr_lambda = float(os.getenv('RETRIEVAL_MMR_LAMBDA', '0.6'))
-                        mmr_k = int(os.getenv('RETRIEVAL_MMR_K', '23'))
+                        mmr_k = int(os.getenv('RETRIEVAL_MMR_K', '32'))
                         allow_t3_low = os.getenv('ALLOW_T3_ON_LOW', 'false').lower() == 'true'
                         include_t3 = True
                         if (signal_bias or 'medium') == 'low' and not allow_t3_low:
@@ -4651,33 +4886,57 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                             include_t3=include_t3,
                             metadata_filter=metadata_filter,
                         )
+                        tier_counts = retriever.get_last_tier_hit_counts()
+                        logger.info(f"Retriever tier counts: {tier_counts}")
                         retrieved_docs_for_reinforcement = retrieved_docs
                         if retrieved_docs:
-                            # Add disclosure if non-T1 sources present
-                            non_t1_events = sorted({
-                                str(d.metadata.get('event_id'))
-                                for d in retrieved_docs
-                                if str(d.metadata.get('event_id', '0000')) not in [str(event_id or '0000')]
-                            })
-                            if non_t1_events:
-                                disclosure = (
-                                    f"Context includes shared {agent_name}/0000 and/or other sub-teams: {', '.join(non_t1_events)}. "
-                                    f"Treat as background unless it directly affects {event_id or '0000'}."
-                                )
-                                final_system_prompt += f"\n\n[DISCLOSURE] {disclosure}"
+                            personal_docs: List[Document] = []
+                            general_docs: List[Document] = []
+                            for doc in retrieved_docs:
+                                tier_label = (doc.metadata or {}).get('retrieval_tier')
+                                if tier_label == 't_personal':
+                                    personal_docs.append(doc)
+                                else:
+                                    general_docs.append(doc)
 
-                            def src_label(md: dict) -> str:
-                                return md.get('source_label') or ''
+                            if personal_docs:
+                                personal_items = []
+                                for d in personal_docs:
+                                    meta = d.metadata or {}
+                                    filename = meta.get('file_name', 'Unknown')
+                                    label = meta.get('source_label') or f"[personal:{meta.get('event_id', personal_event_id or 'personal')}]"
+                                    personal_items.append(
+                                        f"--- START Personal Context Source: {filename} {label} "
+                                        f"(Age: {meta.get('age_display', 'Unknown')}, Score: {meta.get('score', 0):.2f}) ---\n"
+                                        f"{d.page_content}\n--- END Personal Context Source: {filename} ---"
+                                    )
+                                final_system_prompt += "\n\n=== RETRIEVED PERSONAL CONTEXT ===\n" + "\n\n".join(personal_items) + "\n=== END RETRIEVED PERSONAL CONTEXT ==="
 
-                            items = [
-                                (
-                                    f"--- START Context Source: {d.metadata.get('file_name','Unknown')} {src_label(d.metadata)} "
-                                    f"(Age: {d.metadata.get('age_display', 'Unknown')}, Score: {d.metadata.get('score',0):.2f}) ---\n"
-                                    f"{d.page_content}\n--- END Context Source: {d.metadata.get('file_name','Unknown')} ---"
-                                )
-                                for d in retrieved_docs
-                            ]
-                            final_system_prompt += "\n\n=== RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
+                            if general_docs:
+                                non_t1_events = sorted({
+                                    str(doc.metadata.get('event_id'))
+                                    for doc in general_docs
+                                    if str(doc.metadata.get('event_id', '0000')) not in [str(event_id or '0000')]
+                                })
+                                if non_t1_events:
+                                    disclosure = (
+                                        f"Context includes shared {agent_name}/0000 and/or other sub-teams: {', '.join(non_t1_events)}. "
+                                        f"Treat as background unless it directly affects {event_id or '0000'}."
+                                    )
+                                    final_system_prompt += f"\n\n[DISCLOSURE] {disclosure}"
+
+                                def src_label(md: dict) -> str:
+                                    return md.get('source_label') or ''
+
+                                items = [
+                                    (
+                                        f"--- START Context Source: {doc.metadata.get('file_name','Unknown')} {src_label(doc.metadata)} "
+                                        f"(Age: {doc.metadata.get('age_display', 'Unknown')}, Score: {doc.metadata.get('score',0):.2f}) ---\n"
+                                        f"{doc.page_content}\n--- END Context Source: {doc.metadata.get('file_name','Unknown')} ---"
+                                    )
+                                    for doc in general_docs
+                                ]
+                                final_system_prompt += "\n\n=== RETRIEVED CONTEXT ===\n" + "\n\n".join(items) + "\n=== END RETRIEVED CONTEXT ==="
                 except Exception as e:
                     logger.error(f"Unexpected RAG error: {e}", exc_info=True)
                     final_system_prompt += "\n\n=== RETRIEVED CONTEXT ===\n[Note: Error retrieving documents via RAG]\n=== END RETRIEVED CONTEXT ==="
