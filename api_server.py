@@ -4189,8 +4189,17 @@ def list_s3_documents(user: SupabaseUser):
     try:
         s3_objects = list_s3_objects_metadata(s3_prefix)
         formatted_files = []
+        # Check if we're explicitly requesting archive/ or saved/ subdirectories
+        is_explicit_archived_or_saved = s3_prefix.endswith('/archive/') or s3_prefix.endswith('/saved/')
+
         for obj in s3_objects:
             if obj['Key'].endswith('/') and obj['Size'] == 0: continue
+
+            # Security: Block archive and saved transcript subdirectories when listing from general prefix
+            # Allow them when explicitly requested
+            if not is_explicit_archived_or_saved and ('/transcripts/archive/' in obj['Key'] or '/transcripts/saved/' in obj['Key']):
+                continue
+
             filename = os.path.basename(obj['Key']); file_type = "text/plain"
             if '.' in filename:
                 ext = filename.rsplit('.', 1)[1].lower()
