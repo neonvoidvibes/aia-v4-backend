@@ -1386,7 +1386,7 @@ def get_user_role(user_id: str) -> Optional[str]:
             return None
         return res.data.get("role") if res.data else None
     except Exception as e:
-        logger.error(f"Unexpected error fetching role for user {user.id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error fetching role for user {user_id}: {e}", exc_info=True)
         return None
 
 
