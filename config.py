@@ -43,7 +43,7 @@ class AppConfig:
     llm_model_name: str = "claude-sonnet-4-5-20250929" # Default model
 
     # LLM Max Output Tokens
-    llm_max_output_tokens: int = 4096 # Default max tokens for LLM response
+    llm_max_output_tokens: int = 8192 # Default max tokens for LLM response
 
     # WebSocket reattachment settings
     reattach_grace_seconds: int = 120  # Seconds to keep a session reattachable after client WS drops
