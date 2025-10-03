@@ -3935,12 +3935,14 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
             current_step=f'Processing {estimated_total} chunk(s)...',
         )
 
+        file_size_mb = file_size / (1024 * 1024)
+        duration_display = f"{duration_hint:.2f}" if duration_hint else "unknown"
         logger.info(
-            "Job %s: strategy decision provider=%s file_size_mb=%.2f duration_hint=%s force_chunk=%s prefer_direct=%s use_adapter=%s",
+            "Job %s: strategy decision provider=%s file_size_mb=%s duration_hint=%s force_chunk=%s prefer_direct=%s use_adapter=%s",
             job_id,
             provider_name,
-            file_size / (1024 * 1024),
-            f"{duration_hint:.2f}" if duration_hint else "unknown",
+            f"{file_size_mb:.2f}",
+            duration_display,
             force_chunk,
             prefer_direct,
             use_adapter,
@@ -4121,14 +4123,20 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
                 result=result,
             )
 
+            processing_ms_value = result_meta.get('processing_ms') or processing_ms
+            try:
+                processing_ms_display = f"{float(processing_ms_value):.1f}"
+            except (TypeError, ValueError):
+                processing_ms_display = str(processing_ms_value)
+
             logger.info(
-                "Job %s: Transcription succeeded adapter=%s providers=%s text_len=%s segments=%s processing_ms=%.1f",
+                "Job %s: Transcription succeeded adapter=%s providers=%s text_len=%s segments=%s processing_ms=%s",
                 job_id,
                 use_adapter,
                 provider_list,
                 len(final_transcript_with_header),
                 len(segments),
-                result_meta['processing_ms'] or processing_ms,
+                processing_ms_display,
             )
         else:
             error_msg = "Transcription failed or returned incomplete data."
