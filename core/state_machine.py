@@ -48,6 +48,10 @@ class TranscriptionPipeline:
             return None
 
         flags = advisory_flags(asr, blob.seq, self._dups)
+        segment_dicts = [
+            {"text": seg.text, "start": seg.start_s, "end": seg.end_s}
+            for seg in asr.segments
+        ]
         # Near-dup? We still append (log is authoritative). View layers may choose to hide dup lines.
         chunk = TranscriptChunk(
             session_id=blob.session_id,
@@ -55,11 +59,14 @@ class TranscriptionPipeline:
             captured_ts=blob.captured_ts,
             text=text,
             provider=asr.provider,
-            meta={"advisory": flags.__dict__, "segments": len(asr.segments)},
+            meta={
+                "advisory": flags.__dict__,
+                "segments": segment_dicts,
+                "segment_count": len(segment_dicts),
+            },
             byte_len=len(text.encode("utf-8")),
         )
         key = self._wal_append(chunk)
         if self._cb:
             self._cb(chunk, key)
         return chunk
-

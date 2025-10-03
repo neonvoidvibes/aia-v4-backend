@@ -74,6 +74,7 @@ import boto3
 from app.session_adapter import SessionAdapter
 from services.deepgram_sdk import DeepgramSDK
 from services.openai_whisper_sdk import OpenAIWhisper
+from utils.batch_transcriber import BatchTranscriber, BatchTranscriptionError, probe_media_duration
 
 import tempfile
 
@@ -99,8 +100,56 @@ SESSION_ADAPTER = SessionAdapter(dg_client=DG_CLIENT, whisper_client=WHISPER_CLI
                                  s3_client=S3_CLIENT, bucket=TRANSCRIPT_BUCKET,
                                  base_prefix=TRANSCRIPT_PREFIX)
 
+
+def build_batch_transcriber(
+    provider_name: Optional[str] = None,
+    *,
+    dg_client=None,
+    whisper_client=None,
+) -> BatchTranscriber:
+    return BatchTranscriber(
+        dg_client=dg_client or DG_CLIENT,
+        whisper_client=whisper_client or WHISPER_CLIENT,
+        provider_name=provider_name or _TRANSCRIPTION_PROVIDER_NAME,
+        chunk_seconds=TRANSCRIBE_CHUNK_SECONDS,
+        max_parallel=TRANSCRIBE_MAX_PARALLEL,
+        logger=logging.getLogger(__name__ + ".batch"),
+    )
+
+
 _TRANSCRIPTION_PROVIDER_NAME = os.environ.get('TRANSCRIPTION_PROVIDER', 'deepgram').strip().lower()
 STRICT_WEBM_HEADER_ENABLED = os.environ.get('WEBM_STRICT_HEADER', '0').lower() in ('1', 'true', 'yes')
+
+
+def _env_flag(name: str, default: str) -> bool:
+    return os.environ.get(name, default).strip().lower() not in {'0', 'false', 'no', 'off'}
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return max(minimum, default)
+    try:
+        return max(minimum, int(float(raw)))
+    except (TypeError, ValueError):
+        return max(minimum, default)
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return max(minimum, default)
+    try:
+        return max(minimum, float(raw))
+    except (TypeError, ValueError):
+        return max(minimum, default)
+
+
+ENABLE_BATCH_ADAPTER_PATH = _env_flag('ENABLE_BATCH_ADAPTER_PATH', 'true')
+ENABLE_WHISPER_DIRECT = _env_flag('ENABLE_WHISPER_DIRECT', 'false')
+TRANSCRIBE_CHUNK_SECONDS = max(15, _env_int('TRANSCRIBE_CHUNK_SEC', 90, 15))
+TRANSCRIBE_MAX_PARALLEL = _env_int('TRANSCRIBE_MAX_PARALLEL', 2, 1)
+TRANSCRIBE_DIRECT_MAX_BYTES = int(_env_float('TRANSCRIBE_DIRECT_MAX_MB', 10.0, 1.0) * 1024 * 1024)
 
 
 def _resolve_webm_header(session_id: str, session_data: dict[str, Any]) -> tuple[bytes, str]:
@@ -3825,19 +3874,20 @@ def cancel_transcription_job(user: SupabaseUser, job_id: str):
     
     return jsonify({"message": "Job cancelled successfully", "job_id": job_id}), 200
 
+
 def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, original_filename: str, transcription_language: str, user: SupabaseUser):
     """Process transcription job in background thread with progress tracking."""
     temp_filepath = None
     transcription_successful = False
-    
+
     try:
         # Check for cancellation before starting
         if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
             logger.info(f"Job {job_id} was cancelled before processing started")
             return
-            
+
         update_job_progress(job_id, status='processing', current_step='Downloading file from S3...')
-        
+
         # 1. Download file from S3 to a temporary local path
         s3 = get_s3_client()
         aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
@@ -3848,116 +3898,248 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
         unique_id = uuid.uuid4().hex
         temp_filename = f"{unique_id}_{secure_filename(original_filename)}"
         temp_filepath = os.path.join(UPLOAD_FOLDER, temp_filename)
-        
+
         logger.info(f"Job {job_id}: Downloading s3://{aws_s3_bucket}/{s3_key} to {temp_filepath}")
         s3.download_file(aws_s3_bucket, s3_key, temp_filepath)
         logger.info(f"Job {job_id}: Download complete.")
 
         update_job_progress(job_id, current_step='Preparing transcription...', progress=0.1)
 
-        # 2. Get file info for chunking
+        # 2. Decide execution strategy based on size, duration, and feature flags
         file_size = os.path.getsize(temp_filepath)
-        max_chunk_size = 20 * 1024 * 1024  # 20MB chunks for safety
-        
-        # Estimate chunks (rough calculation)
-        estimated_chunks = max(1, math.ceil(file_size / max_chunk_size))
-        update_job_progress(job_id, total_chunks=estimated_chunks, current_step=f'Processing {estimated_chunks} chunks...')
+        duration_hint = probe_media_duration(temp_filepath)
+        provider_name = _TRANSCRIPTION_PROVIDER_NAME
+        provider_allows_direct = provider_name in {'openai', 'whisper'}
 
-        # 3. Transcribe with progress callback
+        force_chunk = file_size > (25 * 1024 * 1024)
+        if duration_hint:
+            force_chunk = force_chunk or duration_hint > TRANSCRIBE_CHUNK_SECONDS
+
+        prefer_direct = (
+            ENABLE_WHISPER_DIRECT
+            and provider_allows_direct
+            and not force_chunk
+            and file_size <= TRANSCRIBE_DIRECT_MAX_BYTES
+        )
+
+        use_adapter = ENABLE_BATCH_ADAPTER_PATH and (force_chunk or not prefer_direct or not provider_allows_direct)
+
+        estimated_total = 1
+        if use_adapter:
+            numerator = duration_hint if duration_hint else float(TRANSCRIBE_CHUNK_SECONDS)
+            estimated_total = max(1, math.ceil(numerator / max(1, TRANSCRIBE_CHUNK_SECONDS)))
+
+        update_job_progress(
+            job_id,
+            total_chunks=estimated_total,
+            current_step=f'Processing {estimated_total} chunk(s)...',
+        )
+
+        logger.info(
+            "Job %s: strategy decision provider=%s file_size_mb=%.2f duration_hint=%s force_chunk=%s prefer_direct=%s use_adapter=%s",
+            job_id,
+            provider_name,
+            file_size / (1024 * 1024),
+            f"{duration_hint:.2f}" if duration_hint else "unknown",
+            force_chunk,
+            prefer_direct,
+            use_adapter,
+        )
+
+        # 3. Resolve provider clients (agent-specific where possible)
         openai_api_key = get_api_key(agent_name, 'openai')
         if not openai_api_key:
             logger.error(f"Job {job_id}: OpenAI API key not found for agent '{agent_name}'.")
             update_job_progress(job_id, status='failed', error='Transcription service not configured (missing API key)')
             return
-        
+
+        try:
+            whisper_client = OpenAIWhisper(api_key=openai_api_key)
+        except Exception as exc:
+            logger.error(f"Job {job_id}: Failed to initialize Whisper client: {exc}", exc_info=True)
+            update_job_progress(job_id, status='failed', error='Failed to initialize transcription client')
+            return
 
         # Check for cancellation before starting transcription
         if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
             logger.info(f"Job {job_id} was cancelled before transcription started")
             return
-            
-        logger.info(f"Job {job_id}: Starting transcription for {temp_filepath} with language: {transcription_language}...")
-        
-        def progress_callback(completed_chunks: int, total_chunks: int, current_step: str):
-            # Check for cancellation during progress updates
-            if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
-                logger.info(f"Job {job_id} cancelled during chunk processing")
-                raise Exception("Job cancelled by user")
-                
-            progress = 0.1 + (completed_chunks / total_chunks) * 0.8  # 10% for download, 80% for transcription
-            update_job_progress(job_id, 
-                               progress=progress,
-                               completed_chunks=completed_chunks, 
-                               total_chunks=total_chunks,
-                               current_step=current_step)
-        
-        transcription_data = transcribe_large_audio_file_with_progress(
-            audio_file_path=temp_filepath,
-            openai_api_key=openai_api_key,
-            language_setting_from_client=transcription_language,
-            progress_callback=progress_callback,
-            chunk_size_mb=20  # Use 20MB chunks
+
+        logger.info(
+            "Job %s: Starting transcription (adapter=%s) with language=%s chunk_seconds=%s",
+            job_id,
+            use_adapter,
+            transcription_language,
+            TRANSCRIBE_CHUNK_SECONDS,
         )
 
+        transcription_payload = None
+        providers_used: Set[str] = set()
+        processing_ms = 0.0
+        branch_start = time.time()
+        state = {"total": estimated_total}
+
+        if use_adapter:
+            def adapter_progress(completed_chunks: int, total_chunks: int, current_step: str):
+                if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
+                    logger.info(f"Job {job_id} cancelled during adapter processing")
+                    raise Exception("Job cancelled by user")
+
+                total = max(1, total_chunks or state["total"])
+                if total != state["total"]:
+                    state["total"] = total
+                    update_job_progress(job_id, total_chunks=total)
+
+                progress = 0.1 + (completed_chunks / total) * 0.8
+                update_job_progress(
+                    job_id,
+                    progress=min(progress, 0.95),
+                    completed_chunks=completed_chunks,
+                    total_chunks=total,
+                    current_step=current_step,
+                )
+
+            session_id = f"s3-job-{job_id}"
+            transcriber = build_batch_transcriber(provider_name, whisper_client=whisper_client)
+
+            try:
+                transcription_payload = transcriber.transcribe(
+                    source_path=temp_filepath,
+                    language=transcription_language,
+                    session_id=session_id,
+                    progress_callback=adapter_progress,
+                )
+            except BatchTranscriptionError as exc:
+                logger.error(f"Job {job_id}: Batch transcription failed: {exc}", exc_info=True)
+                update_job_progress(job_id, status='failed', error=str(exc))
+                return
+
+            processing_ms = transcription_payload.get('processing_ms') or ((time.time() - branch_start) * 1000.0)
+            update_job_progress(
+                job_id,
+                current_step='Stitching segments...',
+                completed_chunks=state["total"],
+                total_chunks=state["total"],
+                progress=0.95,
+            )
+
+            segments_list = transcription_payload.get('segments') or []
+            for seg in segments_list:
+                if isinstance(seg, dict) and seg.get('provider'):
+                    providers_used.add(str(seg['provider']).lower())
+
+        else:
+            def progress_callback(completed_chunks: int, total_chunks: int, current_step: str):
+                if transcription_jobs.get(job_id, {}).get('status') == 'cancelled':
+                    logger.info(f"Job {job_id} cancelled during direct processing")
+                    raise Exception("Job cancelled by user")
+
+                total = max(1, total_chunks or 1)
+                progress = 0.1 + (completed_chunks / total) * 0.8
+                update_job_progress(
+                    job_id,
+                    progress=min(progress, 0.95),
+                    completed_chunks=completed_chunks,
+                    total_chunks=total,
+                    current_step=current_step,
+                )
+
+            transcription_payload = transcribe_large_audio_file_with_progress(
+                audio_file_path=temp_filepath,
+                openai_api_key=openai_api_key,
+                language_setting_from_client=transcription_language,
+                progress_callback=progress_callback,
+                chunk_size_mb=20,
+            )
+            processing_ms = (time.time() - branch_start) * 1000.0
+            providers_used.add('whisper')
+
+        final_total_chunks = state["total"] if use_adapter else 1
+
         # 4. Process result with intelligent fallback handling
-        if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
+        if transcription_payload and isinstance(transcription_payload, dict) and 'text' in transcription_payload and 'segments' in transcription_payload:
             transcription_successful = True
-            full_transcript_text = transcription_data['text']
-            
-            # Check if this is a partial result
-            if transcription_data.get('partial', False):
-                success_rate = transcription_data.get('success_rate', 1.0)
-                warning_msg = transcription_data.get('warning', 'Partial transcription completed')
-                logger.warning(f"Job {job_id}: Partial success with {success_rate:.1%} completion rate")
-                
-                # Update job with partial success indicator
-                result_data = {
-                    'transcript': full_transcript_text,
-                    'segments': transcription_data['segments'],
-                    'partial': True,
-                    'success_rate': success_rate,
-                    'warning': warning_msg
-                }
-                
-                update_job_progress(job_id, 
-                                   status='completed',
-                                   progress=1.0,  # Always 100% when completed
-                                   current_step=f'Completed with {success_rate:.0%} success rate',
-                                   result=result_data)
-            else:
-                # Complete success
-                result_data = {
-                    'transcript': full_transcript_text,
-                    'segments': transcription_data['segments']
-                }
-            segments = transcription_data['segments']
+            full_transcript_text = transcription_payload.get('text', '')
+            segments = transcription_payload.get('segments') or []
+
+            provider_list = sorted(p for p in providers_used if p)
+            if not provider_list:
+                provider_list = [provider_name]
 
             user_name = user.user_metadata.get('full_name', user.email if user.email else 'UnknownUser')
             upload_timestamp_utc = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-            
-            header = (
-                f"# Transcript - Uploaded\n"
-                f"Agent: {agent_name}\n"
-                f"User: {user_name}\n"
-                f"Language: {format_language_for_header(transcription_language)}\n"
-                f"Provider: {get_current_transcription_provider()}\n"
-                f"Transcript Uploaded (UTC): {upload_timestamp_utc}\n\n"
-            )
-            
+
+            header_provider = ', '.join(name.capitalize() for name in provider_list)
+            header_lines = [
+                '# Transcript - Uploaded',
+                f'Agent: {agent_name}',
+                f'User: {user_name}',
+                f'Language: {format_language_for_header(transcription_language)}',
+                f'Provider: {header_provider}',
+                f'Transcript Uploaded (UTC): {upload_timestamp_utc}',
+                '',
+            ]
+            header = '\n'.join(header_lines) + '\n'
+
             final_transcript_with_header = header + full_transcript_text
-            
-            # Store result and mark as completed
-            result = {"transcript": final_transcript_with_header, "segments": segments}
-            update_job_progress(job_id, 
-                               status='completed', 
-                               progress=1.0,
-                               current_step='Transcription completed successfully!',
-                               result=result)
-            
-            logger.info(f"Job {job_id}: S3-based transcription successful for {original_filename}. Total Text Length (with header): {len(final_transcript_with_header)}, Segments: {len(segments)}")
+
+            result_meta = {
+                'adapter_path': use_adapter,
+                'provider_preference': provider_name,
+                'providers_used': provider_list,
+                'file_size_bytes': file_size,
+                'duration_hint_s': duration_hint,
+                'chunks': transcription_payload.get('chunks'),
+                'segments_count': transcription_payload.get('segments_count', len(segments)),
+                'processing_ms': transcription_payload.get('processing_ms', processing_ms),
+                'mean_segment_ms': transcription_payload.get('mean_segment_ms'),
+            }
+
+            completion_step = 'Transcription completed successfully!'
+            if transcription_payload.get('partial'):
+                result_meta['partial'] = True
+                success_rate = transcription_payload.get('success_rate', 1.0)
+                result_meta['success_rate'] = success_rate
+                warning_msg = transcription_payload.get('warning')
+                if warning_msg:
+                    result_meta['warning'] = warning_msg
+                completion_step = f'Completed with {success_rate:.0%} success rate'
+
+            result = {
+                'transcript': final_transcript_with_header,
+                'segments': segments,
+                'meta': result_meta,
+            }
+
+            update_job_progress(
+                job_id,
+                status='completed',
+                progress=1.0,
+                current_step=completion_step,
+                completed_chunks=final_total_chunks,
+                total_chunks=final_total_chunks,
+                result=result,
+            )
+
+            logger.info(
+                "Job %s: Transcription succeeded adapter=%s providers=%s text_len=%s segments=%s processing_ms=%.1f",
+                job_id,
+                use_adapter,
+                provider_list,
+                len(final_transcript_with_header),
+                len(segments),
+                result_meta['processing_ms'] or processing_ms,
+            )
         else:
             error_msg = "Transcription failed or returned incomplete data."
-            logger.error(f"Job {job_id}: {error_msg} File: {original_filename} (S3: {s3_key}). API Result (if any): {str(transcription_data)[:500]}...")
+            logger.error(
+                "Job %s: %s File: %s (S3: %s). Payload preview: %s",
+                job_id,
+                error_msg,
+                original_filename,
+                s3_key,
+                str(transcription_payload)[:500] if transcription_payload else 'no payload',
+            )
             update_job_progress(job_id, status='failed', error=error_msg)
 
     except Exception as e:
@@ -3971,7 +4153,7 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
                 logger.info(f"Job {job_id}: Cleaned up temporary file: {temp_filepath}")
             except Exception as e_clean:
                 logger.error(f"Job {job_id}: Error cleaning up temporary file {temp_filepath}: {e_clean}")
-        
+
         # 6. Clean up the original file from S3 if transcription was successful
         if transcription_successful:
             try:
@@ -3980,6 +4162,7 @@ def process_transcription_job_async(job_id: str, agent_name: str, s3_key: str, o
                 logger.info(f"Job {job_id}: Successfully deleted {s3_key} from S3.")
             except Exception as e_s3_delete:
                 logger.error(f"Job {job_id}: Error deleting original file {s3_key} from S3: {e_s3_delete}")
+
 
 @app.route('/api/transcription/start-job-from-s3', methods=['POST'])
 @supabase_auth_required(agent_required=True)
