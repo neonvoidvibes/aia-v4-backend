@@ -903,6 +903,13 @@ def _init_session_reconnect_state(session_id: str) -> Dict[str, Any]:
         "recent_events": deque(maxlen=200),
     }
 
+def _serialize_rec_state(sess: dict) -> dict:
+    return {
+        "is_recording": bool(sess.get("is_recording", False)),
+        "audio_ms": int(sess.get("total_audio_ms", 0)),
+        "ws_connected": bool(sess.get("ws_connected", False)),
+    }
+
 # Job tracking system for async transcription
 transcription_jobs: Dict[str, Dict[str, Any]] = {}
 job_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
@@ -955,6 +962,19 @@ def get_session_status(session_id: str):
         }
 
     return jsonify(status_payload), 200
+
+
+@app.get("/api/recording/status")
+def recording_status():
+    session_id = request.args.get("session")
+    if not session_id:
+        return jsonify({"error": "missing session"}), 400
+    with session_locks.get(session_id, threading.Lock()):
+        sess = active_sessions.get(session_id)
+        if not sess:
+            # Report disconnected state but keep stable schema
+            return jsonify({"is_recording": False, "audio_ms": 0, "ws_connected": False}), 200
+        return jsonify(_serialize_rec_state(sess)), 200
 
 def update_job_progress(job_id: str, **kwargs):
     """Update job progress in a thread-safe manner."""
@@ -2676,24 +2696,20 @@ def attach_ws(ws):
                         ws.send(json.dumps({"type": "pong"}))
                         with session_locks[session_id]:
                             sess = active_sessions.get(session_id)
-                            if sess:
-                                sess["last_pong_at"] = time.time()
+                            if sess: sess["last_pong_at"] = time.time()
                     elif msg_type == "pong":
                         with session_locks[session_id]:
                             sess = active_sessions.get(session_id)
-                            if sess:
-                                sess["last_pong_at"] = time.time()
+                            if sess: sess["last_pong_at"] = time.time()
                     elif action == "ping":
                         ws.send(json.dumps({"type": "pong"}))
                         with session_locks[session_id]:
                             sess = active_sessions.get(session_id)
-                            if sess:
-                                sess["last_pong_at"] = time.time()
+                            if sess: sess["last_pong_at"] = time.time()
                     elif action == "pong":
                         with session_locks[session_id]:
                             sess = active_sessions.get(session_id)
-                            if sess:
-                                sess["last_pong_at"] = time.time()
+                            if sess: sess["last_pong_at"] = time.time()
                     elif msg_type == "ack":
                         # Client acknowledging receipt of sequence number
                         with session_locks[session_id]:
@@ -2706,6 +2722,10 @@ def attach_ws(ws):
         logger.info(f"WebSocket attach for session {session_id} closed: {e}")
     finally:
         # Mark as disconnected but keep grace period
+        with session_locks[session_id]:
+            sess = active_sessions.get(session_id)
+            if sess:
+                sess["ws_connected"] = False
         _mark_ws_disconnected(session_id)
 
 def _mark_ws_disconnected(session_id: str):
@@ -3144,6 +3164,8 @@ def audio_stream_socket(ws, session_id: str):
                     active_sessions[session_id]["last_activity_timestamp"] = time.time()
                     active_sessions[session_id]["is_active"] = True
                     active_sessions[session_id]["ws_disconnected"] = False
+                    active_sessions[session_id]["ws_connected"] = True
+                    active_sessions[session_id]["last_pong_at"] = time.time()
                     logger.info(f"WebSocket takeover: session {session_id} user {user.id} client {client_id} replaced previous connection.")
             else:
                 logger.warning(f"WebSocket: Duplicate connection for session {session_id}. resume={resume}, same_user={existing_user_id == user.id}. Closing new one.")
@@ -3160,6 +3182,8 @@ def audio_stream_socket(ws, session_id: str):
                 active_sessions[session_id]["last_activity_timestamp"] = time.time()
                 active_sessions[session_id]["is_active"] = True
                 active_sessions[session_id]["ws_disconnected"] = False
+                active_sessions[session_id]["ws_connected"] = True
+                active_sessions[session_id]["last_pong_at"] = time.time()
                 logger.info(f"WebSocket for session {session_id} (user {user.id}) successfully reattached within grace period.")
                 # Send RESUMED status to client
                 try:
@@ -3175,6 +3199,8 @@ def audio_stream_socket(ws, session_id: str):
                 active_sessions[session_id]["last_activity_timestamp"] = time.time()
                 active_sessions[session_id]["is_active"] = True
                 active_sessions[session_id]["ws_disconnected"] = False
+                active_sessions[session_id]["ws_connected"] = True
+                active_sessions[session_id]["last_pong_at"] = time.time()
                 logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
     with session_locks[session_id]:
@@ -3205,7 +3231,10 @@ def audio_stream_socket(ws, session_id: str):
                 current_ws = sess.get("websocket_connection")
                 if current_ws:
                     try:
-                        current_ws.send(json.dumps({"type": "ping"}))
+                        with session_locks[session_id]:
+                            s = active_sessions.get(session_id) or {}
+                            payload = {"type": "ping", "ts": int(time.time()*1000), **_serialize_rec_state(s)}
+                        current_ws.send(json.dumps(payload))
                         log.debug(f"WS {session_id}: Server keepalive ping sent")
                     except Exception as e:
                         log.warning(f"WS {session_id}: keepalive send failed: {e}")
@@ -3265,14 +3294,9 @@ def audio_stream_socket(ws, session_id: str):
             if message is None:
                 sess = active_sessions.get(session_id)
                 if sess:
-                    last_pong_at = sess.get("last_pong_at")
-                    now = time.time()
-                    if last_pong_at is None:
-                        sess["last_pong_at"] = now
-                    elif now - last_pong_at > CLIENT_HEARTBEAT_IDLE_GRACE_SECONDS:
-                        logger.warning(
-                            f"WebSocket for session {session_id} closing after {CLIENT_HEARTBEAT_IDLE_GRACE_SECONDS}s without client pong."
-                        )
+                    last_pong_at = sess.get("last_pong_at") or time.time()
+                    if time.time() - last_pong_at > CLIENT_HEARTBEAT_IDLE_GRACE_SECONDS:
+                        logger.warning(f"WebSocket for session {session_id} closing after pong idle window")
                         break
                 continue
 
@@ -3290,17 +3314,17 @@ def audio_stream_socket(ws, session_id: str):
 
                     session_data = active_sessions.get(session_id)
 
-                    now_ts = time.time()
-
-                    if msg_type == "pong" or action == "pong":
-                        if session_data is not None:
-                            session_data["last_pong_at"] = now_ts
+                    if msg_type == "ping":
+                        ws.send(json.dumps({"type": "pong"}))
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess: sess["last_pong_at"] = time.time()
                         continue
 
-                    if msg_type == "ping" and action is None:
-                        if session_data is not None:
-                            session_data["last_pong_at"] = now_ts
-                        ws.send(json.dumps({"type": "pong"}))
+                    if msg_type == "pong":
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess: sess["last_pong_at"] = time.time()
                         continue
 
                     if msg_type == "init":
@@ -3390,10 +3414,17 @@ def audio_stream_socket(ws, session_id: str):
                     logger.debug(f"WebSocket session {session_id}: Received control message: {control_msg}")
 
                     if action == "ping":
-                        if session_data is not None:
-                            session_data["last_pong_at"] = now_ts
                         ws.send(json.dumps({"type": "pong"}))
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess: sess["last_pong_at"] = time.time()
                         continue # Don't log further for pings
+
+                    if action == "pong":
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess: sess["last_pong_at"] = time.time()
+                        continue
 
                     logger.info(f"WebSocket session {session_id}: Received control message: {control_msg}")
                     if action == "set_processing_state": 
