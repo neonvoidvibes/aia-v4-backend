@@ -870,6 +870,9 @@ logger.info("Initialized and cleared active_sessions and session_locks at startu
 REATTACH_GRACE_SECONDS = int(os.getenv("REATTACH_GRACE_SECONDS", "130"))
 RINGBUF_SECONDS = int(os.getenv("RINGBUF_SECONDS", "45"))
 RINGBUF_MAX_RESULTS = int(os.getenv("RINGBUF_MAX_RESULTS", "200"))
+CLIENT_HEARTBEAT_IDLE_GRACE_SECONDS = int(
+    os.getenv("CLIENT_HEARTBEAT_IDLE_GRACE_SECONDS", "180")
+)
 
 # Gap recovery configuration
 SEGMENT_RETRY_ENABLED = os.getenv("SEGMENT_RETRY_ENABLED", "false").lower() == "true"
@@ -2623,6 +2626,7 @@ def attach_ws(ws):
         sess["grace_deadline"] = None
         sess["last_activity_timestamp"] = time.time()
         sess["is_active"] = True
+        sess["last_pong_at"] = time.time()
 
         # Update session state for status tracking
         session_state = sess.get("session_state")
@@ -2667,10 +2671,29 @@ def attach_ws(ws):
                 try:
                     control_msg = json.loads(message)
                     msg_type = control_msg.get("type")
+                    action = control_msg.get("action")
                     if msg_type == "ping":
                         ws.send(json.dumps({"type": "pong"}))
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess:
+                                sess["last_pong_at"] = time.time()
                     elif msg_type == "pong":
-                        pass  # Acknowledge pong
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess:
+                                sess["last_pong_at"] = time.time()
+                    elif action == "ping":
+                        ws.send(json.dumps({"type": "pong"}))
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess:
+                                sess["last_pong_at"] = time.time()
+                    elif action == "pong":
+                        with session_locks[session_id]:
+                            sess = active_sessions.get(session_id)
+                            if sess:
+                                sess["last_pong_at"] = time.time()
                     elif msg_type == "ack":
                         # Client acknowledging receipt of sequence number
                         with session_locks[session_id]:
@@ -3154,6 +3177,11 @@ def audio_stream_socket(ws, session_id: str):
                 active_sessions[session_id]["ws_disconnected"] = False
                 logger.info(f"WebSocket for session {session_id} (user {user.id}) connected and registered.")
 
+    with session_locks[session_id]:
+        sess = active_sessions.get(session_id)
+        if sess and sess.get("websocket_connection") is ws:
+            sess["last_pong_at"] = time.time()
+
     # Server-side keepalive using threading
     def _server_keepalive_thread(ws, session_id, interval=15, log=logger):
         # app-level keepalive to satisfy proxies; pairs with client's 'pong' handler
@@ -3237,10 +3265,14 @@ def audio_stream_socket(ws, session_id: str):
             if message is None:
                 sess = active_sessions.get(session_id)
                 if sess:
-                    last_ts = sess.get("last_activity_timestamp", 0)
-                    paused = bool(sess.get("is_backend_processing_paused", False))
-                    if not paused and (time.time() - last_ts > 70):
-                        logger.warning(f"WebSocket for session {session_id} timed out due to inactivity (loop check). Closing.")
+                    last_pong_at = sess.get("last_pong_at")
+                    now = time.time()
+                    if last_pong_at is None:
+                        sess["last_pong_at"] = now
+                    elif now - last_pong_at > CLIENT_HEARTBEAT_IDLE_GRACE_SECONDS:
+                        logger.warning(
+                            f"WebSocket for session {session_id} closing after {CLIENT_HEARTBEAT_IDLE_GRACE_SECONDS}s without client pong."
+                        )
                         break
                 continue
 
@@ -3258,10 +3290,16 @@ def audio_stream_socket(ws, session_id: str):
 
                     session_data = active_sessions.get(session_id)
 
+                    now_ts = time.time()
+
                     if msg_type == "pong" or action == "pong":
+                        if session_data is not None:
+                            session_data["last_pong_at"] = now_ts
                         continue
 
                     if msg_type == "ping" and action is None:
+                        if session_data is not None:
+                            session_data["last_pong_at"] = now_ts
                         ws.send(json.dumps({"type": "pong"}))
                         continue
 
@@ -3352,6 +3390,8 @@ def audio_stream_socket(ws, session_id: str):
                     logger.debug(f"WebSocket session {session_id}: Received control message: {control_msg}")
 
                     if action == "ping":
+                        if session_data is not None:
+                            session_data["last_pong_at"] = now_ts
                         ws.send(json.dumps({"type": "pong"}))
                         continue # Don't log further for pings
 
