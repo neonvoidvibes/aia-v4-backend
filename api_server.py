@@ -1288,10 +1288,6 @@ except Exception as e:
     logger.critical(f"Failed Anthropic client init: {e}", exc_info=True)
     anthropic_client = None # Keep it None on failure
 
-# Register modular routes after clients are initialized
-register_canvas_routes(app, anthropic_client, supabase_auth_required)
-logger.info("Canvas routes registered.")
-
 try:
     google_api_key = os.getenv('GOOGLE_API_KEY')
     if not google_api_key: raise ValueError("GOOGLE_API_KEY not found")
@@ -1787,6 +1783,10 @@ def supabase_auth_required(agent_required: bool = True):
                 return jsonify({"error": "Internal server error during authorization."}), 500
         return decorated_function
     return decorator
+
+# Register modular routes after auth decorator is defined
+register_canvas_routes(app, anthropic_client, supabase_auth_required)
+logger.info("Canvas routes registered.")
 
 @app.route('/api/users/list', methods=['GET'])
 @supabase_auth_required(agent_required=False)
