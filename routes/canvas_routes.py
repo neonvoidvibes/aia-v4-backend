@@ -124,44 +124,56 @@ def get_canvas_depth_instructions(depth_mode: str) -> str:
         'mirror': """=== CANVAS MODE: MIRROR ===
 You are now responding in Canvas mode with MIRROR depth.
 
-RESPONSE STYLE:
-- Provide concise, visually-impactful responses
-- Be direct and insightful
-- Use clear, powerful language suitable for large display
-- Keep responses focused and structured
-- Emphasize key insights with strong, declarative statements
-- Avoid unnecessary preamble or filler
-- Format for visual clarity when appropriate
+CRITICAL FORMATTING RULES:
+- NO markdown allowed (no **, -, #, etc.)
+- Plain text only
+- Keep responses SHORT (2-4 sentences max)
+- Responses should fit on screen without scrolling
 
-You are responding to voice input, so be conversational yet impactful.""",
+RESPONSE STYLE:
+- Concise, visually-impactful responses
+- Direct and insightful
+- Clear, powerful language for large display
+- Strong, declarative statements
+- No unnecessary preamble
+
+You are responding to voice input on a visual canvas.""",
 
         'lens': """=== CANVAS MODE: LENS ===
 You are now responding in Canvas mode with LENS depth.
 
-RESPONSE STYLE:
-- Provide structured, insightful analysis
-- Break down complex ideas systematically
-- Use clear headings and structure for visual scanning
-- Provide deeper analysis while remaining concise
-- Highlight connections and patterns
-- Balance depth with clarity
-- Format for visual hierarchy
+CRITICAL FORMATTING RULES:
+- NO markdown allowed (no **, -, #, etc.)
+- Plain text only
+- Keep responses MODERATE (4-6 sentences max)
+- Responses should fit on screen without scrolling
 
-You are responding to voice input. Provide thoughtful analysis in a visually digestible format.""",
+RESPONSE STYLE:
+- Structured, insightful analysis
+- Break down ideas systematically
+- Clear sections using line breaks (not markdown)
+- Deeper analysis while remaining concise
+- Highlight connections
+
+You are responding to voice input on a visual canvas.""",
 
         'portal': """=== CANVAS MODE: PORTAL ===
 You are now responding in Canvas mode with PORTAL depth.
 
-RESPONSE STYLE:
-- Provide comprehensive, multifaceted responses
-- Explore multiple perspectives and dimensions
-- Use rich structure with clear sections
-- Provide comprehensive insights while maintaining clarity
-- Connect ideas across domains
-- Balance breadth with focus
-- Create visual rhythm with varied paragraph lengths
+CRITICAL FORMATTING RULES:
+- NO markdown allowed (no **, -, #, etc.)
+- Plain text only
+- Keep responses COMPREHENSIVE but BRIEF (6-10 sentences max)
+- Responses should fit on screen without scrolling
 
-You are responding to voice input. Offer expansive thinking in an engaging, visual format."""
+RESPONSE STYLE:
+- Comprehensive, multifaceted responses
+- Multiple perspectives
+- Clear sections using line breaks (not markdown)
+- Connect ideas across domains
+- Maintain clarity
+
+You are responding to voice input on a visual canvas."""
     }
 
     return depth_instructions.get(depth_mode, depth_instructions['mirror'])
