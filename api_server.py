@@ -4364,10 +4364,10 @@ def transcribe_uploaded_file(user: SupabaseUser):
     if 'audio_file' not in request.files:
         logger.warning("No audio_file part in request files.")
         return jsonify({"error": "No audio_file part in the request"}), 400
-    
+
     file = request.files['audio_file']
     transcriptionLanguage = request.form.get('transcription_language', 'any') # Get language from form
-    
+
     if file.filename == '':
         logger.warning("No selected file provided in audio_file part.")
         return jsonify({"error": "No selected file"}), 400
@@ -4379,25 +4379,22 @@ def transcribe_uploaded_file(user: SupabaseUser):
             unique_id = uuid.uuid4().hex
             temp_filename = f"{unique_id}_{filename}"
             temp_filepath = os.path.join(UPLOAD_FOLDER, temp_filename)
-            
+
             logger.info(f"Saving uploaded file temporarily to: {temp_filepath}")
             file.save(temp_filepath)
 
-            # Get agent_name from form data and fetch the corresponding API key
+            # Get agent_name from form data
             agent_name_from_form = request.form.get('agent_name', 'UnknownAgent')
             logger.info(f"Agent name from form for header: {agent_name_from_form}")
 
-            openai_api_key = get_api_key(agent_name_from_form, 'openai')
-            if not openai_api_key:
-                logger.error(f"OpenAI API key not found for agent '{agent_name_from_form}' or globally.")
-                return jsonify({"error": "Transcription service not configured (missing API key)"}), 500
-            
-            
-            logger.info(f"Starting transcription for {temp_filepath} with language: {transcriptionLanguage}...")
-            transcription_data = transcribe_large_audio_file(
-                audio_file_path=temp_filepath,
-                openai_api_key=openai_api_key,
-                language_setting_from_client=transcriptionLanguage # Pass the language setting
+            # Use BatchTranscriber which respects TRANSCRIPTION_PROVIDER env var
+            logger.info(f"Starting transcription for {temp_filepath} with language: {transcriptionLanguage}, provider: {_TRANSCRIPTION_PROVIDER_NAME}...")
+
+            batch_transcriber = build_batch_transcriber()
+            transcription_data = batch_transcriber.transcribe(
+                source_path=temp_filepath,
+                language=transcriptionLanguage if transcriptionLanguage != 'any' else None,
+                session_id=unique_id
             )
 
             if transcription_data and 'text' in transcription_data and 'segments' in transcription_data:
