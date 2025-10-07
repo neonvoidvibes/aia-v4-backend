@@ -8,9 +8,10 @@ import json
 import logging
 from flask import jsonify, Response, stream_with_context, g
 from gotrue.types import User as SupabaseUser
-from anthropic import AnthropicError
+from anthropic import Anthropic, AnthropicError
 from tenacity import RetryError
 from utils.s3_utils import get_latest_system_prompt
+from utils.api_key_manager import get_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,6 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         """
         logger.info(f"Received POST request to /api/canvas/stream from user: {user.id}")
 
-        if not anthropic_client:
-            logger.error("Canvas stream fail: Anthropic client not initialized.")
-            return jsonify({"error": "AI service unavailable"}), 503
-
         try:
             data = g.get('json_data', {})
             if not data or 'transcript' not in data:
@@ -52,6 +49,20 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         depth_mode = data.get('depth', 'mirror')  # mirror | lens | portal
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
         temperature = 0.7
+
+        # Get per-agent custom API key or fallback to default
+        agent_anthropic_key = get_api_key(agent_name, 'anthropic')
+        if not agent_anthropic_key:
+            logger.error(f"Canvas stream fail: No Anthropic API key available for agent '{agent_name}'.")
+            return jsonify({"error": "AI service unavailable"}), 503
+
+        # Create agent-specific Anthropic client
+        try:
+            agent_anthropic_client = Anthropic(api_key=agent_anthropic_key)
+            logger.info(f"Anthropic client initialized for agent '{agent_name}' (custom key: {agent_anthropic_key != os.getenv('ANTHROPIC_API_KEY')})")
+        except Exception as e:
+            logger.error(f"Failed to initialize Anthropic client for agent '{agent_name}': {e}", exc_info=True)
+            return jsonify({"error": "AI service initialization failed"}), 503
 
         def generate_canvas_stream():
             """Generator for canvas-specific streaming responses."""
@@ -73,8 +84,8 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 logger.info(f"Calling Anthropic API for canvas stream (model: {model_selection}, depth: {depth_mode})")
 
-                # Stream from Anthropic
-                with anthropic_client.messages.stream(
+                # Stream from Anthropic using agent-specific client
+                with agent_anthropic_client.messages.stream(
                     model=model_selection,
                     max_tokens=4096,
                     temperature=temperature,
