@@ -7,6 +7,7 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from flask import jsonify, Response, stream_with_context, g
 from gotrue.types import User as SupabaseUser
 from anthropic import Anthropic, AnthropicError
@@ -49,6 +50,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         transcript_text = data.get('transcript', '')
         depth_mode = data.get('depth', 'mirror')  # mirror | lens | portal
         conversation_history = data.get('history', [])  # Array of {role, content} messages
+        client_timezone = data.get('timezone', 'UTC')  # Client timezone
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
         temperature = 0.7
 
@@ -78,9 +80,18 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 # Combine agent prompt with canvas-specific depth instructions
                 depth_instructions = get_canvas_depth_instructions(depth_mode)
 
-                # Add current time
-                current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
-                time_section = f"\n\n=== CURRENT TIME ===\nYour internal clock shows the current date and time is: **{current_utc_time}**.\n=== END CURRENT TIME ==="
+                # Add current time in user's timezone
+                try:
+                    user_tz = ZoneInfo(client_timezone)
+                    current_user_time = datetime.now(user_tz)
+                    current_user_time_str = current_user_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+                    tz_abbr = current_user_time.strftime('%Z')
+                except Exception as e:
+                    logger.warning(f"Invalid timezone '{client_timezone}', falling back to UTC: {e}")
+                    current_user_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+                    tz_abbr = 'UTC'
+
+                time_section = f"\n\n=== CURRENT TIME ===\nYour internal clock shows the current date and time is: **{current_user_time_str}** (user's local timezone: {client_timezone}).\n=== END CURRENT TIME ==="
 
                 system_prompt = f"{agent_system_prompt}\n\n{depth_instructions}{time_section}"
 
@@ -88,11 +99,14 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 messages = []
                 if conversation_history:
                     messages.extend(conversation_history)
+                    logger.info(f"Canvas: Using conversation history with {len(conversation_history)} messages")
+                else:
+                    logger.info("Canvas: No conversation history provided")
 
                 # Add current user message
                 messages.append({"role": "user", "content": transcript_text})
 
-                logger.info(f"Calling Anthropic API for canvas stream (model: {model_selection}, depth: {depth_mode})")
+                logger.info(f"Calling Anthropic API for canvas stream (model: {model_selection}, depth: {depth_mode}, total messages: {len(messages)})")
 
                 # Stream from Anthropic using agent-specific client
                 with agent_anthropic_client.messages.stream(
