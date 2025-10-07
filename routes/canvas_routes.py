@@ -6,6 +6,7 @@ Handles PTT-to-LLM streaming for the canvas interface.
 import os
 import json
 import logging
+from datetime import datetime, timezone
 from flask import jsonify, Response, stream_with_context, g
 from gotrue.types import User as SupabaseUser
 from anthropic import Anthropic, AnthropicError
@@ -47,6 +48,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         agent_name = data.get('agent')
         transcript_text = data.get('transcript', '')
         depth_mode = data.get('depth', 'mirror')  # mirror | lens | portal
+        conversation_history = data.get('history', [])  # Array of {role, content} messages
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
         temperature = 0.7
 
@@ -75,12 +77,20 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 # Combine agent prompt with canvas-specific depth instructions
                 depth_instructions = get_canvas_depth_instructions(depth_mode)
-                system_prompt = f"{agent_system_prompt}\n\n{depth_instructions}"
 
-                # Simple message structure for canvas mode
-                messages = [
-                    {"role": "user", "content": transcript_text}
-                ]
+                # Add current time
+                current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
+                time_section = f"\n\n=== CURRENT TIME ===\nYour internal clock shows the current date and time is: **{current_utc_time}**.\n=== END CURRENT TIME ==="
+
+                system_prompt = f"{agent_system_prompt}\n\n{depth_instructions}{time_section}"
+
+                # Build messages with conversation history
+                messages = []
+                if conversation_history:
+                    messages.extend(conversation_history)
+
+                # Add current user message
+                messages.append({"role": "user", "content": transcript_text})
 
                 logger.info(f"Calling Anthropic API for canvas stream (model: {model_selection}, depth: {depth_mode})")
 
