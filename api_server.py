@@ -75,6 +75,7 @@ from app.session_adapter import SessionAdapter
 from services.deepgram_sdk import DeepgramSDK
 from services.openai_whisper_sdk import OpenAIWhisper
 from utils.batch_transcriber import BatchTranscriber, BatchTranscriptionError, probe_media_duration
+from routes.canvas_routes import register_canvas_routes
 
 import tempfile
 
@@ -830,6 +831,10 @@ def push_session_event(session_id: str, event_type: str, payload: Optional[Dict[
 app.config["SESSION_EVENT_EMITTER"] = push_session_event
 set_emitter(push_session_event)
 
+# Register modular routes
+# Note: We'll register canvas routes after anthropic_client is initialized
+# This is done at the end of the file before app.run()
+
 # Request ID middleware
 @app.before_request
 def add_request_id():
@@ -1279,9 +1284,13 @@ try:
     if not anthropic_api_key: raise ValueError("ANTHROPIC_API_KEY not found")
     anthropic_client = Anthropic(api_key=anthropic_api_key)
     logger.info("Anthropic client initialized.")
-except Exception as e: 
+except Exception as e:
     logger.critical(f"Failed Anthropic client init: {e}", exc_info=True)
     anthropic_client = None # Keep it None on failure
+
+# Register modular routes after clients are initialized
+register_canvas_routes(app, anthropic_client, supabase_auth_required)
+logger.info("Canvas routes registered.")
 
 try:
     google_api_key = os.getenv('GOOGLE_API_KEY')
