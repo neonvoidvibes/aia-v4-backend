@@ -10,6 +10,7 @@ from flask import jsonify, Response, stream_with_context, g
 from gotrue.types import User as SupabaseUser
 from anthropic import AnthropicError
 from tenacity import RetryError
+from utils.s3_utils import get_latest_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,13 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             try:
                 logger.info(f"Canvas stream started for Agent: {agent_name}, User: {user.id}, Depth: {depth_mode}")
 
-                # Canvas-specific system prompt based on depth
-                system_prompt = get_canvas_system_prompt(depth_mode)
+                # Load agent-specific system prompt from S3
+                agent_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
+                logger.info(f"Loaded agent system prompt for '{agent_name}' ({len(agent_system_prompt)} chars)")
+
+                # Combine agent prompt with canvas-specific depth instructions
+                depth_instructions = get_canvas_depth_instructions(depth_mode)
+                system_prompt = f"{agent_system_prompt}\n\n{depth_instructions}"
 
                 # Simple message structure for canvas mode
                 messages = [
@@ -93,20 +99,22 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         return Response(stream_with_context(generate_canvas_stream()), mimetype='text/event-stream')
 
 
-def get_canvas_system_prompt(depth_mode: str) -> str:
+def get_canvas_depth_instructions(depth_mode: str) -> str:
     """
-    Returns canvas-specific system prompts based on depth mode.
+    Returns canvas-specific depth instructions to append to agent system prompt.
 
     Args:
         depth_mode: One of 'mirror', 'lens', or 'portal'
 
     Returns:
-        System prompt string optimized for the specified depth
+        Depth-specific instructions for response style
     """
-    depth_prompts = {
-        'mirror': """You are a reflective AI assistant in Canvas mode. Provide concise, visually-impactful responses.
+    depth_instructions = {
+        'mirror': """=== CANVAS MODE: MIRROR ===
+You are now responding in Canvas mode with MIRROR depth.
 
-RESPONSE GUIDELINES:
+RESPONSE STYLE:
+- Provide concise, visually-impactful responses
 - Be direct and insightful
 - Use clear, powerful language suitable for large display
 - Keep responses focused and structured
@@ -116,9 +124,11 @@ RESPONSE GUIDELINES:
 
 You are responding to voice input, so be conversational yet impactful.""",
 
-        'lens': """You are an analytical AI assistant in Canvas mode. Provide structured, insightful analysis.
+        'lens': """=== CANVAS MODE: LENS ===
+You are now responding in Canvas mode with LENS depth.
 
-RESPONSE GUIDELINES:
+RESPONSE STYLE:
+- Provide structured, insightful analysis
 - Break down complex ideas systematically
 - Use clear headings and structure for visual scanning
 - Provide deeper analysis while remaining concise
@@ -128,9 +138,11 @@ RESPONSE GUIDELINES:
 
 You are responding to voice input. Provide thoughtful analysis in a visually digestible format.""",
 
-        'portal': """You are an expansive AI assistant in Canvas mode. Provide comprehensive, multifaceted responses.
+        'portal': """=== CANVAS MODE: PORTAL ===
+You are now responding in Canvas mode with PORTAL depth.
 
-RESPONSE GUIDELINES:
+RESPONSE STYLE:
+- Provide comprehensive, multifaceted responses
 - Explore multiple perspectives and dimensions
 - Use rich structure with clear sections
 - Provide comprehensive insights while maintaining clarity
@@ -141,4 +153,4 @@ RESPONSE GUIDELINES:
 You are responding to voice input. Offer expansive thinking in an engaging, visual format."""
     }
 
-    return depth_prompts.get(depth_mode, depth_prompts['mirror'])
+    return depth_instructions.get(depth_mode, depth_instructions['mirror'])
