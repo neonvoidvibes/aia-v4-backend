@@ -5650,8 +5650,8 @@ When you identify information that should be permanently stored in your agent do
                             final_system_prompt += f"\n\n=== HISTORICAL MEETING TRANSCRIPT (OLDEST FIRST) ===\n{historical_block}\n=== END HISTORICAL MEETING TRANSCRIPT ==="
 
             # --- Groups Transcript Reading (Independent from 0000's own transcripts) ---
-            if not is_wizard and event_id == '0000' and tier3_allow_events:
-                groups_mode = event_profile.get('groups_read_mode', 'none') if event_profile else 'none'
+            groups_mode = event_profile.get('groups_read_mode', 'none') if event_profile else 'none'
+            if not is_wizard and event_id == '0000' and (tier3_allow_events or groups_mode == 'breakout'):
 
                 if groups_mode == 'latest':
                     # Read latest transcript from each group
