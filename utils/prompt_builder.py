@@ -8,6 +8,7 @@ from .s3_utils import (
     get_latest_context,
     get_objective_function,
     get_event_docs,
+    get_reminders,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,7 +194,7 @@ def prompt_builder(
     parts.append("=== RAG_ROUTING_POLICY ===\n" + _rag_routing_policy(agent, event, normalized_event_type, personal_event_id) + "\n=== END RAG_ROUTING_POLICY ===")
 
     # Note: Dynamic content sections (10-20) will be added by api_server.py
-    # Note: USER CONTEXT (21) and CURRENT TIME (22) will be added by api_server.py at the end
+    # Note: USER CONTEXT (21), REMINDERS (22), and CURRENT TIME (23) will be added by api_server.py at the end
 
     final_prompt = "\n\n".join([p for p in parts if p and p.strip()])
     logger.info(f"PromptBuilder: Built prompt for agent='{agent}', event='{event}'. Length={len(final_prompt)}")
@@ -205,3 +206,16 @@ def get_user_context_section(user_context: Optional[str]) -> str:
     if user_context:
         return f"=== USER CONTEXT ===\n{user_context}\n=== END USER CONTEXT ==="
     return ""
+
+
+def get_reminders_section() -> str:
+    """
+    Generate REMINDERS section for api_server.py to append as
+    the last block before CURRENT TIME.
+    Source: <bucket_root>/_config/reminders(.md|.txt|.mdx)
+    """
+    reminders = get_reminders() or ""
+    if not reminders:
+        return ""
+    instruction = "(Instruction: Remember and apply these reminders in this session.)"
+    return "=== REMINDERS ===\n" + reminders + "\n" + instruction + "\n=== END REMINDERS ==="

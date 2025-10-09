@@ -604,7 +604,7 @@ def get_objective_function(agent_name: Optional[str] = None) -> Optional[str]:
     Uses caching.
     """
     logger.debug(f"Getting objective function (agent: {agent_name})")
-    
+
     # 1. Look for agent-specific objective function (optional override)
     agent_objective_function = ""
     if agent_name:
@@ -627,12 +627,37 @@ def get_objective_function(agent_name: Optional[str] = None) -> Optional[str]:
         fetch_function=lambda: find_file_any_extension(base_pattern, "base objective function")
     ) or ""
     if base_objective_function: logger.info("Loaded base objective function.")
-    
+
     # Prioritize agent-specific, then base.
     final_objective_function = agent_objective_function or base_objective_function
     if final_objective_function: logger.info(f"Final objective function loaded, length: {len(final_objective_function)}")
     else: logger.warning("No objective function file found (neither agent-specific nor base).")
     return final_objective_function if final_objective_function else None
+
+
+def get_reminders() -> Optional[str]:
+    """
+    Get the base reminders block from S3.
+    Location: <bucket_root>/_config/reminders(.md|.txt|.mdx)
+    Uses the same 'any extension' pattern and cache as other _config files.
+    """
+    logger.debug("Getting base reminders (_config/reminders)")
+    base_pattern = '_config/reminders'
+    try:
+        content = get_cached_s3_file(
+            cache_key=base_pattern,
+            description="base reminders",
+            fetch_function=lambda: find_file_any_extension(base_pattern, "base reminders")
+        )
+        if content:
+            logger.info("Loaded base reminders.")
+            return content
+        else:
+            logger.warning("No base reminders found at '_config/reminders'.")
+            return None
+    except Exception as e:
+        logger.error(f"Error loading base reminders: {e}", exc_info=True)
+        return None
 
 
 def write_agent_doc(agent_name: str, doc_name: str, content: str) -> bool:
