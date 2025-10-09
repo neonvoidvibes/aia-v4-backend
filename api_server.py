@@ -1955,6 +1955,7 @@ def start_recording_route(user: SupabaseUser):
         "ws_disconnected": False,
         "session_state": session_state,  # Add session state for sticky provider fallback
         "is_finalizing": False,
+        "audio_timeout_warning_sent": False,  # Track if warning has been sent to avoid spam
         "current_segment_raw_bytes": bytearray(),
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0,
@@ -2102,6 +2103,7 @@ def start_audio_recording(user: SupabaseUser):
         "is_active": True,
         "ws_disconnected": False,
         "is_finalizing": False,
+        "audio_timeout_warning_sent": False,  # Track if warning has been sent to avoid spam
         "current_segment_raw_bytes": bytearray(),
         "accumulated_audio_duration_for_current_segment_seconds": 0.0,
         "actual_segment_duration_seconds": 0.0,
@@ -3111,17 +3113,24 @@ def _heartbeat_loop():
                                 silence_duration = current_time - last_audio_ts
 
                                 if silence_duration > AUDIO_SILENCE_TIMEOUT_SEC:
-                                    # Send warning to client
-                                    try:
-                                        warning_payload = {
-                                            "type": "warning",
-                                            "event": "no_audio_detected",
-                                            "silence_duration_sec": int(silence_duration)
-                                        }
-                                        ws.send(json.dumps(warning_payload))
-                                        logger.warning(f"Session {session_id}: No audio for {silence_duration:.0f}s, sent warning to client")
-                                    except Exception as warn_err:
-                                        logger.debug(f"Session {session_id}: Failed to send audio timeout warning: {warn_err}")
+                                    # Send warning to client only once to avoid spam
+                                    if not sess.get("audio_timeout_warning_sent", False):
+                                        try:
+                                            warning_payload = {
+                                                "type": "warning",
+                                                "event": "no_audio_detected",
+                                                "silence_duration_sec": int(silence_duration)
+                                            }
+                                            ws.send(json.dumps(warning_payload))
+                                            sess["audio_timeout_warning_sent"] = True
+                                            logger.warning(f"Session {session_id}: No audio for {silence_duration:.0f}s, sent warning to client")
+                                        except Exception as warn_err:
+                                            logger.debug(f"Session {session_id}: Failed to send audio timeout warning: {warn_err}")
+                                else:
+                                    # Reset flag when audio resumes
+                                    if sess.get("audio_timeout_warning_sent", False):
+                                        sess["audio_timeout_warning_sent"] = False
+                                        logger.debug(f"Session {session_id}: Audio resumed, reset warning flag")
                         except Exception as e:
                             logger.warning(f"Heartbeat ping failed for session {session_id}: {e}")
                             # Mark as disconnected
