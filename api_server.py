@@ -505,6 +505,9 @@ def _dispatch_pcm_segment(
     *,
     synchronous: bool = False,
 ) -> None:
+    # Track that audio was received
+    session_data["last_audio_received_ts"] = time.time()
+
     temp_processing_dir = os.path.join(session_data['temp_audio_session_dir'], "segments_processing")
     os.makedirs(temp_processing_dir, exist_ok=True)
     segment_uuid = uuid.uuid4().hex
@@ -1858,12 +1861,16 @@ def _get_current_recording_status_snapshot(session_id: Optional[str] = None) -> 
         session = active_sessions[session_id]
         return {
             "session_id": session_id,
-            "is_recording": session.get('is_active', False),
+            "is_recording": session.get('is_active', False) and not session.get('is_finalizing', False),
             "is_backend_processing_paused": session.get('is_backend_processing_paused', False),
             "session_start_time_utc": session.get('session_start_time_utc').isoformat() if session.get('session_start_time_utc') else None,
             "agent": session.get('agent_name'),
             "event": session.get('event_id'),
-            "current_total_audio_duration_processed_seconds": session.get('current_total_audio_duration_processed_seconds', 0)
+            "current_total_audio_duration_processed_seconds": session.get('current_total_audio_duration_processed_seconds', 0),
+            "audio_ms": session.get('total_audio_ms', 0),
+            "ws_connected": bool(session.get('websocket_connection')) and not session.get('ws_disconnected', False),
+            "last_disconnect_ts": session.get('last_disconnect_ts'),
+            "grace_deadline": session.get('grace_deadline')
         }
     if not active_sessions: return {"is_recording": False, "is_backend_processing_paused": False, "message": "No active sessions"}
     
@@ -1973,6 +1980,9 @@ def start_recording_route(user: SupabaseUser):
         "pcm_frame_samples": 0,
         "pcm_segment_target_ms": PCM_SEGMENT_TARGET_MS_DEFAULT,
         "pcm_frame_stats": {"frames_received": 0, "frames_dropped": 0, "out_of_order": 0},
+        "total_audio_ms": 0,  # Track total acknowledged audio duration
+        "last_acked_segment_seq": 0,  # Track last acknowledged segment
+        "last_audio_received_ts": time.time(),  # Track when audio was last received
         **reconnect_state  # Add reconnection fields
     }
     SESSION_ADAPTER.register_session(session_id, s3_transcript_key, client_timezone_name)
@@ -3045,6 +3055,13 @@ def _deliver_to_client_and_s3(session_id: str, seq: int, transcript_text: str, t
                 except Exception as ws_e:
                     logger.warning(f"Session {session_id}: Failed to send seq={seq} to WebSocket: {ws_e}")
 
+        # Track acknowledged audio duration
+        segment_duration_s = sess.get("actual_segment_duration_seconds", 0.0)
+        if segment_duration_s > 0:
+            sess["total_audio_ms"] += int(segment_duration_s * 1000)
+            sess["last_acked_segment_seq"] = seq
+            logger.debug(f"Session {session_id}: Acknowledged seq={seq}, duration={segment_duration_s:.2f}s, total_audio_ms={sess['total_audio_ms']}")
+
     except Exception as e:
         logger.error(f"Session {session_id}: Error delivering seq={seq}: {e}")
     else:
@@ -3075,10 +3092,36 @@ def _heartbeat_loop():
                     grace_deadline = sess.get("grace_deadline")
 
                     if ws:
-                        # WebSocket is connected, send ping
+                        # WebSocket is connected, send ping with full status
                         try:
-                            ws.send(json.dumps({"type": "ping", "t": int(current_time)}))
-                            logger.debug(f"Heartbeat ping sent to session {session_id}")
+                            ping_payload = {
+                                "type": "ping",
+                                "t": int(current_time * 1000),  # Send in milliseconds
+                                "is_recording": sess.get("is_active", False) and not sess.get("is_finalizing", False),
+                                "audio_ms": sess.get("total_audio_ms", 0),
+                                "ws_connected": True
+                            }
+                            ws.send(json.dumps(ping_payload))
+                            logger.debug(f"Heartbeat ping sent to session {session_id} (audio_ms={ping_payload['audio_ms']})")
+
+                            # Check for audio timeout (no audio received for extended period)
+                            AUDIO_SILENCE_TIMEOUT_SEC = 30
+                            if sess.get("is_active") and not sess.get("is_finalizing"):
+                                last_audio_ts = sess.get("last_audio_received_ts", current_time)
+                                silence_duration = current_time - last_audio_ts
+
+                                if silence_duration > AUDIO_SILENCE_TIMEOUT_SEC:
+                                    # Send warning to client
+                                    try:
+                                        warning_payload = {
+                                            "type": "warning",
+                                            "event": "no_audio_detected",
+                                            "silence_duration_sec": int(silence_duration)
+                                        }
+                                        ws.send(json.dumps(warning_payload))
+                                        logger.warning(f"Session {session_id}: No audio for {silence_duration:.0f}s, sent warning to client")
+                                    except Exception as warn_err:
+                                        logger.debug(f"Session {session_id}: Failed to send audio timeout warning: {warn_err}")
                         except Exception as e:
                             logger.warning(f"Heartbeat ping failed for session {session_id}: {e}")
                             # Mark as disconnected
