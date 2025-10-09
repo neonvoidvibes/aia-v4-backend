@@ -1535,7 +1535,7 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
     personal_event_id: Optional[str] = None
     allowed_group_events: Set[str] = set()
     allowed_personal_events: Set[str] = set()
-    groups_read_mode = 'none'  # 'latest' | 'none' | 'all'
+    groups_read_mode = 'none'  # 'latest' | 'none' | 'all' | 'breakout'
 
     # Fetch groups_read_mode from agents table (agent-level policy, not event-specific)
     client = get_supabase_client()
@@ -1544,7 +1544,7 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
             agent_res = client.table("agents").select("groups_read_mode").eq("name", agent_name).limit(1).execute()
             if agent_res.data and len(agent_res.data) > 0:
                 groups_read_mode = agent_res.data[0].get("groups_read_mode", "none")
-                if groups_read_mode not in ['latest', 'none', 'all']:
+                if groups_read_mode not in ['latest', 'none', 'all', 'breakout']:
                     groups_read_mode = 'none'
         except Exception as exc:
             logger.warning("Failed to fetch groups_read_mode for agent '%s': %s", agent_name, exc)
@@ -5673,6 +5673,25 @@ When you identify information that should be permanently stored in your agent do
                     if groups_contents:
                         groups_block = "\n\n--- EVENT SEPARATOR ---\n\n".join(groups_contents)
                         final_system_prompt += f"\n\n=== ALL GROUP EVENTS TRANSCRIPTS ===\n{groups_block}\n=== END ALL GROUP EVENTS TRANSCRIPTS ==="
+
+                elif groups_mode == 'breakout':
+                    # Read all transcripts from breakout events only (excluding visibility_hidden=true)
+                    breakout_event_ids = [
+                        ev for ev in allowed_events
+                        if ev != '0000'
+                        and event_types_map.get(ev) == 'breakout'
+                        and not event_profile.get('event_metadata', {}).get(ev, {}).get('visibility_hidden', False)
+                    ]
+                    logger.info(f"Groups read mode 'breakout': fetching all transcripts from {len(breakout_event_ids)} breakout events")
+                    from utils.transcript_utils import read_all_transcripts_in_folder
+                    breakout_contents = []
+                    for breakout_event_id in breakout_event_ids:
+                        breakout_transcripts = read_all_transcripts_in_folder(agent_name, breakout_event_id)
+                        if breakout_transcripts:
+                            breakout_contents.append(f"--- Breakout Event: {breakout_event_id} ---\n{breakout_transcripts}")
+                    if breakout_contents:
+                        breakout_block = "\n\n--- EVENT SEPARATOR ---\n\n".join(breakout_contents)
+                        final_system_prompt += f"\n\n=== BREAKOUT EVENTS TRANSCRIPTS ===\n{breakout_block}\n=== END BREAKOUT EVENTS TRANSCRIPTS ==="
 
             # --- Final State & Timestamped History ---
             if not is_wizard:
