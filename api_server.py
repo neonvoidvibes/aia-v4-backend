@@ -47,7 +47,7 @@ from utils.supabase_client import get_supabase_client
 
 from langchain_core.documents import Document
 from utils.retrieval_handler import RetrievalHandler
-from utils.prompt_builder import prompt_builder
+from utils.prompt_builder import prompt_builder, get_reminders_section
 from utils.transcript_utils import read_new_transcript_content, read_all_transcripts_in_folder, list_saved_transcripts, read_new_transcript_content_multi
 from utils.transcript_format import format_transcript_line
 from utils.s3_utils import (
@@ -5747,6 +5747,11 @@ When you identify information that should be permanently stored in your agent do
 
             # --- Final State & Timestamped History ---
             if not is_wizard:
+                # Add reminders section before CURRENT TIME
+                rem = get_reminders_section()
+                if rem:
+                    final_system_prompt += "\n\n" + rem
+
                 current_utc_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
                 final_system_prompt += f"\n\n=== CURRENT TIME ===\nYour internal clock shows the current date and time is: **{current_utc_time}**.\n=== END CURRENT TIME ==="
 
