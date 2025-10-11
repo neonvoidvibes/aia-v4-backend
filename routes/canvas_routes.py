@@ -12,10 +12,115 @@ from flask import jsonify, Response, stream_with_context, g
 from gotrue.types import User as SupabaseUser
 from anthropic import Anthropic, AnthropicError
 from tenacity import RetryError
-from utils.s3_utils import get_latest_system_prompt
+from utils.s3_utils import get_cached_s3_file, find_file_any_extension
 from utils.api_key_manager import get_api_key
 
 logger = logging.getLogger(__name__)
+
+
+def get_agent_specific_prompt_only(agent_name: str) -> str:
+    """
+    Load ONLY the agent-specific prompt without any base system prompt.
+    This ensures canvas doesn't inherit the full taxonomy structure.
+    """
+    agent_pattern = f'organizations/river/agents/{agent_name}/_config/systemprompt_aID-{agent_name}'
+    agent_prompt = get_cached_s3_file(
+        cache_key=agent_pattern,
+        description=f"agent system prompt for {agent_name}",
+        fetch_function=lambda: find_file_any_extension(agent_pattern, f"agent system prompt for {agent_name}")
+    )
+    if agent_prompt:
+        logger.info(f"Loaded agent-specific canvas prompt for '{agent_name}' ({len(agent_prompt)} chars)")
+        return agent_prompt
+    else:
+        logger.warning(f"No agent-specific prompt found for '{agent_name}', using empty string")
+        return ""
+
+
+def get_canvas_base_and_depth_prompt(depth_mode: str) -> str:
+    """
+    Returns canvas base prompt combined with MLP depth-specific instructions.
+
+    Structure:
+    1. Canvas Base (global rules for all depths)
+    2. MLP Depth Instructions (mirror/lens/portal specific)
+
+    Args:
+        depth_mode: One of 'mirror', 'lens', or 'portal'
+
+    Returns:
+        Combined canvas base + depth instructions
+    """
+    # Canvas Base: Universal rules for all canvas interactions
+    canvas_base = """=== CANVAS BASE ===
+You are responding on a visual canvas interface using voice input.
+
+CORE RULES (apply to ALL responses):
+- Keep responses extremely short: 1-3 sentences maximum
+- Use conversational, natural language
+- Minimize special characters but keep normal punctuation
+- NO lists or bullet points allowed
+- NO markdown formatting (no **, -, #, etc.)
+- Plain text only
+- Each response should feel like a single thought
+
+=== END CANVAS BASE ==="""
+
+    # MLP Framework: Mirror/Lens/Portal depth instructions
+    mlp_instructions = {
+        'mirror': """
+=== MIRROR MODE (Edges) ===
+Focus: Explicit but peripheral information - the edge cases
+
+Your role is to surface what IS explicitly stated but sits at the margins of the conversation. Notice:
+- Minority viewpoints that were voiced
+- Side comments and tangential observations
+- Outlier perspectives explicitly mentioned
+- Peripheral but concrete concerns
+
+Reflect these edge cases back clearly and concisely without interpretation. Use participants exact words when possible.
+
+Example patterns: "One person also noted...", "A less central but mentioned point...", "Someone raised on the side..."
+=== END MIRROR MODE ===
+""",
+
+        'lens': """
+=== LENS MODE (Latent Needs) ===
+Focus: Hidden patterns and unspoken requirements
+
+Your role is to identify what the conversation implies about deeper contextual needs. Analyze:
+- Recurring themes across different speakers
+- Emotional undercurrents and group dynamics
+- Systemic issues beneath surface symptoms
+- Paradoxes and contradictions
+- What's being avoided or protected
+
+Surface these latent needs using questioning analytical language that invites reflection.
+
+Example patterns: "The underlying need seems to be...", "What's not being said might be...", "A deeper dynamic at play..."
+=== END LENS MODE ===
+""",
+
+        'portal': """
+=== PORTAL MODE (Questions) ===
+Focus: Emergent possibilities formulated as questions
+
+Your role is to open possibility spaces by asking transformative questions derived from lens-level patterns. Generate:
+- Questions that challenge limiting assumptions
+- Questions that identify transformation opportunities
+- Questions about paradigm shifts
+- Questions that predict intervention outcomes
+
+All questions must be traceable to a lens-level pattern or paradox. Frame possibilities as invitations to explore.
+
+Example patterns: "What if you could...", "What might happen if...", "How could this open...", "What would it mean to..."
+=== END PORTAL MODE ===
+"""
+    }
+
+    # Combine canvas base with selected depth mode
+    depth_instructions = mlp_instructions.get(depth_mode, mlp_instructions['mirror'])
+    return f"{canvas_base}\n\n{depth_instructions}"
 
 
 def register_canvas_routes(app, anthropic_client, supabase_auth_required):
@@ -73,12 +178,10 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             try:
                 logger.info(f"Canvas stream started for Agent: {agent_name}, User: {user.id}, Depth: {depth_mode}")
 
-                # Load agent-specific system prompt from S3
-                agent_system_prompt = get_latest_system_prompt(agent_name) or "You are a helpful assistant."
-                logger.info(f"Loaded agent system prompt for '{agent_name}' ({len(agent_system_prompt)} chars)")
-
-                # Combine agent prompt with canvas-specific depth instructions
-                depth_instructions = get_canvas_depth_instructions(depth_mode)
+                # Build canvas system prompt (NO systemprompt_base, NO taxonomy)
+                # Structure: Canvas Base + MLP Depth + Agent-Specific + Time
+                canvas_base_and_depth = get_canvas_base_and_depth_prompt(depth_mode)
+                agent_specific = get_agent_specific_prompt_only(agent_name)
 
                 # Add current time in user's timezone
                 try:
@@ -91,9 +194,15 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                     current_user_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
                     tz_abbr = 'UTC'
 
-                time_section = f"\n\n=== CURRENT TIME ===\nYour internal clock shows the current date and time is: **{current_user_time_str}** (user's local timezone: {client_timezone}).\n=== END CURRENT TIME ==="
+                time_section = f"\n\n=== CURRENT TIME ===\nCurrent date and time: {current_user_time_str} (user's local timezone: {client_timezone})\n=== END CURRENT TIME ==="
 
-                system_prompt = f"{agent_system_prompt}\n\n{depth_instructions}{time_section}"
+                # Combine: Canvas Base + Depth + Agent + Time
+                system_prompt = canvas_base_and_depth
+                if agent_specific:
+                    system_prompt += f"\n\n=== AGENT CONTEXT ===\n{agent_specific}\n=== END AGENT CONTEXT ==="
+                system_prompt += time_section
+
+                logger.info(f"Canvas system prompt built: {len(system_prompt)} chars (base+depth+agent+time, NO taxonomy)")
 
                 # Build messages with conversation history
                 messages = []
@@ -132,72 +241,3 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 yield f"data: {json.dumps({'error': 'An internal server error occurred during the stream.'})}\n\n"
 
         return Response(stream_with_context(generate_canvas_stream()), mimetype='text/event-stream')
-
-
-def get_canvas_depth_instructions(depth_mode: str) -> str:
-    """
-    Returns canvas-specific depth instructions to append to agent system prompt.
-
-    Args:
-        depth_mode: One of 'mirror', 'lens', or 'portal'
-
-    Returns:
-        Depth-specific instructions for response style
-    """
-    depth_instructions = {
-        'mirror': """=== CANVAS MODE: MIRROR ===
-You are now responding in Canvas mode with MIRROR depth.
-
-CRITICAL FORMATTING RULES:
-- NO markdown allowed (no **, -, #, etc.)
-- Plain text only
-- Keep responses SHORT (2-4 sentences max)
-- Responses should fit on screen without scrolling
-
-RESPONSE STYLE:
-- Concise, visually-impactful responses
-- Direct and insightful
-- Clear, powerful language for large display
-- Strong, declarative statements
-- No unnecessary preamble
-
-You are responding to voice input on a visual canvas.""",
-
-        'lens': """=== CANVAS MODE: LENS ===
-You are now responding in Canvas mode with LENS depth.
-
-CRITICAL FORMATTING RULES:
-- NO markdown allowed (no **, -, #, etc.)
-- Plain text only
-- Keep responses MODERATE (4-6 sentences max)
-- Responses should fit on screen without scrolling
-
-RESPONSE STYLE:
-- Structured, insightful analysis
-- Break down ideas systematically
-- Clear sections using line breaks (not markdown)
-- Deeper analysis while remaining concise
-- Highlight connections
-
-You are responding to voice input on a visual canvas.""",
-
-        'portal': """=== CANVAS MODE: PORTAL ===
-You are now responding in Canvas mode with PORTAL depth.
-
-CRITICAL FORMATTING RULES:
-- NO markdown allowed (no **, -, #, etc.)
-- Plain text only
-- Keep responses COMPREHENSIVE but BRIEF (6-10 sentences max)
-- Responses should fit on screen without scrolling
-
-RESPONSE STYLE:
-- Comprehensive, multifaceted responses
-- Multiple perspectives
-- Clear sections using line breaks (not markdown)
-- Connect ideas across domains
-- Maintain clarity
-
-You are responding to voice input on a visual canvas."""
-    }
-
-    return depth_instructions.get(depth_mode, depth_instructions['mirror'])
