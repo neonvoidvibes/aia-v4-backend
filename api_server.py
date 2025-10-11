@@ -5229,12 +5229,14 @@ def handle_chat(user: SupabaseUser):
         A generator function that prepares data, calls the LLM, and yields the response stream.
         This runs within the `stream_with_context` to handle the response generation.
         """
+        stream_start_time = time.time()
         try:
             # WIZARD DETECTION: A wizard session is defined by disabling retrieval and providing initial context.
             is_wizard = disable_retrieval and initial_context_for_aicreator is not None
-            
+
             effective_transcript_listen_mode = "none" if is_wizard else transcript_listen_mode
 
+            logger.info(f"[PERF] Stream generator started, delta from request: {time.time() - request_start_time:.4f}s")
             logger.info(f"Chat stream started for Agent: {agent_name}, Event: {event_id}, User: {user.id}, Wizard Mode: {is_wizard}")
             logger.info(f"Stream settings - Listen: {effective_transcript_listen_mode}, Memory: {saved_transcript_memory_mode}, Language: {transcription_language_setting}, Individual toggles: {len(individual_memory_toggle_states)} items")
 
@@ -5831,6 +5833,9 @@ When you identify information that should be permanently stored in your agent do
                 doc_ids_for_reinforcement = [doc.metadata.get('vector_id') for doc in retrieved_docs_for_reinforcement if doc.metadata.get('vector_id')]
                 sse_done_data = {'done': True, 'retrieved_doc_ids': doc_ids_for_reinforcement}
                 yield f"data: {json.dumps(sse_done_data)}\n\n"
+                stream_total_time = time.time() - stream_start_time
+                llm_total_time = time.perf_counter() - _llm_t0
+                logger.info(f"[PERF] Stream completed: total={stream_total_time:.3f}s, llm_time={llm_total_time:.3f}s")
                 logger.info(f"Stream for chat with agent {agent_name} (model: {model_selection}) completed successfully.")
 
             except CircuitBreakerOpen as e:
@@ -5847,8 +5852,10 @@ When you identify information that should be permanently stored in your agent do
         except Exception as e:
             logger.error(f"Error in generate_stream: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': 'An internal server error occurred during the stream.'})}\n\n"
-    
+
     # Start the streaming response
+    pre_stream_time = time.time() - request_start_time
+    logger.info(f"[PERF] Returning stream response, delta from request: {pre_stream_time:.4f}s")
     return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
 
 def sync_agents_from_s3_to_supabase():
