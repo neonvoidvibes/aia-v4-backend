@@ -32,7 +32,7 @@ class DeepgramProvider(ASRProvider):
             # Replace with your SDK call. Return same schema.
             resp: Dict[str, Any] = self._client.transcribe_file(
                 wav_path=wav_path,
-                language=language or "sv",
+                language=language,
                 model="nova-3",
                 smart_format=True,
                 words=True,

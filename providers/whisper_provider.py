@@ -13,7 +13,7 @@ class WhisperProvider(ASRProvider):
         try:
             resp: Dict[str, Any] = self._client.transcribe_file(
                 wav_path=wav_path,
-                language=language or "sv",
+                language=language,
                 model="whisper-1",
                 temperature=0.0,
             )
