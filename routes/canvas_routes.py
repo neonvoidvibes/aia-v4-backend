@@ -81,6 +81,14 @@ KNOWLEDGE SOURCES:
 - Synthesize these naturally - never mention them explicitly
 - If no analysis exists, respond based on the user's message only
 
+SOURCE DIFFERENTIATION:
+- Analysis documents may contain insights from MULTIPLE SOURCES (e.g., different breakout groups, transcript files, or events)
+- When responding, preserve source differentiation if it matters to the user's question
+- If asked about "breakout 1" specifically, draw only from that source's insights
+- If asked about differences between groups, contrast them naturally
+- If the pattern is universal across sources, state it confidently without qualifying
+- NEVER blend sources into "the group" if differentiation is relevant to the insight
+
 === END CANVAS BASE ==="""
 
     # MLP Framework: Mirror/Lens/Portal depth instructions

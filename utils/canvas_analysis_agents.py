@@ -68,11 +68,24 @@ def get_analysis_agent_prompt(
         personal_event_id=personal_event_id
     )
 
-    # 2. Add transcript content
+    # 2. Add transcript content with source attribution guidance
     transcript_section = f"""
 === TRANSCRIPT DATA ===
 {transcript_content}
 === END TRANSCRIPT DATA ===
+
+CRITICAL: The transcript data above may contain MULTIPLE SOURCES with distinct labels (e.g., different breakout groups, events, or transcript files). Each source is clearly marked with headers like "--- Breakout Event: X ---" or "--- START Transcript Source: Y ---".
+
+SOURCE DIFFERENTIATION REQUIREMENT:
+When analyzing transcripts from multiple sources, you MUST maintain clear attribution in your analysis:
+- Identify patterns or themes WITHIN each source
+- Compare/contrast patterns BETWEEN sources when relevant
+- Always specify which source(s) your observations come from
+- Use source labels naturally in your narrative (e.g., "In breakout_1, participants focused on X, while breakout_2 emphasized Y")
+- If all sources show the same pattern, note this explicitly: "Across all breakouts..."
+- Preserve the differentiation signal - don't blend sources into a homogeneous "the group"
+
+If only ONE source is present, you may refer to "the conversation" or "the group" naturally. But with MULTIPLE sources, maintain their distinctness throughout your analysis.
 """
 
     # 3. Add mode-specific analysis task
