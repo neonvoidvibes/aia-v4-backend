@@ -5,14 +5,15 @@ This module runs specialized analysis agents that:
 1. Use full main chat agent taxonomy (all context layers)
 2. Read selected transcripts based on Settings > Memory
 3. Produce markdown analysis documents for mirror/lens/portal modes
-4. Cache results for fast canvas response times
+4. Store docs in S3 (./agents/_canvas/docs/) + cache for fast responses
 """
 
 import os
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
-from anthropic import Anthropic
+from groq import Groq
 
 from .prompt_builder import prompt_builder
 from .s3_utils import get_s3_client
@@ -25,6 +26,10 @@ CANVAS_ANALYSIS_CACHE: Dict[str, Dict[str, Any]] = {}
 
 # Cache TTL in minutes
 ANALYSIS_CACHE_TTL_MINUTES = 15
+
+# S3 storage configuration
+CANVAS_ANALYSIS_BUCKET = os.getenv("S3_BUCKET_NAME", "aiademomagicaudio")
+CANVAS_ANALYSIS_ORG = os.getenv("S3_ORGANIZATION", "river")
 
 
 def get_analysis_agent_prompt(
@@ -260,6 +265,78 @@ def get_transcript_content_for_analysis(agent_name: str, event_id: str, groups_r
     return combined_content
 
 
+def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str) -> str:
+    """
+    Get S3 key for storing analysis document.
+
+    Format: organizations/{org}/agents/_canvas/docs/{agent}_{event}_{mode}.json
+    """
+    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/_canvas/docs/{agent_name}_{event_id}_{mode}.json"
+
+
+def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str) -> Optional[Dict[str, Any]]:
+    """
+    Load analysis document from S3.
+
+    Returns:
+        Dict with 'content', 'timestamp', 'mode' or None if not found
+    """
+    try:
+        s3_client = get_s3_client()
+        key = get_s3_analysis_doc_key(agent_name, event_id, mode)
+
+        response = s3_client.get_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=key)
+        data = json.loads(response['Body'].read().decode('utf-8'))
+
+        logger.info(f"Loaded {mode} analysis from S3: {key}")
+        return data
+    except s3_client.exceptions.NoSuchKey:
+        logger.info(f"No S3 analysis document found for {agent_name}/{event_id}/{mode}")
+        return None
+    except Exception as e:
+        logger.error(f"Error loading analysis from S3: {e}", exc_info=True)
+        return None
+
+
+def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: str) -> bool:
+    """
+    Save analysis document to S3.
+
+    Args:
+        agent_name: Agent name
+        event_id: Event ID
+        mode: Analysis mode (mirror/lens/portal)
+        content: Analysis document markdown content
+
+    Returns:
+        True if saved successfully, False otherwise
+    """
+    try:
+        s3_client = get_s3_client()
+        key = get_s3_analysis_doc_key(agent_name, event_id, mode)
+
+        data = {
+            'content': content,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'mode': mode,
+            'agent': agent_name,
+            'event': event_id
+        }
+
+        s3_client.put_object(
+            Bucket=CANVAS_ANALYSIS_BUCKET,
+            Key=key,
+            Body=json.dumps(data, ensure_ascii=False).encode('utf-8'),
+            ContentType='application/json'
+        )
+
+        logger.info(f"Saved {mode} analysis to S3: {key}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving analysis to S3: {e}", exc_info=True)
+        return False
+
+
 def run_analysis_agent(
     agent_name: str,
     event_id: str,
@@ -268,10 +345,11 @@ def run_analysis_agent(
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
     personal_event_id: Optional[str] = None,
-    anthropic_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None
 ) -> Optional[str]:
     """
     Run a single analysis agent to generate mode-specific analysis document.
+    Uses Groq with gpt-oss-120b model.
 
     Args:
         agent_name: Agent name
@@ -281,7 +359,7 @@ def run_analysis_agent(
         event_type: Event type
         personal_layer: Personal agent layer
         personal_event_id: Personal event ID
-        anthropic_api_key: API key (defaults to env)
+        groq_api_key: Groq API key (defaults to env)
 
     Returns:
         Analysis document markdown or None on error
@@ -300,44 +378,41 @@ def run_analysis_agent(
     )
 
     # Get API key
-    if not anthropic_api_key:
+    if not groq_api_key:
         from .api_key_manager import get_api_key
-        anthropic_api_key = get_api_key(agent_name, 'anthropic')
+        groq_api_key = get_api_key(agent_name, 'groq')
 
-    if not anthropic_api_key:
-        logger.error(f"No Anthropic API key available for analysis agent")
+    if not groq_api_key:
+        logger.error(f"No Groq API key available for analysis agent")
         return None
 
-    # Initialize Anthropic client
+    # Initialize Groq client
     try:
-        client = Anthropic(api_key=anthropic_api_key)
+        client = Groq(api_key=groq_api_key)
     except Exception as e:
-        logger.error(f"Failed to initialize Anthropic client: {e}", exc_info=True)
+        logger.error(f"Failed to initialize Groq client: {e}", exc_info=True)
         return None
 
-    # Call LLM for analysis
+    # Call Groq LLM for analysis
     try:
-        model = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
-        logger.info(f"Calling Anthropic API for {mode} analysis (model: {model})")
+        model = "openai/gpt-oss-120b"  # Groq model for canvas analysis
+        logger.info(f"Calling Groq API for {mode} analysis (model: {model})")
 
-        response = client.messages.create(
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Please analyze the transcript(s) and produce the {mode} mode analysis document as instructed."}
+        ]
+
+        response = client.chat.completions.create(
             model=model,
+            messages=messages,
             max_tokens=4096,
             temperature=0.7,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Please analyze the transcript(s) and produce the {mode} mode analysis document as instructed."
-                }
-            ]
+            stream=False
         )
 
-        # Extract text from response
-        analysis_doc = ""
-        for block in response.content:
-            if hasattr(block, 'text'):
-                analysis_doc += block.text
+        # Extract content from response
+        analysis_doc = response.choices[0].message.content
 
         if not analysis_doc:
             logger.error(f"Empty analysis document returned for {mode} mode")
@@ -363,6 +438,7 @@ def get_or_generate_analysis_doc(
 ) -> Optional[str]:
     """
     Get analysis document for the specified mode, generating if needed.
+    Uses hybrid storage: Memory cache → S3 → Generate new
 
     Args:
         agent_name: Agent name
@@ -386,12 +462,40 @@ def get_or_generate_analysis_doc(
         age_minutes = age_seconds / 60
 
         if age_minutes < ANALYSIS_CACHE_TTL_MINUTES:
-            logger.info(f"Using cached {depth_mode} analysis for {agent_name}/{event_id} (age: {age_minutes:.1f}m)")
+            logger.info(f"Using memory cached {depth_mode} analysis for {agent_name}/{event_id} (age: {age_minutes:.1f}m)")
             return cached['doc']
         else:
-            logger.info(f"Cached {depth_mode} analysis expired (age: {age_minutes:.1f}m), regenerating")
+            logger.info(f"Memory cached {depth_mode} analysis expired (age: {age_minutes:.1f}m)")
 
-    # 2. Generate new analysis
+    # 2. Check S3 storage (unless forced refresh)
+    if not force_refresh:
+        s3_doc_data = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
+        if s3_doc_data:
+            # Check if S3 doc is fresh enough (within TTL)
+            try:
+                s3_timestamp = datetime.fromisoformat(s3_doc_data['timestamp'])
+                age_seconds = (datetime.now(timezone.utc) - s3_timestamp).total_seconds()
+                age_minutes = age_seconds / 60
+
+                if age_minutes < ANALYSIS_CACHE_TTL_MINUTES:
+                    logger.info(f"Using S3 cached {depth_mode} analysis for {agent_name}/{event_id} (age: {age_minutes:.1f}m)")
+
+                    # Restore to memory cache
+                    CANVAS_ANALYSIS_CACHE[cache_key] = {
+                        'doc': s3_doc_data['content'],
+                        'timestamp': s3_timestamp,
+                        'mode': depth_mode,
+                        'agent': agent_name,
+                        'event': event_id
+                    }
+
+                    return s3_doc_data['content']
+                else:
+                    logger.info(f"S3 cached {depth_mode} analysis expired (age: {age_minutes:.1f}m)")
+            except Exception as e:
+                logger.warning(f"Error parsing S3 timestamp: {e}")
+
+    # 3. Generate new analysis
     logger.info(f"Generating fresh {depth_mode} analysis for {agent_name}/{event_id}")
 
     # Get transcript content based on Settings > Memory
@@ -416,7 +520,10 @@ def get_or_generate_analysis_doc(
         logger.error(f"Failed to generate {depth_mode} analysis")
         return None
 
-    # 3. Cache result
+    # 4. Save to S3
+    save_analysis_doc_to_s3(agent_name, event_id, depth_mode, analysis_doc)
+
+    # 5. Cache result in memory
     CANVAS_ANALYSIS_CACHE[cache_key] = {
         'doc': analysis_doc,
         'timestamp': datetime.now(timezone.utc),
@@ -425,13 +532,14 @@ def get_or_generate_analysis_doc(
         'event': event_id
     }
 
-    logger.info(f"Cached {depth_mode} analysis for {agent_name}/{event_id}")
+    logger.info(f"Cached {depth_mode} analysis in memory and S3 for {agent_name}/{event_id}")
     return analysis_doc
 
 
 def get_analysis_status(agent_name: str, event_id: str, depth_mode: str) -> Dict[str, Any]:
     """
     Get status of analysis document for UI display.
+    Checks both memory cache and S3 storage.
 
     Args:
         agent_name: Agent name
@@ -443,20 +551,35 @@ def get_analysis_status(agent_name: str, event_id: str, depth_mode: str) -> Dict
     """
     cache_key = f"{agent_name}_{event_id}_{depth_mode}"
 
-    if cache_key not in CANVAS_ANALYSIS_CACHE:
-        return {'state': 'none'}
+    # Check memory cache first
+    if cache_key in CANVAS_ANALYSIS_CACHE:
+        cached = CANVAS_ANALYSIS_CACHE[cache_key]
+        age_seconds = (datetime.now(timezone.utc) - cached['timestamp']).total_seconds()
+        age_minutes = age_seconds / 60
 
-    cached = CANVAS_ANALYSIS_CACHE[cache_key]
-    age_seconds = (datetime.now(timezone.utc) - cached['timestamp']).total_seconds()
-    age_minutes = age_seconds / 60
+        if age_minutes < ANALYSIS_CACHE_TTL_MINUTES:
+            return {
+                'state': 'ready',
+                'timestamp': cached['timestamp'].isoformat()
+            }
 
-    if age_minutes >= ANALYSIS_CACHE_TTL_MINUTES:
-        return {'state': 'none'}  # Expired
+    # Check S3 storage
+    s3_doc_data = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
+    if s3_doc_data:
+        try:
+            s3_timestamp = datetime.fromisoformat(s3_doc_data['timestamp'])
+            age_seconds = (datetime.now(timezone.utc) - s3_timestamp).total_seconds()
+            age_minutes = age_seconds / 60
 
-    return {
-        'state': 'ready',
-        'timestamp': cached['timestamp'].isoformat()
-    }
+            if age_minutes < ANALYSIS_CACHE_TTL_MINUTES:
+                return {
+                    'state': 'ready',
+                    'timestamp': s3_timestamp.isoformat()
+                }
+        except Exception as e:
+            logger.warning(f"Error parsing S3 timestamp for status: {e}")
+
+    return {'state': 'none'}
 
 
 def invalidate_analysis_cache(agent_name: str, event_id: str, depth_mode: Optional[str] = None):
