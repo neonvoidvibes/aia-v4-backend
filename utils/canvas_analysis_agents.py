@@ -256,7 +256,8 @@ def get_transcript_content_for_analysis(
     agent_name: str,
     event_id: str,
     transcript_listen_mode: str = 'latest',
-    groups_read_mode: str = 'none'
+    groups_read_mode: str = 'none',
+    individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None
 ) -> Optional[str]:
     """
     Get transcript content based on Settings > Memory configuration.
@@ -269,6 +270,7 @@ def get_transcript_content_for_analysis(
         event_id: Event ID (typically '0000' for canvas)
         transcript_listen_mode: 'none' | 'latest' | 'some' | 'all' (for event's own transcripts)
         groups_read_mode: 'none' | 'latest' | 'all' | 'breakout' (for group events)
+        individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode filtering
 
     Returns:
         Combined transcript content or None
@@ -298,17 +300,23 @@ def get_transcript_content_for_analysis(
                         logger.warning(f"Failed to get latest transcript metadata: {e}")
 
         elif transcript_listen_mode == 'some':
-            # For canvas analysis, 'some' mode (user-selected files) is treated as 'all'
-            # Canvas analysis is pre-generated and cached, not per-request like chat
-            # So we provide access to all transcripts for comprehensive analysis
-            logger.info(f"Canvas analysis: treating 'some' mode as 'all' for comprehensive coverage")
-            transcript_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/events/{event_id}/transcripts/"
-            all_files_meta = list_s3_objects_metadata(transcript_prefix)
-            relevant_transcripts_meta = [
-                f for f in all_files_meta
-                if not os.path.basename(f['Key']).startswith('rolling-') and f['Key'].endswith('.txt')
-            ]
-            logger.info(f"Found {len(relevant_transcripts_meta)} transcripts in 'some' mode (treated as all)")
+            # Filter to only user-toggled transcript files (mirrors api_server.py:5671-5676)
+            if not individual_raw_transcript_toggle_states:
+                logger.warning(f"'some' mode requested but no toggle states provided, defaulting to empty")
+                relevant_transcripts_meta = []
+            else:
+                # Get all files from S3 to match against toggle states
+                transcript_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/events/{event_id}/transcripts/"
+                all_files_meta = list_s3_objects_metadata(transcript_prefix)
+
+                # Filter to only files that are toggled on
+                relevant_transcripts_meta = [
+                    f for f in all_files_meta
+                    if not os.path.basename(f['Key']).startswith('rolling-')
+                    and f['Key'].endswith('.txt')
+                    and individual_raw_transcript_toggle_states.get(f['Key'], False)
+                ]
+                logger.info(f"Found {len(relevant_transcripts_meta)} toggled transcripts in 'some' mode (out of {len(all_files_meta)} total)")
 
         elif transcript_listen_mode == 'all':
             # Read all transcripts from event folder
@@ -637,6 +645,7 @@ def get_or_generate_analysis_doc(
     clear_previous: bool = False,
     transcript_listen_mode: str = 'latest',
     groups_read_mode: str = 'none',
+    individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
     personal_event_id: Optional[str] = None
@@ -653,6 +662,7 @@ def get_or_generate_analysis_doc(
         clear_previous: If True, delete previous analysis (new meeting/context)
         transcript_listen_mode: Listen mode for event's own transcripts (none/latest/some/all)
         groups_read_mode: Groups read mode from settings (none/latest/all/breakout)
+        individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode filtering
         event_type: Event type
         personal_layer: Personal agent layer
         personal_event_id: Personal event ID
@@ -710,7 +720,8 @@ def get_or_generate_analysis_doc(
         agent_name=agent_name,
         event_id=event_id,
         transcript_listen_mode=transcript_listen_mode,
-        groups_read_mode=groups_read_mode
+        groups_read_mode=groups_read_mode,
+        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states
     )
 
     if not transcript_content:

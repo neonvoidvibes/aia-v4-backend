@@ -177,6 +177,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         client_timezone = data.get('timezone', 'UTC')  # Client timezone
         force_refresh_analysis = data.get('forceRefreshAnalysis', False)  # Manual refresh button
         clear_previous_analysis = data.get('clearPrevious', False)  # Clear previous on new context
+        individual_raw_transcript_toggle_states = data.get('individualRawTranscriptToggleStates', {})  # For "some" mode
         event_id = '0000'  # Canvas always uses event 0000
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
         temperature = 0.7
@@ -230,6 +231,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         clear_previous=clear_previous_analysis,
                         transcript_listen_mode=transcript_listen_mode,
                         groups_read_mode=groups_read_mode,
+                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                         event_type='shared',  # Canvas typically uses shared context
                         personal_layer=None,  # Canvas doesn't use personal layers for now
                         personal_event_id=None
@@ -397,6 +399,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             data = g.get('json_data', {})
             agent_name = data.get('agent')
             clear_previous = data.get('clearPrevious', False)  # Clear previous on new context
+            individual_raw_transcript_toggle_states = data.get('individualRawTranscriptToggleStates', {})  # For "some" mode
             event_id = '0000'
 
             if not agent_name:
@@ -431,6 +434,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         clear_previous=clear_previous,  # Clear previous if requested
                         transcript_listen_mode=transcript_listen_mode,
                         groups_read_mode=groups_read_mode,
+                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                         event_type='shared',
                         personal_layer=None,
                         personal_event_id=None
