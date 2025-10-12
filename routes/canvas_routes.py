@@ -12,7 +12,7 @@ from flask import jsonify, Response, stream_with_context, g
 from gotrue.types import User as SupabaseUser
 from anthropic import Anthropic, AnthropicError
 from tenacity import RetryError
-from utils.s3_utils import get_cached_s3_file, find_file_any_extension
+from utils.s3_utils import get_cached_s3_file, find_file_any_extension, get_objective_function
 from utils.api_key_manager import get_api_key
 from utils.canvas_analysis_agents import get_or_generate_analysis_doc, get_analysis_status
 
@@ -54,7 +54,16 @@ def get_canvas_base_and_depth_prompt(depth_mode: str) -> str:
     """
     # Canvas Base: Universal rules for all canvas interactions
     canvas_base = """=== CANVAS BASE ===
-You are responding on a visual canvas interface using voice input.
+You are a specialized canvas agent responding on a visual interface using voice input.
+
+YOUR ROLE:
+You draw on multiple foundational sources to provide focused, contextual responses:
+- OBJECTIVE FUNCTION: Your core purpose and strategic direction
+- AGENT CONTEXT: Your specific domain expertise and personality
+- ANALYSIS DOCUMENTS: Pre-analyzed insights from transcripts (when available)
+- MODE INSTRUCTIONS: How to respond in your current mode (mirror/lens/portal)
+
+Integrate these sources naturally - you're not just answering questions, you're serving the objective while staying true to your agent identity and the current analytical mode.
 
 CORE RULES (apply to ALL responses):
 - Keep responses extremely short: 1-3 sentences maximum
@@ -238,9 +247,21 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                     previous_analysis_doc = None
 
                 # Build canvas system prompt (lightweight, NO full taxonomy)
-                # Structure: Canvas Base + MLP Depth + Analysis Doc (if available) + Agent-Specific + Time
+                # Structure: Canvas Base + MLP Depth + Objective Function + Analysis Doc (if available) + Agent-Specific + Time
                 canvas_base_and_depth = get_canvas_base_and_depth_prompt(depth_mode)
                 agent_specific = get_agent_specific_prompt_only(agent_name)
+
+                # Load objective function (agent-specific or global fallback)
+                objective_function = None
+                try:
+                    objective_function = get_objective_function(agent_name) or get_objective_function(None)
+                    if objective_function:
+                        logger.info(f"Canvas: Loaded objective function for '{agent_name}' ({len(objective_function)} chars)")
+                    else:
+                        logger.info(f"Canvas: No objective function found for '{agent_name}'")
+                except Exception as obj_err:
+                    logger.warning(f"Error loading objective function for canvas: {obj_err}")
+                    objective_function = None
 
                 # Add current time in user's timezone
                 try:
@@ -255,8 +276,12 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 time_section = f"\n\n=== CURRENT TIME ===\nCurrent date and time: {current_user_time_str} (user's local timezone: {client_timezone})\n=== END CURRENT TIME ==="
 
-                # Combine: Canvas Base + Depth + Analysis Docs (previous + current) + Agent + Time
+                # Combine: Canvas Base + Depth + Objective + Analysis Docs (previous + current) + Agent + Time
                 system_prompt = canvas_base_and_depth
+
+                # Insert objective function if available
+                if objective_function:
+                    system_prompt += f"\n\n=== OBJECTIVE FUNCTION ===\n{objective_function}\n=== END OBJECTIVE FUNCTION ==="
 
                 # Insert previous analysis document if available
                 if previous_analysis_doc:
@@ -273,13 +298,23 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 # Add time
                 system_prompt += time_section
 
+                # Build prompt type description for logging
+                prompt_components = ["base", "depth"]
+                if objective_function:
+                    prompt_components.append("objective")
+
                 analysis_status = []
                 if previous_analysis_doc:
                     analysis_status.append("previous")
                 if current_analysis_doc:
                     analysis_status.append("current")
-                analysis_str = "+".join(analysis_status) if analysis_status else "none"
-                prompt_type = f"base+depth+analysis({analysis_str})+agent+time"
+                if analysis_status:
+                    prompt_components.append(f"analysis({'+'.join(analysis_status)})")
+                else:
+                    prompt_components.append("analysis(none)")
+
+                prompt_components.extend(["agent", "time"])
+                prompt_type = "+".join(prompt_components)
                 logger.info(f"Canvas system prompt built: {len(system_prompt)} chars ({prompt_type})")
 
                 # Build messages with conversation history
