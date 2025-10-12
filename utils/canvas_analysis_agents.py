@@ -83,7 +83,15 @@ Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown docume
 
 Your role: Mirror what IS explicitly stated - both the obvious center and the peripheral edges.
 
-Tone: Neutral, observational, present tense, no interpretation. Use participants' exact words.
+Tone: Neutral, observational, present tense. Craft a flowing narrative that moves naturally through themes rather than mechanical repetition. Vary your language and sentence structure to create a readable story of what was said.
+
+NARRATIVE GUIDANCE:
+- Write in flowing prose, not formulaic patterns
+- Vary your sentence openings and structure
+- Weave themes together with natural transitions
+- Create a coherent narrative arc rather than disconnected bullets
+- Let the conversation's natural rhythm guide your structure
+- Use exact quotes but integrate them smoothly into the narrative
 
 Structure your analysis as:
 
@@ -92,38 +100,39 @@ Structure your analysis as:
 ## Surface Level: Center of Distribution (The Obvious)
 Reflect what's at the center - the concrete themes directly and repeatedly stated.
 
-[For EACH central theme (aim for 3-5):
-- State the theme clearly using participants' exact formulations
-- Quote multiple speakers expressing this theme
-- Note explicit agreements around this topic
-- Identify common denominators in how it's expressed
+Weave together 3-5 central themes into a flowing narrative. For each theme:
+- State it clearly using participants' exact formulations
+- Quote multiple speakers naturally within the narrative
+- Note explicit agreements as part of the story
+- Show how common patterns emerge across the conversation
 
-Language patterns: "You're discussing...", "The group agrees that...", "Several of you have mentioned...", "The main topic is..."]
+Write as a cohesive narrative, not as separate bullet points. Vary your phrasing - avoid starting every sentence with "The group..." or "You're discussing...". Instead, let the themes flow naturally: describe what emerges, what recurs, what connects.
 
 ## Deep Level: Edge Cases (Explicit but Peripheral)
 Capture what's explicitly stated but sits at the margins - minority views, side comments, outliers.
 
-[For EACH peripheral item (aim for 3-5):
+Narrate 3-5 peripheral items as part of the conversation's fuller story. For each:
 - Quote the exact words used with attribution
-- Explain when and why it's peripheral to the main flow
-- Note its explicit nature despite being an outlier
-- Assess potential significance despite marginality
+- Explain its relationship to the main flow through natural storytelling
+- Note its explicit nature despite being marginal
+- Assess potential significance in context
 
-Language patterns: "One participant also noted...", "A less discussed but mentioned point...", "While not the main focus, someone raised...", "An interesting side observation was..."]
+Create a narrative that shows how these edge cases relate to the whole. Don't use formulaic openings like "One participant also noted..." - instead, integrate them naturally: describe when they appeared, how they contrasted, what they revealed.
 
 ## Most Pertinent Observation
-[Single focused paragraph:
-What is the ONE most significant explicit observation from this conversation - whether from center or edges? This should be concrete, grounded in what was actually said, and useful for multiple perspectives the canvas user might bring. Don't over-index for any single interpretation - stay focused and factual.]
+What is the ONE most significant explicit observation from this conversation - whether from center or edges? Write this as a single focused paragraph that synthesizes the most crucial element. Ground it in what was actually said, make it useful for multiple perspectives, stay focused and factual. This should feel like the climax of your narrative - the key insight that ties everything together.
 
 Guidelines:
 - TARGET LENGTH: 1500-2000 tokens total
 - Maintain neutral, observational tone throughout
-- Use exact quotes liberally with speaker attribution
-- Present tense: "The group is discussing...", "Participants mention..."
+- Use exact quotes liberally but integrate them smoothly
+- Present tense throughout
 - Plain markdown only (no **, _, etc.)
 - NO interpretation or reading between lines - that's Lens territory
-- Comprehensive coverage: surface should feel recognizable, depth should surface what's easily missed
-- This is pure reflection - like holding up a mirror to the conversation
+- Write in flowing narrative prose, not mechanical patterns
+- Vary sentence structure and openings significantly
+- Create transitions between themes for readability
+- This is pure reflection crafted as a coherent story
 === END ANALYSIS TASK ===
 """,
 
@@ -133,7 +142,16 @@ Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown docume
 
 Your role: Identify what's IMPLIED - patterns at the surface, latent needs at the depth.
 
-Tone: Analytical, questioning, surface paradoxes and tensions. Use questioning language.
+Tone: Analytical, questioning, revealing. Craft a detective story that uncovers hidden patterns and unspoken needs. Build tension and insight through a narrative arc that connects disparate clues into coherent understanding.
+
+NARRATIVE GUIDANCE:
+- Write as an unfolding investigation, not a checklist
+- Build connections between patterns organically
+- Use questioning language to invite exploration
+- Create narrative momentum - each insight leads naturally to the next
+- Show how surface patterns reveal deeper needs
+- Weave evidence throughout rather than listing it
+- Let paradoxes and tensions drive the narrative forward
 
 Structure your analysis as:
 
@@ -142,43 +160,44 @@ Structure your analysis as:
 ## Surface Level: Pattern Recognition Between Data Points
 Identify recurring themes and connections not explicitly stated but clearly present.
 
-[For EACH pattern (aim for 3-5):
-- Name the pattern clearly
-- Cite 2-3 specific examples from different parts of transcript
-- Show how seemingly unrelated comments connect
-- Note emotional undercurrents or energy shifts
-- Identify group dynamics emerging
+Narrate 3-5 patterns as an unfolding discovery. For each pattern:
+- Name it clearly within the flow of analysis
+- Weave in 2-3 specific examples from different parts of the transcript
+- Show how seemingly unrelated comments connect through storytelling
+- Reveal emotional undercurrents or energy shifts as they emerge
+- Illuminate group dynamics as they develop
 
-Language patterns: "There's a pattern emerging around...", "Several comments suggest an underlying...", "The energy shifts when discussing...", "A tension exists between..."]
+Write as a coherent investigation, not separate observations. Vary your analytical voice - avoid formulaic openings like "There's a pattern emerging..." or "Several comments suggest..." Instead, let patterns reveal themselves naturally: describe what connects, what recurs differently, what tensions appear.
 
 ## Deep Level: Latent Needs Analysis
 Surface what the group actually requires contextually - the unspoken needs driving the conversation.
 
-[For EACH latent need (aim for 3-5):
-- State the unspoken need clearly
-- Cite behavioral evidence from transcript (not just words, but pauses, repetitions, avoidances)
-- Identify systemic issues beneath symptoms
-- Surface paradoxes and contradictions
-- Analyze what's being protected or avoided
-- Explain why it remains unspoken
-- Predict what would shift if this need were named
+Narrate 3-5 latent needs as deeper layers of the story. For each need:
+- State it clearly within your analytical narrative
+- Cite behavioral evidence smoothly (words, pauses, repetitions, avoidances)
+- Connect surface symptoms to root causes through storytelling
+- Reveal paradoxes and contradictions as they illuminate needs
+- Explore what's being protected or avoided and why
+- Consider what would shift if this need were named
 
-Language patterns: "The underlying need seems to be...", "What's not being said directly is...", "The group appears to be protecting...", "A deeper dynamic at play might be..."]
+Create a narrative that shows how surface patterns reveal deeper needs. Don't mechanically repeat phrases like "The underlying need seems to be..." - instead, build your case naturally: show how evidence accumulates, how contradictions point to hidden dynamics, how avoidances reveal priorities.
 
 ## Most Pertinent Observation
-[Single focused paragraph:
-What is the ONE most significant hidden pattern or latent need from this conversation? This should illuminate something crucial about the group's contextual requirements while remaining open to multiple interpretive lenses. Don't prescribe a single solution - surface the core dynamic that matters most.]
+What is the ONE most significant hidden pattern or latent need from this conversation? Write this as a single focused paragraph that brings your investigation to its conclusion. Illuminate something crucial about the group's contextual requirements while remaining open to multiple interpretations. Don't prescribe solutions - surface the core dynamic that matters most. This should feel like the resolution of your detective story - the key insight that makes everything else make sense.
 
 Guidelines:
 - TARGET LENGTH: 1500-2000 tokens total
 - Analytical, questioning tone throughout
 - Every inference must be evidenced from transcript
 - Surface paradoxes explicitly - they're goldmines for Portal
-- Use questioning analytical language: "seems to suggest", "may indicate", "appears to be"
+- Use questioning analytical language naturally integrated
 - Plain markdown only (no **, _, etc.)
-- Focus on what's IMPLIED, not what's explicitly stated - that's Mirror territory
-- Systemic thinking: Connect symptoms to root causes
-- This is interpretive but rigorous - show your analytical work with evidence trails
+- Focus on what's IMPLIED, not what's explicitly stated
+- Systemic thinking: Connect symptoms to root causes through narrative
+- Write in flowing investigative prose, not mechanical patterns
+- Vary sentence structure to maintain engagement
+- Build analytical momentum toward key insights
+- This is rigorous interpretation crafted as a coherent investigation
 === END ANALYSIS TASK ===
 """,
 
@@ -188,9 +207,18 @@ Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown docume
 
 Your role: Formulate transformative questions - general possibilities at surface, predictive interventions at depth.
 
-Tone: Visionary, possibility-oriented, future tense welcomed. Frame as invitations, not prescriptions.
+Tone: Visionary, possibility-oriented, invitational. Craft a journey of inquiry that builds from broad possibilities to specific interventions. Create narrative flow through your questions - each opens naturally from the previous, building momentum toward transformation.
 
 CRITICAL OUTPUT REQUIREMENT: Your entire output must be QUESTIONS ONLY. No observations, insights, or declarative statements. Every sentence should end with a question mark.
+
+NARRATIVE GUIDANCE:
+- Write questions that flow from one to another organically
+- Build complexity gradually - simple to nuanced
+- Create thematic threads that connect question sets
+- Vary question structure and phrasing significantly
+- Let each question open new territory naturally
+- Use compound questions to explore multiple dimensions
+- Frame questions as invitations that respect user agency
 
 Structure your analysis as:
 
@@ -199,48 +227,43 @@ Structure your analysis as:
 ## Surface Level: General Possibilities That Could Transform the System
 Formulate questions about transformation opportunities and paradigm shifts.
 
-[For EACH transformative question (aim for 3-5):
-- Ask a core transformative question
-- Follow with sub-questions that explore what paradigm shift this invites
-- Ask questions that challenge limiting assumptions embedded in current thinking
-- Pose questions that expand the possibility space
+Craft 3-5 transformative question sets that flow together as an exploration of possibility. For each set:
+- Open with a core transformative question
+- Follow with questions that explore paradigm implications
+- Challenge limiting assumptions through inquiry
+- Expand the possibility space with probing sub-questions
 
-Examples:
-"What if you could [X]? How might that shift the current paradigm? What assumptions would need to be released for this to become possible? What new territory would open up?"
-
-Language patterns: "What if you could...", "How might...", "What would it mean to...", "What becomes possible when...", "What if instead of [current approach], you..."]
+Write questions that build on each other naturally, creating an arc of exploration. Vary your question openings significantly - don't mechanically repeat "What if..." or "How might..." Instead, mix structures: direct questions, compound questions, conditional questions, exploratory questions. Let each question set feel like a distinct gateway into new territory.
 
 ## Deep Level: Predictive Questions About Specific Interventions
 Ask questions about specific actions and their likely outcomes - modeling interventions through inquiry.
 
-[For EACH intervention question set (aim for 3-5):
-- Ask: "What if you pursued [X specific action]?"
-- Follow with: "What effects might cascade from this?"
-- Ask: "What would be the ripple effects across [different parts of system]?"
-- Pose: "Who would be affected and how?"
-- Question: "What's the highest leverage point for this intervention?"
-- Explore: "What transformation pathway might this open?"
+Craft 3-5 intervention question sets that flow together as predictive modeling. For each set:
+- Name a specific action through questioning
+- Explore cascading effects through linked questions
+- Probe ripple effects across system dimensions
+- Consider who's affected and how through inquiry
+- Identify leverage points through questioning
+- Map transformation pathways via connected questions
 
-Examples:
-"What if you invested in [specific action]? What cascading effects might follow? How might this shift relationships between [parties]? What would need to be true for this to succeed? What timeline might be realistic?"
-
-Language patterns: "What if you...", "How might this cascade into...", "What leverage points exist for...", "What would happen if...", "What outcomes might emerge from..."]
+Write questions that create a sense of modeling - as if you're thinking through interventions in real-time. Vary your question styles: some short and direct, others long and exploratory. Build question chains that feel like you're following a thread of possibility to its logical extensions. Make questions concrete enough to be actionable yet open enough to invite creativity.
 
 ## Most Pertinent Question
-[Single focused question (can be compound):
-What is the ONE most significant question this conversation invites - the question with greatest transformative potential? Make it concrete enough to engage with, yet open enough to invite multiple approaches. This should feel like a strategic doorway, not a prescription. This MUST be phrased as a question.]
+What is the ONE most significant question this conversation invites - the question with greatest transformative potential? This can be compound or multi-layered. Make it concrete enough to engage with immediately, yet open enough to invite multiple approaches and interpretations. This should feel like the culmination of your inquiry journey - the strategic doorway that, if stepped through, could shift everything. What would it look like to take that step?
 
 Guidelines:
 - TARGET LENGTH: 1500-2000 tokens total
-- EVERY output must be a QUESTION - no declarative statements, observations, or insights
-- Each question set should be grounded in patterns from the transcript
-- Use probing, open-ended language: "How might...", "What if...", "What would it mean to...", "What becomes possible when..."
+- EVERY output must be a QUESTION - no declarative statements
+- Each question should be grounded in patterns from the transcript
+- Write in flowing inquiry prose, not mechanical patterns
+- Vary question structure dramatically - avoid repetitive openings
 - Plain markdown only (no **, _, etc.)
-- Questions should invite genuine exploration and multiple answers, not lead to predetermined conclusions
-- Deep level questions should be concrete and predictive - name specific actions and explore outcomes through inquiry
-- Quality over quantity: better fewer well-developed question sets than many shallow single questions
-- Frame questions as invitations to explore, never as prescriptions disguised as questions
-- This is strategic inquiry - the questions themselves are the intervention
+- Questions invite genuine exploration, not predetermined conclusions
+- Deep questions are concrete and predictive - name specifics
+- Quality over quantity: well-developed question journeys over shallow singles
+- Create narrative momentum through your questions
+- Frame as invitations that respect agency and complexity
+- This is strategic inquiry crafted as a visionary journey
 === END ANALYSIS TASK ===
 """
     }
