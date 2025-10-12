@@ -333,7 +333,7 @@ def get_transcript_content_for_analysis(
                 if key:
                     content = read_file_content(key, f"transcript {name}")
                     if content:
-                        transcript_contents.append(f"--- Transcript: {name} ---\n{content}\n--- End Transcript: {name} ---")
+                        transcript_contents.append(f"--- START Transcript Source: {name} ---\n{content}\n--- END Transcript Source: {name} ---")
 
             if transcript_contents:
                 combined = "\n\n".join(transcript_contents)
@@ -364,7 +364,7 @@ def get_transcript_content_for_analysis(
                         logger.info(f"Groups read mode 'latest': fetching from {len(tier3_allow_events)} group events")
                         multi_content, success = read_new_transcript_content_multi(agent_name, list(tier3_allow_events))
                         if success and multi_content:
-                            transcript_parts.append(f"=== GROUP EVENTS TRANSCRIPTS ===\n{multi_content}\n=== END GROUP EVENTS TRANSCRIPTS ===")
+                            transcript_parts.append(f"=== GROUP EVENTS LATEST TRANSCRIPTS ===\n{multi_content}\n=== END GROUP EVENTS LATEST TRANSCRIPTS ===")
                             logger.info(f"Loaded group transcripts: {len(multi_content)} chars")
 
                     elif groups_read_mode == 'all':
@@ -373,11 +373,32 @@ def get_transcript_content_for_analysis(
                         for gid in tier3_allow_events:
                             all_content = read_all_transcripts_in_folder(agent_name, gid)
                             if all_content:
-                                groups_contents.append(f"--- Group {gid} All Transcripts ---\n{all_content}")
+                                groups_contents.append(f"--- Group Event: {gid} ---\n{all_content}")
                         if groups_contents:
-                            combined = "\n\n".join(groups_contents)
-                            transcript_parts.append(f"=== ALL GROUP TRANSCRIPTS ===\n{combined}\n=== END ALL GROUP TRANSCRIPTS ===")
+                            combined = "\n\n--- EVENT SEPARATOR ---\n\n".join(groups_contents)
+                            transcript_parts.append(f"=== ALL GROUP EVENTS TRANSCRIPTS ===\n{combined}\n=== END ALL GROUP EVENTS TRANSCRIPTS ===")
                             logger.info(f"Loaded all group transcripts: {len(combined)} chars")
+
+                    elif groups_read_mode == 'breakout':
+                        # Read all transcripts from breakout events only (excluding visibility_hidden=true)
+                        # Get breakout events for this agent
+                        breakout_rows = client.table("events").select("*").eq("agent_name", agent_name).execute()
+                        breakout_event_ids = [
+                            row['event_id'] for row in breakout_rows.data
+                            if row.get('event_id') != '0000'
+                            and row.get('type', '').lower() == 'breakout'
+                            and not row.get('visibility_hidden', False)
+                        ]
+                        logger.info(f"Groups read mode 'breakout': fetching all transcripts from {len(breakout_event_ids)} breakout events")
+                        breakout_contents = []
+                        for breakout_event_id in breakout_event_ids:
+                            breakout_transcripts = read_all_transcripts_in_folder(agent_name, breakout_event_id)
+                            if breakout_transcripts:
+                                breakout_contents.append(f"--- Breakout Event: {breakout_event_id} ---\n{breakout_transcripts}")
+                        if breakout_contents:
+                            breakout_block = "\n\n--- EVENT SEPARATOR ---\n\n".join(breakout_contents)
+                            transcript_parts.append(f"=== BREAKOUT EVENTS TRANSCRIPTS ===\n{breakout_block}\n=== END BREAKOUT EVENTS TRANSCRIPTS ===")
+                            logger.info(f"Loaded breakout transcripts: {len(breakout_block)} chars")
 
             except Exception as e:
                 logger.error(f"Error fetching group transcripts: {e}", exc_info=True)
