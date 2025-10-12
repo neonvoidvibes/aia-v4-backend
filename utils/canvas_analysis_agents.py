@@ -79,105 +79,186 @@ def get_analysis_agent_prompt(
     analysis_tasks = {
         'mirror': """
 === ANALYSIS TASK: MIRROR MODE (EDGES) ===
-Analyze the transcript(s) and produce a concise markdown document identifying EXPLICIT BUT PERIPHERAL information.
+Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document identifying EXPLICIT BUT PERIPHERAL information.
 
-Focus:
-- Minority viewpoints explicitly voiced
-- Side comments and tangential observations
-- Outlier perspectives mentioned
-- Peripheral but concrete concerns
+Your role is to surface what IS explicitly stated but sits at the margins of the conversation.
+
+Focus areas - explore each in depth:
+- Minority viewpoints explicitly voiced (quote speakers, explain context)
+- Side comments and tangential observations (what was said in passing)
+- Outlier perspectives mentioned (ideas not in the mainstream flow)
+- Peripheral but concrete concerns (worries expressed at the edges)
 
 Structure your analysis as:
 
 # Mirror Analysis: Edge Cases
 
 ## Minority Viewpoints
-[Quote and summarize viewpoints from the periphery]
+[For EACH minority viewpoint found:
+- Quote the exact words used
+- Identify who said it (Speaker 1, Speaker 2, etc.)
+- Explain the context in which it was raised
+- Note why it's peripheral to the main conversation]
 
 ## Tangential Observations
-[Side comments and off-topic insights]
+[For EACH side comment:
+- What was said
+- When in the conversation
+- How it relates (or doesn't) to the main topic
+- Why it's noteworthy despite being off-topic]
 
 ## Outlier Concerns
-[Less central but explicitly stated concerns]
+[For EACH peripheral concern:
+- The specific concern raised
+- Direct quotes supporting it
+- Why it's an outlier
+- Potential significance despite being peripheral]
 
-Rules:
-- Maximum 2000 tokens
-- Use exact quotes where possible
-- Stay grounded in transcript content
-- Plain markdown (no special formatting)
-- If no peripheral content exists, state that clearly and briefly
+## Summary
+[Brief synthesis of the edge landscape - what patterns emerge at the periphery?]
+
+Guidelines:
+- TARGET LENGTH: 1500-2000 tokens - be thorough and comprehensive
+- Use exact quotes liberally with attribution
+- Provide context for each item you surface
+- Stay grounded in transcript content - no speculation
+- Plain markdown only (no special formatting like **, _, etc.)
+- If truly no peripheral content exists, explain what was examined and why nothing qualified
+- This is a serious analytical document - depth and evidence are valued
 === END ANALYSIS TASK ===
 """,
 
         'lens': """
 === ANALYSIS TASK: LENS MODE (LATENT NEEDS) ===
-Analyze the transcript(s) and produce a concise markdown document identifying HIDDEN PATTERNS and UNSPOKEN REQUIREMENTS.
+Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document identifying HIDDEN PATTERNS and UNSPOKEN REQUIREMENTS.
 
-Focus:
-- Recurring themes across speakers
-- Emotional undercurrents and group dynamics
-- Systemic issues beneath surface symptoms
-- Paradoxes and contradictions
-- What's being avoided or protected
+Your role is to identify what the conversation implies about deeper contextual needs - reading between the lines with rigor.
+
+Focus areas - explore each systematically:
+- Recurring themes across different speakers and moments
+- Emotional undercurrents and group dynamics (tension, avoidance, energy shifts)
+- Systemic issues beneath surface symptoms (root causes, not just effects)
+- Paradoxes and contradictions (where words and reality diverge)
+- What's being avoided, protected, or left unsaid
 
 Structure your analysis as:
 
 # Lens Analysis: Latent Needs
 
 ## Hidden Patterns
-[Recurring themes and connections]
+[For EACH pattern identified:
+- Describe the pattern clearly
+- Cite 2-3 specific examples from transcript with quotes
+- Explain what makes this pattern significant
+- Connect to broader themes or needs]
 
 ## Emotional Dynamics
-[Undercurrents and group tensions]
+[For EACH dynamic observed:
+- Name the dynamic (e.g., "tension around resource allocation")
+- Evidence from tone, word choice, silences, repetition
+- Who's involved and how they're positioned
+- What this reveals about unspoken concerns]
 
 ## Systemic Issues
-[Root causes vs symptoms]
+[For EACH systemic issue:
+- The surface symptom being discussed
+- The deeper root cause you're inferring
+- Evidence trail from transcript
+- Why treating symptoms alone won't work]
 
 ## Unspoken Needs
-[What the group actually requires but hasn't articulated]
+[For EACH latent need:
+- What the group actually requires
+- How you know (cite behavioral evidence)
+- Why it remains unspoken
+- What would shift if it were named]
 
-Rules:
-- Maximum 2000 tokens
-- Cite evidence from transcripts
-- Surface paradoxes clearly
-- Plain markdown (no special formatting)
-- Focus on what's implied, not explicit
+## Paradoxes and Contradictions
+[For EACH paradox:
+- State the contradiction clearly
+- Quote evidence of both sides
+- Analyze what this tension reveals
+- Potential resolution paths]
+
+## Synthesis
+[Meta-analysis: What's the deeper story this conversation is telling? What need is most central?]
+
+Guidelines:
+- TARGET LENGTH: 1500-2000 tokens - depth over brevity
+- Every inference must be evidenced from transcript
+- Surface paradoxes explicitly - they're goldmines
+- Use questioning analytical language ("seems to suggest", "may indicate")
+- Plain markdown only (no **, _, etc.)
+- Focus on what's implied, not what's stated directly
+- This is interpretive but rigorous - show your analytical work
 === END ANALYSIS TASK ===
 """,
 
         'portal': """
 === ANALYSIS TASK: PORTAL MODE (EMERGENT QUESTIONS) ===
-Analyze the transcript(s) and produce a concise markdown document framing EMERGENT POSSIBILITIES AS QUESTIONS.
+Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document framing EMERGENT POSSIBILITIES AS QUESTIONS.
 
-Focus:
-- Questions that challenge limiting assumptions
-- Questions identifying transformation opportunities
-- Questions about paradigm shifts
-- Questions predicting intervention outcomes
-- All questions must be traceable to lens-level patterns
+Your role is to open possibility spaces by formulating transformative questions derived from lens-level patterns and paradoxes.
+
+Core principles:
+- Every question must be traceable to evidence (quote the pattern it emerges from)
+- Questions challenge assumptions, not people
+- Frame possibilities as invitations to explore, never prescriptions
+- Questions should be generative - they open space rather than close it
+
+Focus areas - develop each fully:
+- Questions that challenge limiting assumptions embedded in the conversation
+- Questions that identify transformation opportunities from latent needs
+- Questions about paradigm shifts suggested by contradictions
+- Questions predicting intervention outcomes based on patterns
+- Questions that identify leverage points and opportunity windows
 
 Structure your analysis as:
 
 # Portal Analysis: Emergent Questions
 
 ## Transformative Questions
-[Questions that could shift the paradigm]
+[For EACH transformative question (aim for 3-5):
+- State the question clearly
+- Quote the lens-level pattern or paradox it emerges from
+- Explain what shift in thinking this question invites
+- Note what becomes possible if this question is engaged]
 
 ## Assumption Challenges
-[Questions that surface hidden beliefs]
+[For EACH assumption-challenging question (aim for 3-5):
+- State the question
+- Identify the hidden assumption being questioned (with transcript evidence)
+- Explain why this assumption may be limiting
+- Describe the expanded possibility space if the assumption is released]
 
 ## Intervention Pathways
-[Questions exploring "what if we..." scenarios]
+[For EACH "what if we..." question (aim for 3-5):
+- State the question as an intervention possibility
+- Connect to latent needs identified in lens analysis
+- Cite transcript evidence for why this pathway could matter
+- Explore potential outcomes or ripple effects]
 
 ## Opportunity Windows
-[Questions identifying leverage points]
+[For EACH leverage-point question (aim for 3-5):
+- State the question identifying the leverage point
+- Explain why this moment/issue is strategic
+- Quote evidence of readiness or opening
+- Describe what could shift if this window is engaged]
 
-Rules:
-- Maximum 2000 tokens
-- Every question must reference transcript evidence
-- Frame as invitations to explore, not prescriptions
-- Plain markdown (no special formatting)
-- Derive questions from lens-level insights
+## Synthesis Questions
+[2-3 meta-level questions that integrate across the analysis:
+- What's the most generative question this conversation wants to ask?
+- Where's the greatest potential for transformation?
+- What question, if truly engaged, could shift everything?]
+
+Guidelines:
+- TARGET LENGTH: 1500-2000 tokens - develop questions with depth
+- Each question needs its evidence trail from transcript
+- Quality over quantity - better 15 well-developed questions than 30 shallow ones
+- Use probing, open-ended language ("How might...", "What if...", "What would it mean to...")
+- Plain markdown only (no **, _, etc.)
+- Questions should invite genuine exploration, not lead to predetermined answers
+- This is strategic inquiry - the questions themselves are interventions
 === END ANALYSIS TASK ===
 """
     }
@@ -189,7 +270,12 @@ Rules:
     return base_prompt + "\n\n" + transcript_section + "\n\n" + analysis_tasks[mode]
 
 
-def get_transcript_content_for_analysis(agent_name: str, event_id: str, groups_read_mode: str = 'none') -> Optional[str]:
+def get_transcript_content_for_analysis(
+    agent_name: str,
+    event_id: str,
+    transcript_listen_mode: str = 'latest',
+    groups_read_mode: str = 'none'
+) -> Optional[str]:
     """
     Get transcript content based on Settings > Memory configuration.
 
@@ -199,23 +285,67 @@ def get_transcript_content_for_analysis(agent_name: str, event_id: str, groups_r
     Args:
         agent_name: Agent name
         event_id: Event ID (typically '0000' for canvas)
-        groups_read_mode: 'none' | 'latest' | 'all' | 'breakout'
+        transcript_listen_mode: 'none' | 'latest' | 'some' | 'all' (for event's own transcripts)
+        groups_read_mode: 'none' | 'latest' | 'all' | 'breakout' (for group events)
 
     Returns:
         Combined transcript content or None
     """
-    from .transcript_utils import read_new_transcript_content, read_new_transcript_content_multi
+    from .transcript_utils import read_new_transcript_content, read_new_transcript_content_multi, get_latest_transcript_file
+    from .s3_utils import list_s3_objects_metadata, read_file_content
 
     transcript_parts = []
 
-    # 1. Get event's own transcript (latest)
-    logger.info(f"Fetching transcript for analysis: agent={agent_name}, event={event_id}")
-    content, success = read_new_transcript_content(agent_name, event_id)
-    if success and content:
-        transcript_parts.append(f"=== EVENT {event_id} TRANSCRIPT ===\n{content}\n=== END EVENT {event_id} TRANSCRIPT ===")
-        logger.info(f"Loaded event transcript: {len(content)} chars")
-    else:
-        logger.warning(f"No transcript content available for event {event_id}")
+    # 1. Get event's own transcripts based on listen mode (mirrors api_server.py:5649-5710)
+    if transcript_listen_mode != 'none':
+        logger.info(f"Fetching transcripts for analysis: agent={agent_name}, event={event_id}, listen_mode={transcript_listen_mode}")
+
+        relevant_transcripts_meta = []
+
+        if transcript_listen_mode == 'latest':
+            # Read latest transcript only
+            latest_key = get_latest_transcript_file(agent_name, event_id)
+            if latest_key:
+                s3 = get_s3_client()
+                aws_s3_bucket = os.getenv('AWS_S3_BUCKET')
+                if s3 and aws_s3_bucket:
+                    try:
+                        head_obj = s3.head_object(Bucket=aws_s3_bucket, Key=latest_key)
+                        relevant_transcripts_meta.append({'Key': latest_key, 'LastModified': head_obj['LastModified']})
+                    except Exception as e:
+                        logger.warning(f"Failed to get latest transcript metadata: {e}")
+
+        elif transcript_listen_mode == 'all':
+            # Read all transcripts from event folder
+            transcript_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/events/{event_id}/transcripts/"
+            all_files_meta = list_s3_objects_metadata(transcript_prefix)
+            relevant_transcripts_meta = [
+                f for f in all_files_meta
+                if not os.path.basename(f['Key']).startswith('rolling-') and f['Key'].endswith('.txt')
+            ]
+            logger.info(f"Found {len(relevant_transcripts_meta)} transcripts in 'all' mode")
+
+        # Load and combine transcripts
+        if relevant_transcripts_meta:
+            # Sort by date
+            relevant_transcripts_meta.sort(key=lambda x: x.get('LastModified', ''))
+
+            # Collect all transcript contents
+            transcript_contents = []
+            for meta in relevant_transcripts_meta:
+                key = meta.get('Key')
+                name = os.path.basename(key) if key else 'unknown'
+                if key:
+                    content = read_file_content(key, f"transcript {name}")
+                    if content:
+                        transcript_contents.append(f"--- Transcript: {name} ---\n{content}\n--- End Transcript: {name} ---")
+
+            if transcript_contents:
+                combined = "\n\n".join(transcript_contents)
+                transcript_parts.append(f"=== EVENT {event_id} TRANSCRIPTS ===\n{combined}\n=== END EVENT {event_id} TRANSCRIPTS ===")
+                logger.info(f"Loaded {len(transcript_contents)} event transcript(s): {len(combined)} chars")
+        else:
+            logger.warning(f"No transcript content available for event {event_id} in '{transcript_listen_mode}' mode")
 
     # 2. Get group transcripts if enabled (mirrors api_server.py:5713-5746)
     if event_id == '0000' and groups_read_mode != 'none':
@@ -489,6 +619,7 @@ def get_or_generate_analysis_doc(
     depth_mode: str,
     force_refresh: bool = False,
     clear_previous: bool = False,
+    transcript_listen_mode: str = 'latest',
     groups_read_mode: str = 'none',
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
@@ -504,7 +635,8 @@ def get_or_generate_analysis_doc(
         depth_mode: One of 'mirror', 'lens', 'portal'
         force_refresh: If True, bypass cache and regenerate
         clear_previous: If True, delete previous analysis (new meeting/context)
-        groups_read_mode: Groups read mode from settings
+        transcript_listen_mode: Listen mode for event's own transcripts (none/latest/some/all)
+        groups_read_mode: Groups read mode from settings (none/latest/all/breakout)
         event_type: Event type
         personal_layer: Personal agent layer
         personal_event_id: Personal event ID
@@ -558,7 +690,12 @@ def get_or_generate_analysis_doc(
     logger.info(f"Generating fresh {depth_mode} analysis for {agent_name}/{event_id}")
 
     # Get transcript content based on Settings > Memory
-    transcript_content = get_transcript_content_for_analysis(agent_name, event_id, groups_read_mode)
+    transcript_content = get_transcript_content_for_analysis(
+        agent_name=agent_name,
+        event_id=event_id,
+        transcript_listen_mode=transcript_listen_mode,
+        groups_read_mode=groups_read_mode
+    )
 
     if not transcript_content:
         logger.warning(f"No transcript content available for analysis")
