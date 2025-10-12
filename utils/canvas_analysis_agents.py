@@ -12,7 +12,7 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from groq import Groq
 
 from .prompt_builder import prompt_builder
@@ -22,6 +22,7 @@ from .transcript_utils import get_latest_transcript_file, read_all_transcripts_i
 logger = logging.getLogger(__name__)
 
 # In-memory cache for analysis documents
+# Structure: {cache_key: {'current': str, 'previous': str|None, 'timestamp': datetime, ...}}
 CANVAS_ANALYSIS_CACHE: Dict[str, Dict[str, Any]] = {}
 
 # Cache TTL in minutes
@@ -267,13 +268,13 @@ def get_transcript_content_for_analysis(agent_name: str, event_id: str, groups_r
 
 def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str, previous: bool = False) -> str:
     """
-    Get S3 key for storing analysis document.
+    Get S3 key for storing analysis document per agent.
 
-    Format: organizations/{org}/agents/_canvas/docs/{agent}_{event}_{mode}.md
-    Or:     organizations/{org}/agents/_canvas/docs/{agent}_{event}_{mode}_previous.md
+    Format: organizations/{org}/agents/{agent_name}/_canvas/{event}_{mode}.md
+    Or:     organizations/{org}/agents/{agent_name}/_canvas/{event}_{mode}_previous.md
     """
     suffix = "_previous" if previous else ""
-    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/_canvas/docs/{agent_name}_{event_id}_{mode}{suffix}.md"
+    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/{event_id}_{mode}{suffix}.md"
 
 
 def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, previous: bool = False) -> Optional[str]:
@@ -459,9 +460,9 @@ def get_or_generate_analysis_doc(
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
     personal_event_id: Optional[str] = None
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
-    Get analysis document for the specified mode, generating if needed.
+    Get analysis documents (current and previous) for the specified mode, generating if needed.
     Uses hybrid storage: Memory cache → S3 → Generate new
 
     Args:
@@ -475,7 +476,7 @@ def get_or_generate_analysis_doc(
         personal_event_id: Personal event ID
 
     Returns:
-        Analysis document markdown string or None
+        Tuple of (current_doc, previous_doc) - either can be None
     """
     cache_key = f"{agent_name}_{event_id}_{depth_mode}"
 
@@ -487,27 +488,29 @@ def get_or_generate_analysis_doc(
 
         if age_minutes < ANALYSIS_CACHE_TTL_MINUTES:
             logger.info(f"Using memory cached {depth_mode} analysis for {agent_name}/{event_id} (age: {age_minutes:.1f}m)")
-            return cached['doc']
+            return cached['current'], cached.get('previous')
         else:
             logger.info(f"Memory cached {depth_mode} analysis expired (age: {age_minutes:.1f}m)")
 
     # 2. Check S3 storage (unless forced refresh)
     if not force_refresh:
-        s3_content = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
-        if s3_content:
-            # S3 docs are always considered valid (no timestamp check since they're .md files)
-            # Restore to memory cache with current timestamp
+        s3_current = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=False)
+        s3_previous = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=True)
+
+        if s3_current:
+            # S3 docs found - restore to memory cache with current timestamp
             logger.info(f"Using S3 cached {depth_mode} analysis for {agent_name}/{event_id}")
 
             CANVAS_ANALYSIS_CACHE[cache_key] = {
-                'doc': s3_content,
+                'current': s3_current,
+                'previous': s3_previous,
                 'timestamp': datetime.now(timezone.utc),
                 'mode': depth_mode,
                 'agent': agent_name,
                 'event': event_id
             }
 
-            return s3_content
+            return s3_current, s3_previous
 
     # 3. Generate new analysis
     logger.info(f"Generating fresh {depth_mode} analysis for {agent_name}/{event_id}")
@@ -517,10 +520,10 @@ def get_or_generate_analysis_doc(
 
     if not transcript_content:
         logger.warning(f"No transcript content available for analysis")
-        return None
+        return None, None
 
     # Run analysis agent
-    analysis_doc = run_analysis_agent(
+    new_analysis_doc = run_analysis_agent(
         agent_name=agent_name,
         event_id=event_id,
         mode=depth_mode,
@@ -530,24 +533,28 @@ def get_or_generate_analysis_doc(
         personal_event_id=personal_event_id
     )
 
-    if not analysis_doc:
+    if not new_analysis_doc:
         logger.error(f"Failed to generate {depth_mode} analysis")
-        return None
+        return None, None
 
-    # 4. Save to S3
-    save_analysis_doc_to_s3(agent_name, event_id, depth_mode, analysis_doc)
+    # 4. Save to S3 (this moves current to previous automatically)
+    save_analysis_doc_to_s3(agent_name, event_id, depth_mode, new_analysis_doc)
 
-    # 5. Cache result in memory
+    # 5. Load the previous that was just created (what was current before)
+    previous_doc = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=True)
+
+    # 6. Cache result in memory with both current and previous
     CANVAS_ANALYSIS_CACHE[cache_key] = {
-        'doc': analysis_doc,
+        'current': new_analysis_doc,
+        'previous': previous_doc,
         'timestamp': datetime.now(timezone.utc),
         'mode': depth_mode,
         'agent': agent_name,
         'event': event_id
     }
 
-    logger.info(f"Cached {depth_mode} analysis in memory and S3 for {agent_name}/{event_id}")
-    return analysis_doc
+    logger.info(f"Cached {depth_mode} analysis (current + previous) in memory and S3 for {agent_name}/{event_id}")
+    return new_analysis_doc, previous_doc
 
 
 def get_analysis_status(agent_name: str, event_id: str, depth_mode: str) -> Dict[str, Any]:
@@ -578,9 +585,9 @@ def get_analysis_status(agent_name: str, event_id: str, depth_mode: str) -> Dict
             }
 
     # Check S3 storage
-    s3_content = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
-    if s3_content:
-        # S3 docs exist, report as ready (no timestamp available from .md files)
+    s3_current = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=False)
+    if s3_current:
+        # S3 docs exist, report as ready
         return {
             'state': 'ready',
             'timestamp': datetime.now(timezone.utc).isoformat()

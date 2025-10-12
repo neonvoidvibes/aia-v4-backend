@@ -14,7 +14,7 @@ from anthropic import Anthropic, AnthropicError
 from tenacity import RetryError
 from utils.s3_utils import get_cached_s3_file, find_file_any_extension
 from utils.api_key_manager import get_api_key
-from utils.canvas_analysis_agents import get_or_generate_analysis_doc, get_analysis_status, load_analysis_doc_from_s3
+from utils.canvas_analysis_agents import get_or_generate_analysis_doc, get_analysis_status
 
 logger = logging.getLogger(__name__)
 
@@ -208,8 +208,8 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 current_analysis_doc = None
                 previous_analysis_doc = None
                 try:
-                    # Get current analysis (may generate if needed)
-                    current_analysis_doc = get_or_generate_analysis_doc(
+                    # Get both current and previous analysis (may generate if needed)
+                    current_analysis_doc, previous_analysis_doc = get_or_generate_analysis_doc(
                         agent_name=agent_name,
                         event_id=event_id,
                         depth_mode=depth_mode,
@@ -219,9 +219,6 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         personal_layer=None,  # Canvas doesn't use personal layers for now
                         personal_event_id=None
                     )
-
-                    # Try to load previous version for reference
-                    previous_analysis_doc = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=True)
 
                     if current_analysis_doc:
                         logger.info(f"Canvas: Loaded current {depth_mode} analysis ({len(current_analysis_doc)} chars)")
