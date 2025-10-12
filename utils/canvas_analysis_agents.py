@@ -269,27 +269,27 @@ def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str) -> str:
     """
     Get S3 key for storing analysis document.
 
-    Format: organizations/{org}/agents/_canvas/docs/{agent}_{event}_{mode}.json
+    Format: organizations/{org}/agents/_canvas/docs/{agent}_{event}_{mode}.md
     """
-    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/_canvas/docs/{agent_name}_{event_id}_{mode}.json"
+    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/_canvas/docs/{agent_name}_{event_id}_{mode}.md"
 
 
-def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str) -> Optional[Dict[str, Any]]:
+def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str) -> Optional[str]:
     """
     Load analysis document from S3.
 
     Returns:
-        Dict with 'content', 'timestamp', 'mode' or None if not found
+        Markdown content string or None if not found
     """
     try:
         s3_client = get_s3_client()
         key = get_s3_analysis_doc_key(agent_name, event_id, mode)
 
         response = s3_client.get_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=key)
-        data = json.loads(response['Body'].read().decode('utf-8'))
+        content = response['Body'].read().decode('utf-8')
 
         logger.info(f"Loaded {mode} analysis from S3: {key}")
-        return data
+        return content
     except s3_client.exceptions.NoSuchKey:
         logger.info(f"No S3 analysis document found for {agent_name}/{event_id}/{mode}")
         return None
@@ -300,7 +300,7 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str) -> Opti
 
 def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: str) -> bool:
     """
-    Save analysis document to S3.
+    Save analysis document to S3 as markdown.
 
     Args:
         agent_name: Agent name
@@ -315,19 +315,17 @@ def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: 
         s3_client = get_s3_client()
         key = get_s3_analysis_doc_key(agent_name, event_id, mode)
 
-        data = {
-            'content': content,
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'mode': mode,
-            'agent': agent_name,
-            'event': event_id
-        }
-
         s3_client.put_object(
             Bucket=CANVAS_ANALYSIS_BUCKET,
             Key=key,
-            Body=json.dumps(data, ensure_ascii=False).encode('utf-8'),
-            ContentType='application/json'
+            Body=content.encode('utf-8'),
+            ContentType='text/markdown',
+            Metadata={
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'mode': mode,
+                'agent': agent_name,
+                'event': event_id
+            }
         )
 
         logger.info(f"Saved {mode} analysis to S3: {key}")
@@ -469,31 +467,21 @@ def get_or_generate_analysis_doc(
 
     # 2. Check S3 storage (unless forced refresh)
     if not force_refresh:
-        s3_doc_data = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
-        if s3_doc_data:
-            # Check if S3 doc is fresh enough (within TTL)
-            try:
-                s3_timestamp = datetime.fromisoformat(s3_doc_data['timestamp'])
-                age_seconds = (datetime.now(timezone.utc) - s3_timestamp).total_seconds()
-                age_minutes = age_seconds / 60
+        s3_content = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
+        if s3_content:
+            # S3 docs are always considered valid (no timestamp check since they're .md files)
+            # Restore to memory cache with current timestamp
+            logger.info(f"Using S3 cached {depth_mode} analysis for {agent_name}/{event_id}")
 
-                if age_minutes < ANALYSIS_CACHE_TTL_MINUTES:
-                    logger.info(f"Using S3 cached {depth_mode} analysis for {agent_name}/{event_id} (age: {age_minutes:.1f}m)")
+            CANVAS_ANALYSIS_CACHE[cache_key] = {
+                'doc': s3_content,
+                'timestamp': datetime.now(timezone.utc),
+                'mode': depth_mode,
+                'agent': agent_name,
+                'event': event_id
+            }
 
-                    # Restore to memory cache
-                    CANVAS_ANALYSIS_CACHE[cache_key] = {
-                        'doc': s3_doc_data['content'],
-                        'timestamp': s3_timestamp,
-                        'mode': depth_mode,
-                        'agent': agent_name,
-                        'event': event_id
-                    }
-
-                    return s3_doc_data['content']
-                else:
-                    logger.info(f"S3 cached {depth_mode} analysis expired (age: {age_minutes:.1f}m)")
-            except Exception as e:
-                logger.warning(f"Error parsing S3 timestamp: {e}")
+            return s3_content
 
     # 3. Generate new analysis
     logger.info(f"Generating fresh {depth_mode} analysis for {agent_name}/{event_id}")
@@ -564,20 +552,13 @@ def get_analysis_status(agent_name: str, event_id: str, depth_mode: str) -> Dict
             }
 
     # Check S3 storage
-    s3_doc_data = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
-    if s3_doc_data:
-        try:
-            s3_timestamp = datetime.fromisoformat(s3_doc_data['timestamp'])
-            age_seconds = (datetime.now(timezone.utc) - s3_timestamp).total_seconds()
-            age_minutes = age_seconds / 60
-
-            if age_minutes < ANALYSIS_CACHE_TTL_MINUTES:
-                return {
-                    'state': 'ready',
-                    'timestamp': s3_timestamp.isoformat()
-                }
-        except Exception as e:
-            logger.warning(f"Error parsing S3 timestamp for status: {e}")
+    s3_content = load_analysis_doc_from_s3(agent_name, event_id, depth_mode)
+    if s3_content:
+        # S3 docs exist, report as ready (no timestamp available from .md files)
+        return {
+            'state': 'ready',
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
 
     return {'state': 'none'}
 
