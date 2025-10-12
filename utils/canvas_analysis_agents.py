@@ -297,6 +297,19 @@ def get_transcript_content_for_analysis(
                     except Exception as e:
                         logger.warning(f"Failed to get latest transcript metadata: {e}")
 
+        elif transcript_listen_mode == 'some':
+            # For canvas analysis, 'some' mode (user-selected files) is treated as 'all'
+            # Canvas analysis is pre-generated and cached, not per-request like chat
+            # So we provide access to all transcripts for comprehensive analysis
+            logger.info(f"Canvas analysis: treating 'some' mode as 'all' for comprehensive coverage")
+            transcript_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/events/{event_id}/transcripts/"
+            all_files_meta = list_s3_objects_metadata(transcript_prefix)
+            relevant_transcripts_meta = [
+                f for f in all_files_meta
+                if not os.path.basename(f['Key']).startswith('rolling-') and f['Key'].endswith('.txt')
+            ]
+            logger.info(f"Found {len(relevant_transcripts_meta)} transcripts in 'some' mode (treated as all)")
+
         elif transcript_listen_mode == 'all':
             # Read all transcripts from event folder
             transcript_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/events/{event_id}/transcripts/"
