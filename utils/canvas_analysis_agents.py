@@ -309,6 +309,38 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, previou
         return None
 
 
+def delete_previous_analysis(agent_name: str, event_id: str, mode: str) -> bool:
+    """
+    Delete previous analysis document from S3.
+    Used when starting a new meeting/session to clear old context.
+
+    Args:
+        agent_name: Agent name
+        event_id: Event ID
+        mode: Analysis mode (mirror/lens/portal)
+
+    Returns:
+        True if deleted successfully or didn't exist, False on error
+    """
+    try:
+        s3_client = get_s3_client()
+        previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=True)
+
+        try:
+            s3_client.delete_object(
+                Bucket=CANVAS_ANALYSIS_BUCKET,
+                Key=previous_key
+            )
+            logger.info(f"Deleted previous {mode} analysis: {previous_key}")
+        except s3_client.exceptions.NoSuchKey:
+            logger.info(f"No previous {mode} analysis to delete")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting previous analysis: {e}", exc_info=True)
+        return False
+
+
 def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: str) -> bool:
     """
     Save analysis document to S3 as markdown.
@@ -456,6 +488,7 @@ def get_or_generate_analysis_doc(
     event_id: str,
     depth_mode: str,
     force_refresh: bool = False,
+    clear_previous: bool = False,
     groups_read_mode: str = 'none',
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
@@ -470,6 +503,7 @@ def get_or_generate_analysis_doc(
         event_id: Event ID
         depth_mode: One of 'mirror', 'lens', 'portal'
         force_refresh: If True, bypass cache and regenerate
+        clear_previous: If True, delete previous analysis (new meeting/context)
         groups_read_mode: Groups read mode from settings
         event_type: Event type
         personal_layer: Personal agent layer
@@ -479,6 +513,14 @@ def get_or_generate_analysis_doc(
         Tuple of (current_doc, previous_doc) - either can be None
     """
     cache_key = f"{agent_name}_{event_id}_{depth_mode}"
+
+    # Delete previous analysis if requested (new meeting/session context)
+    if clear_previous:
+        logger.info(f"Clearing previous {depth_mode} analysis for {agent_name}/{event_id} (new context)")
+        delete_previous_analysis(agent_name, event_id, depth_mode)
+        # Also clear from memory cache
+        if cache_key in CANVAS_ANALYSIS_CACHE:
+            CANVAS_ANALYSIS_CACHE[cache_key]['previous'] = None
 
     # 1. Check memory cache (unless forced refresh)
     if not force_refresh and cache_key in CANVAS_ANALYSIS_CACHE:

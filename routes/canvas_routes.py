@@ -167,6 +167,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         conversation_history = data.get('history', [])  # Array of {role, content} messages
         client_timezone = data.get('timezone', 'UTC')  # Client timezone
         force_refresh_analysis = data.get('forceRefreshAnalysis', False)  # Manual refresh button
+        clear_previous_analysis = data.get('clearPrevious', False)  # Clear previous on new context
         event_id = '0000'  # Canvas always uses event 0000
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
         temperature = 0.7
@@ -202,7 +203,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         def generate_canvas_stream():
             """Generator for canvas-specific streaming responses."""
             try:
-                logger.info(f"Canvas stream started for Agent: {agent_name}, User: {user.id}, Depth: {depth_mode}, Force refresh: {force_refresh_analysis}")
+                logger.info(f"Canvas stream started for Agent: {agent_name}, User: {user.id}, Depth: {depth_mode}, Force refresh: {force_refresh_analysis}, Clear previous: {clear_previous_analysis}")
 
                 # Get or generate current and previous analysis documents for this mode
                 current_analysis_doc = None
@@ -214,6 +215,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         event_id=event_id,
                         depth_mode=depth_mode,
                         force_refresh=force_refresh_analysis,
+                        clear_previous=clear_previous_analysis,
                         groups_read_mode=groups_read_mode,
                         event_type='shared',  # Canvas typically uses shared context
                         personal_layer=None,  # Canvas doesn't use personal layers for now
@@ -348,6 +350,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         try:
             data = g.get('json_data', {})
             agent_name = data.get('agent')
+            clear_previous = data.get('clearPrevious', False)  # Clear previous on new context
             event_id = '0000'
 
             if not agent_name:
@@ -370,12 +373,13 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             results = {}
             for mode in ['mirror', 'lens', 'portal']:
                 try:
-                    logger.info(f"Refreshing {mode} analysis for {agent_name}")
+                    logger.info(f"Refreshing {mode} analysis for {agent_name} (clear_previous={clear_previous})")
                     doc = get_or_generate_analysis_doc(
                         agent_name=agent_name,
                         event_id=event_id,
                         depth_mode=mode,
                         force_refresh=True,  # Force refresh
+                        clear_previous=clear_previous,  # Clear previous if requested
                         groups_read_mode=groups_read_mode,
                         event_type='shared',
                         personal_layer=None,
