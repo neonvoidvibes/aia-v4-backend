@@ -210,35 +210,43 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             try:
                 logger.info(f"Canvas stream started for Agent: {agent_name}, User: {user.id}, Depth: {depth_mode}, Force refresh: {force_refresh_analysis}, Clear previous: {clear_previous_analysis}")
 
-                # Get or generate current and previous analysis documents for this mode
-                current_analysis_doc = None
-                previous_analysis_doc = None
+                # OPTION C (HYBRID): Load ALL three analysis documents (mirror, lens, portal)
+                # The depth_mode becomes an "emphasis hint" rather than a filter
+                analyses = {}
                 try:
-                    # Get both current and previous analysis (may generate if needed)
-                    current_analysis_doc, previous_analysis_doc = get_or_generate_analysis_doc(
-                        agent_name=agent_name,
-                        event_id=event_id,
-                        depth_mode=depth_mode,
-                        force_refresh=force_refresh_analysis,
-                        clear_previous=clear_previous_analysis,
-                        transcript_listen_mode=transcript_listen_mode,
-                        groups_read_mode=groups_read_mode,
-                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
-                        event_type='shared',  # Canvas typically uses shared context
-                        personal_layer=None,  # Canvas doesn't use personal layers for now
-                        personal_event_id=None
-                    )
+                    for mode in ['mirror', 'lens', 'portal']:
+                        current_doc, previous_doc = get_or_generate_analysis_doc(
+                            agent_name=agent_name,
+                            event_id=event_id,
+                            depth_mode=mode,
+                            force_refresh=force_refresh_analysis,
+                            clear_previous=clear_previous_analysis,
+                            transcript_listen_mode=transcript_listen_mode,
+                            groups_read_mode=groups_read_mode,
+                            individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+                            event_type='shared',  # Canvas typically uses shared context
+                            personal_layer=None,  # Canvas doesn't use personal layers for now
+                            personal_event_id=None
+                        )
 
-                    if current_analysis_doc:
-                        logger.info(f"Canvas: Loaded current {depth_mode} analysis ({len(current_analysis_doc)} chars)")
-                    if previous_analysis_doc:
-                        logger.info(f"Canvas: Loaded previous {depth_mode} analysis ({len(previous_analysis_doc)} chars)")
-                    if not current_analysis_doc:
-                        logger.info(f"Canvas: No analysis document available for {depth_mode} mode")
+                        analyses[mode] = {
+                            'current': current_doc,
+                            'previous': previous_doc
+                        }
+
+                        if current_doc:
+                            logger.info(f"Canvas: Loaded current {mode} analysis ({len(current_doc)} chars)")
+                        if previous_doc:
+                            logger.info(f"Canvas: Loaded previous {mode} analysis ({len(previous_doc)} chars)")
+                        if not current_doc:
+                            logger.info(f"Canvas: No current {mode} analysis available")
+
                 except Exception as analysis_err:
                     logger.error(f"Error getting analysis documents: {analysis_err}", exc_info=True)
-                    current_analysis_doc = None
-                    previous_analysis_doc = None
+                    # Initialize empty analyses if error occurs
+                    for mode in ['mirror', 'lens', 'portal']:
+                        if mode not in analyses:
+                            analyses[mode] = {'current': None, 'previous': None}
 
                 # Build canvas system prompt (lightweight, NO full taxonomy)
                 # Structure: Canvas Base + MLP Depth + Objective Function + Analysis Doc (if available) + Agent-Specific + Time
@@ -270,8 +278,8 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 time_section = f"\n\n=== CURRENT TIME ===\nCurrent date and time: {current_user_time_str} (user's local timezone: {client_timezone})\n=== END CURRENT TIME ==="
 
-                # Combine: Objective → Agent → Canvas Base + Depth → Previous Analysis → Current Analysis → Time
-                # (Tree structure: roots → stem → trunk → branches → leaves)
+                # Combine: Objective → Agent → Canvas Base + Depth → Previous Analyses → Current Analyses → Mode Emphasis → Time
+                # (Tree structure: roots → stem → trunk → branches → branches → leaves)
                 system_prompt = ""
 
                 # 1. Objective function (roots - why you exist)
@@ -285,15 +293,65 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 # 3. Canvas base + MLP depth (trunk - how you operate)
                 system_prompt += f"\n\n{canvas_base_and_depth}"
 
-                # 4. Previous analysis (branches - historical context)
-                if previous_analysis_doc:
-                    system_prompt += f"\n\n=== PREVIOUS ANALYSIS ===\n{previous_analysis_doc}\n=== END PREVIOUS ANALYSIS ==="
+                # 4. Previous analyses (branches - historical context for all modes)
+                has_previous_analyses = any(analyses[mode]['previous'] for mode in ['mirror', 'lens', 'portal'])
+                if has_previous_analyses:
+                    system_prompt += f"\n\n=== PREVIOUS ANALYSES (HISTORICAL CONTEXT) ==="
+                    for mode in ['mirror', 'lens', 'portal']:
+                        if analyses[mode]['previous']:
+                            mode_label = mode.upper()
+                            system_prompt += f"\n\n--- Previous {mode_label} Analysis ---\n{analyses[mode]['previous']}"
+                    system_prompt += f"\n\n=== END PREVIOUS ANALYSES ==="
 
-                # 5. Current analysis (branches - fresh content)
-                if current_analysis_doc:
-                    system_prompt += f"\n\n=== CURRENT ANALYSIS ===\n{current_analysis_doc}\n=== END CURRENT ANALYSIS ==="
+                # 5. Current analyses (branches - fresh content for all modes)
+                has_current_analyses = any(analyses[mode]['current'] for mode in ['mirror', 'lens', 'portal'])
+                if has_current_analyses:
+                    system_prompt += f"\n\n=== CURRENT ANALYSES (COMPREHENSIVE CONTEXT) ==="
+                    system_prompt += f"\nYou have access to three complementary analyses of the same conversation:\n"
 
-                # 6. Current time (leaves - immediate moment)
+                    for mode in ['mirror', 'lens', 'portal']:
+                        if analyses[mode]['current']:
+                            mode_label = mode.upper()
+                            mode_desc = {
+                                'mirror': 'Explicit information (center and edge cases)',
+                                'lens': 'Hidden patterns and latent needs',
+                                'portal': 'Transformative questions and possibilities'
+                            }[mode]
+                            system_prompt += f"\n--- {mode_label} Analysis: {mode_desc} ---\n{analyses[mode]['current']}\n"
+
+                    system_prompt += f"=== END CURRENT ANALYSES ==="
+
+                # 6. Mode emphasis (guidance based on selected mode)
+                mode_emphasis = {
+                    'mirror': """
+=== MODE EMPHASIS: MIRROR ===
+The user has selected MIRROR mode. When relevant to their question:
+- Prioritize insights from the Mirror analysis (explicit/peripheral information)
+- Surface edge cases and minority viewpoints
+- Focus on what was actually stated but sits at the margins
+However, you may draw on Lens or Portal analyses if they better serve the user's question.
+=== END MODE EMPHASIS ===""",
+                    'lens': """
+=== MODE EMPHASIS: LENS ===
+The user has selected LENS mode. When relevant to their question:
+- Prioritize insights from the Lens analysis (hidden patterns/latent needs)
+- Surface recurring themes and systemic issues
+- Focus on what's implied but not explicitly stated
+However, you may draw on Mirror or Portal analyses if they better serve the user's question.
+=== END MODE EMPHASIS ===""",
+                    'portal': """
+=== MODE EMPHASIS: PORTAL ===
+The user has selected PORTAL mode. When relevant to their question:
+- Prioritize insights from the Portal analysis (transformative questions)
+- Frame responses as possibilities and interventions
+- Focus on opening new possibility spaces
+However, you may draw on Mirror or Lens analyses if they better serve the user's question.
+=== END MODE EMPHASIS ===""
+                }
+
+                system_prompt += f"\n\n{mode_emphasis.get(depth_mode, mode_emphasis['mirror'])}"
+
+                # 7. Current time (leaves - immediate moment)
                 system_prompt += time_section
 
                 # Build prompt type description for logging (matches tree order)
@@ -304,19 +362,25 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                     prompt_components.append("agent")
                 prompt_components.extend(["base", "depth"])
 
-                analysis_status = []
-                if previous_analysis_doc:
-                    analysis_status.append("previous")
-                if current_analysis_doc:
-                    analysis_status.append("current")
-                if analysis_status:
-                    prompt_components.append(f"analysis({'+'.join(analysis_status)})")
-                else:
-                    prompt_components.append("analysis(none)")
+                # Count loaded analyses (all three modes)
+                loaded_current = [mode for mode in ['mirror', 'lens', 'portal'] if analyses[mode]['current']]
+                loaded_previous = [mode for mode in ['mirror', 'lens', 'portal'] if analyses[mode]['previous']]
 
+                analysis_status = []
+                if loaded_previous:
+                    analysis_status.append(f"previous({len(loaded_previous)})")
+                if loaded_current:
+                    analysis_status.append(f"current({len(loaded_current)})")
+
+                if analysis_status:
+                    prompt_components.append(f"analyses({'+'.join(analysis_status)})")
+                else:
+                    prompt_components.append("analyses(none)")
+
+                prompt_components.append(f"emphasis({depth_mode})")
                 prompt_components.append("time")
                 prompt_type = "+".join(prompt_components)
-                logger.info(f"Canvas system prompt built: {len(system_prompt)} chars ({prompt_type})")
+                logger.info(f"Canvas system prompt built (HYBRID): {len(system_prompt)} chars ({prompt_type})")
 
                 # Build messages with conversation history
                 messages = []
