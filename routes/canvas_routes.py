@@ -182,22 +182,11 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
         temperature = 0.7
 
-        # Get transcript_listen_mode and groups_read_mode from agent settings
-        from utils.supabase_client import get_supabase_client
-        transcript_listen_mode = 'latest'  # Default
-        groups_read_mode = 'none'
-        client = get_supabase_client()
-        if client:
-            try:
-                agent_res = client.table("agents").select("transcript_listen_mode, groups_read_mode").eq("name", agent_name).limit(1).execute()
-                if agent_res.data and len(agent_res.data) > 0:
-                    transcript_listen_mode = agent_res.data[0].get("transcript_listen_mode", "latest")
-                    groups_read_mode = agent_res.data[0].get("groups_read_mode", "none")
-                    logger.info(f"Canvas: transcript_listen_mode={transcript_listen_mode}, groups_read_mode={groups_read_mode} for {agent_name}")
-            except Exception as exc:
-                logger.warning(f"Failed to fetch memory settings for agent '{agent_name}': {exc}")
-                transcript_listen_mode = 'latest'
-                groups_read_mode = 'none'
+        # Get transcript_listen_mode and groups_read_mode from request (consistent with main chat)
+        # FIXED: Read from request payload instead of Supabase (column doesn't exist)
+        transcript_listen_mode = data.get('transcriptListenMode', 'latest')
+        groups_read_mode = data.get('groupsReadMode', 'none')
+        logger.info(f"Canvas: transcript_listen_mode={transcript_listen_mode}, groups_read_mode={groups_read_mode} for {agent_name}")
 
         # Get per-agent custom API key or fallback to default
         agent_anthropic_key = get_api_key(agent_name, 'anthropic')
@@ -405,21 +394,11 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             if not agent_name:
                 return jsonify({"error": "Missing agent parameter"}), 400
 
-            # Get transcript_listen_mode and groups_read_mode from agent settings
-            from utils.supabase_client import get_supabase_client
-            transcript_listen_mode = 'latest'
-            groups_read_mode = 'none'
-            client = get_supabase_client()
-            if client:
-                try:
-                    agent_res = client.table("agents").select("transcript_listen_mode, groups_read_mode").eq("name", agent_name).limit(1).execute()
-                    if agent_res.data and len(agent_res.data) > 0:
-                        transcript_listen_mode = agent_res.data[0].get("transcript_listen_mode", "latest")
-                        groups_read_mode = agent_res.data[0].get("groups_read_mode", "none")
-                except Exception as exc:
-                    logger.warning(f"Failed to fetch memory settings: {exc}")
-                    transcript_listen_mode = 'latest'
-                    groups_read_mode = 'none'
+            # Get transcript_listen_mode and groups_read_mode from request (consistent with main chat)
+            # FIXED: Read from request payload instead of Supabase (column doesn't exist)
+            transcript_listen_mode = data.get('transcriptListenMode', 'latest')
+            groups_read_mode = data.get('groupsReadMode', 'none')
+            logger.info(f"Canvas refresh: transcript_listen_mode={transcript_listen_mode}, groups_read_mode={groups_read_mode} for {agent_name}")
 
             # Refresh all three modes in parallel (for now, sequential is simpler)
             results = {}
