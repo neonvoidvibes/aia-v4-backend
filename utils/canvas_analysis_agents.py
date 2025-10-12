@@ -78,187 +78,164 @@ def get_analysis_agent_prompt(
     # 3. Add mode-specific analysis task
     analysis_tasks = {
         'mirror': """
-=== ANALYSIS TASK: MIRROR MODE (EDGES) ===
-Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document identifying EXPLICIT BUT PERIPHERAL information.
+=== ANALYSIS TASK: MIRROR MODE (EXPLICIT INFORMATION) ===
+Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document reflecting EXPLICIT INFORMATION at both surface and depth levels.
 
-Your role is to surface what IS explicitly stated but sits at the margins of the conversation.
+Your role: Mirror what IS explicitly stated - both the obvious center and the peripheral edges.
 
-Focus areas - explore each in depth:
-- Minority viewpoints explicitly voiced (quote speakers, explain context)
-- Side comments and tangential observations (what was said in passing)
-- Outlier perspectives mentioned (ideas not in the mainstream flow)
-- Peripheral but concrete concerns (worries expressed at the edges)
+Tone: Neutral, observational, present tense, no interpretation. Use participants' exact words.
 
 Structure your analysis as:
 
-# Mirror Analysis: Edge Cases
+# Mirror Analysis: Explicit Information
 
-## Minority Viewpoints
-[For EACH minority viewpoint found:
-- Quote the exact words used
-- Identify who said it (Speaker 1, Speaker 2, etc.)
-- Explain the context in which it was raised
-- Note why it's peripheral to the main conversation]
+## Surface Level: Center of Distribution (The Obvious)
+Reflect what's at the center - the concrete themes directly and repeatedly stated.
 
-## Tangential Observations
-[For EACH side comment:
-- What was said
-- When in the conversation
-- How it relates (or doesn't) to the main topic
-- Why it's noteworthy despite being off-topic]
+[For EACH central theme (aim for 3-5):
+- State the theme clearly using participants' exact formulations
+- Quote multiple speakers expressing this theme
+- Note explicit agreements around this topic
+- Identify common denominators in how it's expressed
 
-## Outlier Concerns
-[For EACH peripheral concern:
-- The specific concern raised
-- Direct quotes supporting it
-- Why it's an outlier
-- Potential significance despite being peripheral]
+Language patterns: "You're discussing...", "The group agrees that...", "Several of you have mentioned...", "The main topic is..."]
 
-## Summary
-[Brief synthesis of the edge landscape - what patterns emerge at the periphery?]
+## Deep Level: Edge Cases (Explicit but Peripheral)
+Capture what's explicitly stated but sits at the margins - minority views, side comments, outliers.
+
+[For EACH peripheral item (aim for 3-5):
+- Quote the exact words used with attribution
+- Explain when and why it's peripheral to the main flow
+- Note its explicit nature despite being an outlier
+- Assess potential significance despite marginality
+
+Language patterns: "One participant also noted...", "A less discussed but mentioned point...", "While not the main focus, someone raised...", "An interesting side observation was..."]
+
+## Most Pertinent Observation
+[Single focused paragraph:
+What is the ONE most significant explicit observation from this conversation - whether from center or edges? This should be concrete, grounded in what was actually said, and useful for multiple perspectives the canvas user might bring. Don't over-index for any single interpretation - stay focused and factual.]
 
 Guidelines:
-- TARGET LENGTH: 1500-2000 tokens - be thorough and comprehensive
-- Use exact quotes liberally with attribution
-- Provide context for each item you surface
-- Stay grounded in transcript content - no speculation
-- Plain markdown only (no special formatting like **, _, etc.)
-- If truly no peripheral content exists, explain what was examined and why nothing qualified
-- This is a serious analytical document - depth and evidence are valued
+- TARGET LENGTH: 1500-2000 tokens total
+- Maintain neutral, observational tone throughout
+- Use exact quotes liberally with speaker attribution
+- Present tense: "The group is discussing...", "Participants mention..."
+- Plain markdown only (no **, _, etc.)
+- NO interpretation or reading between lines - that's Lens territory
+- Comprehensive coverage: surface should feel recognizable, depth should surface what's easily missed
+- This is pure reflection - like holding up a mirror to the conversation
 === END ANALYSIS TASK ===
 """,
 
         'lens': """
-=== ANALYSIS TASK: LENS MODE (LATENT NEEDS) ===
-Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document identifying HIDDEN PATTERNS and UNSPOKEN REQUIREMENTS.
+=== ANALYSIS TASK: LENS MODE (HIDDEN INFORMATION) ===
+Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document identifying HIDDEN INFORMATION at both surface and depth levels.
 
-Your role is to identify what the conversation implies about deeper contextual needs - reading between the lines with rigor.
+Your role: Identify what's IMPLIED - patterns at the surface, latent needs at the depth.
 
-Focus areas - explore each systematically:
-- Recurring themes across different speakers and moments
-- Emotional undercurrents and group dynamics (tension, avoidance, energy shifts)
-- Systemic issues beneath surface symptoms (root causes, not just effects)
-- Paradoxes and contradictions (where words and reality diverge)
-- What's being avoided, protected, or left unsaid
+Tone: Analytical, questioning, surface paradoxes and tensions. Use questioning language.
 
 Structure your analysis as:
 
-# Lens Analysis: Latent Needs
+# Lens Analysis: Hidden Information
 
-## Hidden Patterns
-[For EACH pattern identified:
-- Describe the pattern clearly
-- Cite 2-3 specific examples from transcript with quotes
-- Explain what makes this pattern significant
-- Connect to broader themes or needs]
+## Surface Level: Pattern Recognition Between Data Points
+Identify recurring themes and connections not explicitly stated but clearly present.
 
-## Emotional Dynamics
-[For EACH dynamic observed:
-- Name the dynamic (e.g., "tension around resource allocation")
-- Evidence from tone, word choice, silences, repetition
-- Who's involved and how they're positioned
-- What this reveals about unspoken concerns]
+[For EACH pattern (aim for 3-5):
+- Name the pattern clearly
+- Cite 2-3 specific examples from different parts of transcript
+- Show how seemingly unrelated comments connect
+- Note emotional undercurrents or energy shifts
+- Identify group dynamics emerging
 
-## Systemic Issues
-[For EACH systemic issue:
-- The surface symptom being discussed
-- The deeper root cause you're inferring
-- Evidence trail from transcript
-- Why treating symptoms alone won't work]
+Language patterns: "There's a pattern emerging around...", "Several comments suggest an underlying...", "The energy shifts when discussing...", "A tension exists between..."]
 
-## Unspoken Needs
-[For EACH latent need:
-- What the group actually requires
-- How you know (cite behavioral evidence)
-- Why it remains unspoken
-- What would shift if it were named]
+## Deep Level: Latent Needs Analysis
+Surface what the group actually requires contextually - the unspoken needs driving the conversation.
 
-## Paradoxes and Contradictions
-[For EACH paradox:
-- State the contradiction clearly
-- Quote evidence of both sides
-- Analyze what this tension reveals
-- Potential resolution paths]
+[For EACH latent need (aim for 3-5):
+- State the unspoken need clearly
+- Cite behavioral evidence from transcript (not just words, but pauses, repetitions, avoidances)
+- Identify systemic issues beneath symptoms
+- Surface paradoxes and contradictions
+- Analyze what's being protected or avoided
+- Explain why it remains unspoken
+- Predict what would shift if this need were named
 
-## Synthesis
-[Meta-analysis: What's the deeper story this conversation is telling? What need is most central?]
+Language patterns: "The underlying need seems to be...", "What's not being said directly is...", "The group appears to be protecting...", "A deeper dynamic at play might be..."]
+
+## Most Pertinent Observation
+[Single focused paragraph:
+What is the ONE most significant hidden pattern or latent need from this conversation? This should illuminate something crucial about the group's contextual requirements while remaining open to multiple interpretive lenses. Don't prescribe a single solution - surface the core dynamic that matters most.]
 
 Guidelines:
-- TARGET LENGTH: 1500-2000 tokens - depth over brevity
+- TARGET LENGTH: 1500-2000 tokens total
+- Analytical, questioning tone throughout
 - Every inference must be evidenced from transcript
-- Surface paradoxes explicitly - they're goldmines
-- Use questioning analytical language ("seems to suggest", "may indicate")
+- Surface paradoxes explicitly - they're goldmines for Portal
+- Use questioning analytical language: "seems to suggest", "may indicate", "appears to be"
 - Plain markdown only (no **, _, etc.)
-- Focus on what's implied, not what's stated directly
-- This is interpretive but rigorous - show your analytical work
+- Focus on what's IMPLIED, not what's explicitly stated - that's Mirror territory
+- Systemic thinking: Connect symptoms to root causes
+- This is interpretive but rigorous - show your analytical work with evidence trails
 === END ANALYSIS TASK ===
 """,
 
         'portal': """
-=== ANALYSIS TASK: PORTAL MODE (EMERGENT QUESTIONS) ===
-Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document framing EMERGENT POSSIBILITIES AS QUESTIONS.
+=== ANALYSIS TASK: PORTAL MODE (EMERGENT POSSIBILITIES) ===
+Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document framing EMERGENT POSSIBILITIES at both surface and depth levels.
 
-Your role is to open possibility spaces by formulating transformative questions derived from lens-level patterns and paradoxes.
+Your role: Open possibility spaces - general potential at surface, predictive modeling at depth.
 
-Core principles:
-- Every question must be traceable to evidence (quote the pattern it emerges from)
-- Questions challenge assumptions, not people
-- Frame possibilities as invitations to explore, never prescriptions
-- Questions should be generative - they open space rather than close it
+Tone: Visionary, possibility-oriented, future tense welcomed. Frame as invitations, not prescriptions.
 
-Focus areas - develop each fully:
-- Questions that challenge limiting assumptions embedded in the conversation
-- Questions that identify transformation opportunities from latent needs
-- Questions about paradigm shifts suggested by contradictions
-- Questions predicting intervention outcomes based on patterns
-- Questions that identify leverage points and opportunity windows
+CRITICAL GROUNDING PRINCIPLE: All Portal insights MUST be explicitly and traceably derived from a corresponding Lens-level pattern or paradox. Always cite the Lens insight you're building from.
 
 Structure your analysis as:
 
-# Portal Analysis: Emergent Questions
+# Portal Analysis: Emergent Possibilities
 
-## Transformative Questions
-[For EACH transformative question (aim for 3-5):
-- State the question clearly
-- Quote the lens-level pattern or paradox it emerges from
-- Explain what shift in thinking this question invites
-- Note what becomes possible if this question is engaged]
+## Surface Level: General Potential That Could Transform the System
+Identify transformation opportunities and paradigm shifts emerging from Lens patterns.
 
-## Assumption Challenges
-[For EACH assumption-challenging question (aim for 3-5):
-- State the question
-- Identify the hidden assumption being questioned (with transcript evidence)
-- Explain why this assumption may be limiting
-- Describe the expanded possibility space if the assumption is released]
+[For EACH possibility (aim for 3-5):
+- FIRST: Quote the specific Lens pattern or paradox this emerges from
+- State the transformative possibility or question clearly
+- Explain what paradigm shift this invites
+- Challenge limiting assumptions embedded in current thinking
+- Describe the expanded possibility space
 
-## Intervention Pathways
-[For EACH "what if we..." question (aim for 3-5):
-- State the question as an intervention possibility
-- Connect to latent needs identified in lens analysis
-- Cite transcript evidence for why this pathway could matter
-- Explore potential outcomes or ripple effects]
+Language patterns: "What if you could...", "Imagine a future where...", "This opens the possibility for...", "You could transform this by..."]
 
-## Opportunity Windows
-[For EACH leverage-point question (aim for 3-5):
-- State the question identifying the leverage point
-- Explain why this moment/issue is strategic
-- Quote evidence of readiness or opening
-- Describe what could shift if this window is engaged]
+## Deep Level: Predictive Modeling with Specificity
+Model specific intervention outcomes - if we act on X, effects Y, Z, A will likely occur.
 
-## Synthesis Questions
-[2-3 meta-level questions that integrate across the analysis:
-- What's the most generative question this conversation wants to ask?
-- Where's the greatest potential for transformation?
-- What question, if truly engaged, could shift everything?]
+[For EACH intervention prediction (aim for 3-5):
+- FIRST: Quote the specific Lens insight (latent need or paradox) this addresses
+- State the intervention: "If you pursue [X specific action]..."
+- Predict likely outcomes with reasoning: "...these effects would likely cascade: [Y, Z, A]"
+- Identify high-leverage intervention points
+- Map transformation pathways with specific steps
+- Note ripple effects across the system
+- Assess potential impact (what shifts? who's affected? timeline?)
+
+Language patterns: "If you pursue X, likely outcomes include...", "This intervention could cascade into...", "The highest leverage point appears to be...", "Acting on this insight might lead to..."]
+
+## Most Pertinent Observation
+[Single focused paragraph:
+What is the ONE most significant emergent possibility from this conversation - the transformation opportunity or intervention with greatest potential? Ground it explicitly in a Lens insight. Make it concrete enough to act on, yet open enough to invite multiple approaches. This should feel like a strategic doorway, not a prescription.]
 
 Guidelines:
-- TARGET LENGTH: 1500-2000 tokens - develop questions with depth
-- Each question needs its evidence trail from transcript
-- Quality over quantity - better 15 well-developed questions than 30 shallow ones
-- Use probing, open-ended language ("How might...", "What if...", "What would it mean to...")
+- TARGET LENGTH: 1500-2000 tokens total
+- EVERY Portal insight MUST explicitly cite the Lens pattern it emerges from - no exceptions
+- Visionary but grounded: possibilities must be traceable to evidence
+- Use probing, open-ended language: "How might...", "What if...", "What would it mean to..."
 - Plain markdown only (no **, _, etc.)
-- Questions should invite genuine exploration, not lead to predetermined answers
-- This is strategic inquiry - the questions themselves are interventions
+- Questions and possibilities should invite genuine exploration, not lead to predetermined answers
+- Deep level should be concrete and predictive - name specific actions and outcomes
+- Quality over quantity: better fewer well-developed possibilities than many shallow ones
+- This is strategic inquiry - the possibilities themselves are interventions
 === END ANALYSIS TASK ===
 """
     }
