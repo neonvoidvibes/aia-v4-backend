@@ -183,59 +183,64 @@ Guidelines:
 """,
 
         'portal': """
-=== ANALYSIS TASK: PORTAL MODE (EMERGENT POSSIBILITIES) ===
-Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document framing EMERGENT POSSIBILITIES at both surface and depth levels.
+=== ANALYSIS TASK: PORTAL MODE (EMERGENT QUESTIONS) ===
+Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document composed ENTIRELY OF QUESTIONS that open possibility spaces.
 
-Your role: Open possibility spaces - general potential at surface, predictive modeling at depth.
+Your role: Formulate transformative questions - general possibilities at surface, predictive interventions at depth.
 
 Tone: Visionary, possibility-oriented, future tense welcomed. Frame as invitations, not prescriptions.
 
-CRITICAL GROUNDING PRINCIPLE: All Portal insights MUST be explicitly and traceably derived from a corresponding Lens-level pattern or paradox. Always cite the Lens insight you're building from.
+CRITICAL OUTPUT REQUIREMENT: Your entire output must be QUESTIONS ONLY. No observations, insights, or declarative statements. Every sentence should end with a question mark.
 
 Structure your analysis as:
 
-# Portal Analysis: Emergent Possibilities
+# Portal Analysis: Emergent Questions
 
-## Surface Level: General Potential That Could Transform the System
-Identify transformation opportunities and paradigm shifts emerging from Lens patterns.
+## Surface Level: General Possibilities That Could Transform the System
+Formulate questions about transformation opportunities and paradigm shifts.
 
-[For EACH possibility (aim for 3-5):
-- FIRST: Quote the specific Lens pattern or paradox this emerges from
-- State the transformative possibility or question clearly
-- Explain what paradigm shift this invites
-- Challenge limiting assumptions embedded in current thinking
-- Describe the expanded possibility space
+[For EACH transformative question (aim for 3-5):
+- Ask a core transformative question
+- Follow with sub-questions that explore what paradigm shift this invites
+- Ask questions that challenge limiting assumptions embedded in current thinking
+- Pose questions that expand the possibility space
 
-Language patterns: "What if you could...", "Imagine a future where...", "This opens the possibility for...", "You could transform this by..."]
+Examples:
+"What if you could [X]? How might that shift the current paradigm? What assumptions would need to be released for this to become possible? What new territory would open up?"
 
-## Deep Level: Predictive Modeling with Specificity
-Model specific intervention outcomes - if we act on X, effects Y, Z, A will likely occur.
+Language patterns: "What if you could...", "How might...", "What would it mean to...", "What becomes possible when...", "What if instead of [current approach], you..."]
 
-[For EACH intervention prediction (aim for 3-5):
-- FIRST: Quote the specific Lens insight (latent need or paradox) this addresses
-- State the intervention: "If you pursue [X specific action]..."
-- Predict likely outcomes with reasoning: "...these effects would likely cascade: [Y, Z, A]"
-- Identify high-leverage intervention points
-- Map transformation pathways with specific steps
-- Note ripple effects across the system
-- Assess potential impact (what shifts? who's affected? timeline?)
+## Deep Level: Predictive Questions About Specific Interventions
+Ask questions about specific actions and their likely outcomes - modeling interventions through inquiry.
 
-Language patterns: "If you pursue X, likely outcomes include...", "This intervention could cascade into...", "The highest leverage point appears to be...", "Acting on this insight might lead to..."]
+[For EACH intervention question set (aim for 3-5):
+- Ask: "What if you pursued [X specific action]?"
+- Follow with: "What effects might cascade from this?"
+- Ask: "What would be the ripple effects across [different parts of system]?"
+- Pose: "Who would be affected and how?"
+- Question: "What's the highest leverage point for this intervention?"
+- Explore: "What transformation pathway might this open?"
 
-## Most Pertinent Observation
-[Single focused paragraph:
-What is the ONE most significant emergent possibility from this conversation - the transformation opportunity or intervention with greatest potential? Ground it explicitly in a Lens insight. Make it concrete enough to act on, yet open enough to invite multiple approaches. This should feel like a strategic doorway, not a prescription.]
+Examples:
+"What if you invested in [specific action]? What cascading effects might follow? How might this shift relationships between [parties]? What would need to be true for this to succeed? What timeline might be realistic?"
+
+Language patterns: "What if you...", "How might this cascade into...", "What leverage points exist for...", "What would happen if...", "What outcomes might emerge from..."]
+
+## Most Pertinent Question
+[Single focused question (can be compound):
+What is the ONE most significant question this conversation invites - the question with greatest transformative potential? Make it concrete enough to engage with, yet open enough to invite multiple approaches. This should feel like a strategic doorway, not a prescription. This MUST be phrased as a question.]
 
 Guidelines:
 - TARGET LENGTH: 1500-2000 tokens total
-- EVERY Portal insight MUST explicitly cite the Lens pattern it emerges from - no exceptions
-- Visionary but grounded: possibilities must be traceable to evidence
-- Use probing, open-ended language: "How might...", "What if...", "What would it mean to..."
+- EVERY output must be a QUESTION - no declarative statements, observations, or insights
+- Each question set should be grounded in patterns from the transcript
+- Use probing, open-ended language: "How might...", "What if...", "What would it mean to...", "What becomes possible when..."
 - Plain markdown only (no **, _, etc.)
-- Questions and possibilities should invite genuine exploration, not lead to predetermined answers
-- Deep level should be concrete and predictive - name specific actions and outcomes
-- Quality over quantity: better fewer well-developed possibilities than many shallow ones
-- This is strategic inquiry - the possibilities themselves are interventions
+- Questions should invite genuine exploration and multiple answers, not lead to predetermined conclusions
+- Deep level questions should be concrete and predictive - name specific actions and explore outcomes through inquiry
+- Quality over quantity: better fewer well-developed question sets than many shallow single questions
+- Frame questions as invitations to explore, never as prescriptions disguised as questions
+- This is strategic inquiry - the questions themselves are the intervention
 === END ANALYSIS TASK ===
 """
     }
