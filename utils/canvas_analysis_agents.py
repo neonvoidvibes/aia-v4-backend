@@ -309,14 +309,32 @@ def get_transcript_content_for_analysis(
                 transcript_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/events/{event_id}/transcripts/"
                 all_files_meta = list_s3_objects_metadata(transcript_prefix)
 
+                # DEBUG: Log what we received
+                logger.info(f"[DEBUG] 'some' mode: received {len(individual_raw_transcript_toggle_states)} toggle state entries")
+                logger.info(f"[DEBUG] Toggle state keys: {list(individual_raw_transcript_toggle_states.keys())[:3]}...")  # First 3 keys
+                logger.info(f"[DEBUG] Found {len(all_files_meta)} total files in S3")
+                if all_files_meta:
+                    logger.info(f"[DEBUG] S3 file keys: {[f['Key'] for f in all_files_meta[:3]]}...")  # First 3 keys
+
                 # Filter to only files that are toggled on
-                relevant_transcripts_meta = [
-                    f for f in all_files_meta
-                    if not os.path.basename(f['Key']).startswith('rolling-')
-                    and f['Key'].endswith('.txt')
-                    and individual_raw_transcript_toggle_states.get(f['Key'], False)
-                ]
-                logger.info(f"Found {len(relevant_transcripts_meta)} toggled transcripts in 'some' mode (out of {len(all_files_meta)} total)")
+                relevant_transcripts_meta = []
+                matched_keys = []
+                for f in all_files_meta:
+                    if os.path.basename(f['Key']).startswith('rolling-') or not f['Key'].endswith('.txt'):
+                        continue
+
+                    s3_key = f['Key']
+                    is_toggled = individual_raw_transcript_toggle_states.get(s3_key, False)
+
+                    if is_toggled:
+                        relevant_transcripts_meta.append(f)
+                        matched_keys.append(s3_key)
+
+                logger.info(f"[DEBUG] Matched {len(relevant_transcripts_meta)} toggled transcripts in 'some' mode (out of {len(all_files_meta)} total)")
+                if matched_keys:
+                    logger.info(f"[DEBUG] Matched keys: {matched_keys}")
+                else:
+                    logger.warning(f"[DEBUG] NO MATCHES! Check if toggle state keys match S3 keys")
 
         elif transcript_listen_mode == 'all':
             # Read all transcripts from event folder
