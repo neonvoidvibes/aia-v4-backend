@@ -1,8 +1,8 @@
 # Canvas "Some" Mode - Complete Fix Summary
 
-## Two Critical Bugs Fixed
+## Three Critical Bugs Fixed
 
-### Bug #1: Mode Not Persisted to Supabase ❌
+### Bug #1: Mode Not Persisted ❌
 
 **Problem:** When users toggled transcript files, mode changed to "some" in React state but was NEVER saved to Supabase.
 
@@ -104,6 +104,43 @@ groups_read_mode = data.get('groupsReadMode', 'none')
 1. Line 23: Extract from request body
 2. Line 61-62: Forward to backend
 
+### Bug #3: Failing Supabase API Calls ❌
+
+**Problem:** After fixing Bugs #1 and #2, users saw console errors: "Failed to save transcript listen mode to Supabase"
+
+**Root Cause:** `handleTranscriptListenModeChange()` and `handleGroupsReadModeChange()` were calling `/api/agents/memory-prefs` to update non-existent Supabase columns.
+
+**Why This Happened:** Frontend was designed to persist modes to Supabase, but the columns were never created in the database schema.
+
+**Fix:** Removed Supabase API calls from both functions in `app/page.tsx`:
+
+```typescript
+// OLD (Lines 1756-1786):
+const handleTranscriptListenModeChange = useCallback(async (mode) => {
+  setTranscriptListenMode(mode);
+  localStorage.setItem(localKey, mode);
+
+  // ❌ This API call fails - columns don't exist
+  await fetch('/api/agents/memory-prefs', {
+    body: JSON.stringify({ agent, transcript_listen_mode: mode })
+  });
+}, [pageAgentName, userId]);
+
+// NEW (Lines 1757-1769):
+const handleTranscriptListenModeChange = useCallback(async (mode) => {
+  setTranscriptListenMode(mode);
+  localStorage.setItem(localKey, mode);  // ✅ Only localStorage needed
+  toast.success(`Transcript listen mode: ${mode}`);
+  // No Supabase call - mode is sent in every canvas request
+}, [pageAgentName, userId]);
+```
+
+**Why This is Correct:**
+- Mode is already sent in every canvas request (fixed in Bug #2)
+- localStorage provides UI persistence across page refreshes
+- No database storage needed for this feature
+- Eliminates error messages and failed API calls
+
 ## What Gets Saved Where (Final Architecture)
 
 ### Supabase `agents` Table
@@ -160,10 +197,10 @@ ELSE:
 2. Open Settings > Memory > Transcripts > Listen: "latest"
 3. Toggle ON 2-3 specific transcript files
 4. Mode should auto-switch to "some"
-5. **Check Network tab:** POST to `/api/agents/memory-prefs` should have:
-   ```json
-   {"agent": "...", "transcript_listen_mode": "some"}
-   ```
+5. **Verify:**
+   - Success toast appears: "Transcript listen mode: some"
+   - No console errors (no more "Failed to save transcript listen mode to Supabase")
+   - localStorage updated (check DevTools > Application > Local Storage)
 6. Switch to Canvas view
 7. **Expected backend logs:**
    ```
@@ -194,12 +231,15 @@ bash watch_canvas_test.sh
 
 ## Summary
 
-Two independent bugs created the perfect storm:
-1. Frontend didn't persist mode to backend
-2. Backend tried to read from non-existent Supabase column
+Three interconnected bugs created the perfect storm:
+1. **Bug #1:** Frontend didn't persist mode changes (used `setTranscriptListenMode()` instead of `handleTranscriptListenModeChange()`)
+2. **Bug #2:** Backend tried to read from non-existent Supabase columns instead of request payload
+3. **Bug #3:** Supabase API calls failed because database columns were never created
 
-Both bugs had to be fixed for "some" mode to work. Now:
-- Frontend correctly persists mode and sends in every request
-- Backend correctly reads mode from request (not Supabase)
-- Architecture is consistent with main chat
-- All transcript modes work correctly
+All three bugs had to be fixed for "some" mode to work. Now:
+- Frontend correctly sends mode in every canvas request ✅
+- Backend correctly reads mode from request payload (not Supabase) ✅
+- localStorage provides UI persistence (no Supabase needed) ✅
+- Architecture is consistent with main chat ✅
+- No more console errors or failed API calls ✅
+- All transcript modes work correctly ✅
