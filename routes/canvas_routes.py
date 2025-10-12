@@ -322,34 +322,29 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                     system_prompt += f"=== END CURRENT ANALYSES ==="
 
                 # 6. Mode emphasis (guidance based on selected mode)
-                mode_emphasis = {
-                    'mirror': """
-=== MODE EMPHASIS: MIRROR ===
-The user has selected MIRROR mode. When relevant to their question:
-- Prioritize insights from the Mirror analysis (explicit/peripheral information)
-- Surface edge cases and minority viewpoints
-- Focus on what was actually stated but sits at the margins
-However, you may draw on Lens or Portal analyses if they better serve the user's question.
-=== END MODE EMPHASIS ===""",
-                    'lens': """
-=== MODE EMPHASIS: LENS ===
-The user has selected LENS mode. When relevant to their question:
-- Prioritize insights from the Lens analysis (hidden patterns/latent needs)
-- Surface recurring themes and systemic issues
-- Focus on what's implied but not explicitly stated
-However, you may draw on Mirror or Portal analyses if they better serve the user's question.
-=== END MODE EMPHASIS ===""",
-                    'portal': """
-=== MODE EMPHASIS: PORTAL ===
-The user has selected PORTAL mode. When relevant to their question:
-- Prioritize insights from the Portal analysis (transformative questions)
-- Frame responses as possibilities and interventions
-- Focus on opening new possibility spaces
-However, you may draw on Mirror or Lens analyses if they better serve the user's question.
-=== END MODE EMPHASIS ===""
-                }
+                if depth_mode == 'mirror':
+                    mode_emphasis_text = "\n=== MODE EMPHASIS: MIRROR ===\nThe user has selected MIRROR mode. When relevant to their question:\n- Prioritize insights from the Mirror analysis (explicit/peripheral information)\n- Surface edge cases and minority viewpoints\n- Focus on what was actually stated but sits at the margins\nHowever, you may draw on Lens or Portal analyses if they better serve the user's question.\n=== END MODE EMPHASIS ==="
+                elif depth_mode == 'lens':
+                    mode_emphasis_text = "\n=== MODE EMPHASIS: LENS ===\nThe user has selected LENS mode. When relevant to their question:\n- Prioritize insights from the Lens analysis (hidden patterns/latent needs)\n- Surface recurring themes and systemic issues\n- Focus on what's implied but not explicitly stated\nHowever, you may draw on Mirror or Portal analyses if they better serve the user's question.\n=== END MODE EMPHASIS ==="
+                elif depth_mode == 'portal':
+                    mode_emphasis_text = "\n=== MODE EMPHASIS: PORTAL ===\nThe user has selected PORTAL mode. When relevant to their question:\n- Prioritize insights from the Portal analysis (transformative questions)\n- Frame responses as possibilities and interventions\n- Focus on opening new possibility spaces\nHowever, you may draw on Mirror or Lens analyses if they better serve the user's question.\n=== END MODE EMPHASIS ==="
+                else:
+                    mode_emphasis_text = "\n=== MODE EMPHASIS: MIRROR ===\nThe user has selected MIRROR mode. When relevant to their question:\n- Prioritize insights from the Mirror analysis (explicit/peripheral information)\n- Surface edge cases and minority viewpoints\n- Focus on what was actually stated but sits at the margins\nHowever, you may draw on Lens or Portal analyses if they better serve the user's question.\n=== END MODE EMPHASIS ==="
 
-                system_prompt += f"\n\n{mode_emphasis.get(depth_mode, mode_emphasis['mirror'])}"
+                system_prompt += f"\n\n{mode_emphasis_text}"
+
+                # 6b. CRITICAL: Brevity booster (reinforce after heavy context)
+                brevity_booster = """
+
+=== CRITICAL REMINDER ===
+Your responses must be EXTREMELY brief:
+- Maximum 2 sentences (1 sentence preferred)
+- NO markdown formatting whatsoever (no **, -, #, bullets)
+- NO meta-commentary or preambles
+- State insights directly and confidently
+This is a voice interface - every word must count.
+=== END REMINDER ==="""
+                system_prompt += brevity_booster
 
                 # 7. Current time (leaves - immediate moment)
                 system_prompt += time_section
@@ -398,7 +393,7 @@ However, you may draw on Mirror or Lens analyses if they better serve the user's
                 # Stream from Anthropic using agent-specific client
                 with agent_anthropic_client.messages.stream(
                     model=model_selection,
-                    max_tokens=4096,
+                    max_tokens=512,  # Reduced from 4096 to enforce brevity
                     temperature=temperature,
                     system=system_prompt,
                     messages=messages
