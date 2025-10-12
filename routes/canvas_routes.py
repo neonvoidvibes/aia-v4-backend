@@ -276,32 +276,39 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 time_section = f"\n\n=== CURRENT TIME ===\nCurrent date and time: {current_user_time_str} (user's local timezone: {client_timezone})\n=== END CURRENT TIME ==="
 
-                # Combine: Canvas Base + Depth + Objective + Analysis Docs (previous + current) + Agent + Time
-                system_prompt = canvas_base_and_depth
+                # Combine: Objective → Agent → Canvas Base + Depth → Previous Analysis → Current Analysis → Time
+                # (Tree structure: roots → stem → trunk → branches → leaves)
+                system_prompt = ""
 
-                # Insert objective function if available
+                # 1. Objective function (roots - why you exist)
                 if objective_function:
-                    system_prompt += f"\n\n=== OBJECTIVE FUNCTION ===\n{objective_function}\n=== END OBJECTIVE FUNCTION ==="
+                    system_prompt += f"=== OBJECTIVE FUNCTION ===\n{objective_function}\n=== END OBJECTIVE FUNCTION ==="
 
-                # Insert previous analysis document if available
-                if previous_analysis_doc:
-                    system_prompt += f"\n\n=== PREVIOUS ANALYSIS ===\n{previous_analysis_doc}\n=== END PREVIOUS ANALYSIS ==="
-
-                # Insert current analysis document if available
-                if current_analysis_doc:
-                    system_prompt += f"\n\n=== CURRENT ANALYSIS ===\n{current_analysis_doc}\n=== END CURRENT ANALYSIS ==="
-
-                # Add agent context
+                # 2. Agent context (stem - who you are)
                 if agent_specific:
                     system_prompt += f"\n\n=== AGENT CONTEXT ===\n{agent_specific}\n=== END AGENT CONTEXT ==="
 
-                # Add time
+                # 3. Canvas base + MLP depth (trunk - how you operate)
+                system_prompt += f"\n\n{canvas_base_and_depth}"
+
+                # 4. Previous analysis (branches - historical context)
+                if previous_analysis_doc:
+                    system_prompt += f"\n\n=== PREVIOUS ANALYSIS ===\n{previous_analysis_doc}\n=== END PREVIOUS ANALYSIS ==="
+
+                # 5. Current analysis (branches - fresh content)
+                if current_analysis_doc:
+                    system_prompt += f"\n\n=== CURRENT ANALYSIS ===\n{current_analysis_doc}\n=== END CURRENT ANALYSIS ==="
+
+                # 6. Current time (leaves - immediate moment)
                 system_prompt += time_section
 
-                # Build prompt type description for logging
-                prompt_components = ["base", "depth"]
+                # Build prompt type description for logging (matches tree order)
+                prompt_components = []
                 if objective_function:
                     prompt_components.append("objective")
+                if agent_specific:
+                    prompt_components.append("agent")
+                prompt_components.extend(["base", "depth"])
 
                 analysis_status = []
                 if previous_analysis_doc:
@@ -313,7 +320,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 else:
                     prompt_components.append("analysis(none)")
 
-                prompt_components.extend(["agent", "time"])
+                prompt_components.append("time")
                 prompt_type = "+".join(prompt_components)
                 logger.info(f"Canvas system prompt built: {len(system_prompt)} chars ({prompt_type})")
 
