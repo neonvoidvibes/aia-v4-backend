@@ -265,33 +265,43 @@ def get_transcript_content_for_analysis(agent_name: str, event_id: str, groups_r
     return combined_content
 
 
-def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str) -> str:
+def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str, previous: bool = False) -> str:
     """
     Get S3 key for storing analysis document.
 
     Format: organizations/{org}/agents/_canvas/docs/{agent}_{event}_{mode}.md
+    Or:     organizations/{org}/agents/_canvas/docs/{agent}_{event}_{mode}_previous.md
     """
-    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/_canvas/docs/{agent_name}_{event_id}_{mode}.md"
+    suffix = "_previous" if previous else ""
+    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/_canvas/docs/{agent_name}_{event_id}_{mode}{suffix}.md"
 
 
-def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str) -> Optional[str]:
+def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, previous: bool = False) -> Optional[str]:
     """
     Load analysis document from S3.
+
+    Args:
+        agent_name: Agent name
+        event_id: Event ID
+        mode: Analysis mode (mirror/lens/portal)
+        previous: If True, load the _previous version
 
     Returns:
         Markdown content string or None if not found
     """
     try:
         s3_client = get_s3_client()
-        key = get_s3_analysis_doc_key(agent_name, event_id, mode)
+        key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=previous)
 
         response = s3_client.get_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=key)
         content = response['Body'].read().decode('utf-8')
 
-        logger.info(f"Loaded {mode} analysis from S3: {key}")
+        version_label = "previous" if previous else "current"
+        logger.info(f"Loaded {version_label} {mode} analysis from S3: {key}")
         return content
     except s3_client.exceptions.NoSuchKey:
-        logger.info(f"No S3 analysis document found for {agent_name}/{event_id}/{mode}")
+        version_label = "previous" if previous else "current"
+        logger.info(f"No S3 {version_label} analysis document found for {agent_name}/{event_id}/{mode}")
         return None
     except Exception as e:
         logger.error(f"Error loading analysis from S3: {e}", exc_info=True)
@@ -301,6 +311,7 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str) -> Opti
 def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: str) -> bool:
     """
     Save analysis document to S3 as markdown.
+    Moves current version to _previous before saving new version.
 
     Args:
         agent_name: Agent name
@@ -313,11 +324,26 @@ def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: 
     """
     try:
         s3_client = get_s3_client()
-        key = get_s3_analysis_doc_key(agent_name, event_id, mode)
+        current_key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=False)
+        previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=True)
 
+        # Move current to previous (if current exists)
+        try:
+            s3_client.copy_object(
+                Bucket=CANVAS_ANALYSIS_BUCKET,
+                CopySource={'Bucket': CANVAS_ANALYSIS_BUCKET, 'Key': current_key},
+                Key=previous_key
+            )
+            logger.info(f"Moved current {mode} analysis to previous: {previous_key}")
+        except s3_client.exceptions.NoSuchKey:
+            logger.info(f"No existing current analysis to move to previous for {mode}")
+        except Exception as copy_err:
+            logger.warning(f"Could not copy current to previous: {copy_err}")
+
+        # Save new current
         s3_client.put_object(
             Bucket=CANVAS_ANALYSIS_BUCKET,
-            Key=key,
+            Key=current_key,
             Body=content.encode('utf-8'),
             ContentType='text/markdown',
             Metadata={
@@ -328,7 +354,7 @@ def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: 
             }
         )
 
-        logger.info(f"Saved {mode} analysis to S3: {key}")
+        logger.info(f"Saved {mode} analysis to S3: {current_key}")
         return True
     except Exception as e:
         logger.error(f"Error saving analysis to S3: {e}", exc_info=True)
