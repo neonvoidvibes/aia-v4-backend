@@ -2,7 +2,8 @@
 import os
 import time
 import logging
-from typing import Optional, List
+import threading
+from typing import Optional, List, Tuple
 from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
 from langchain_core.documents import Document
@@ -17,6 +18,11 @@ logger = logging.getLogger(__name__)
 # --- Singleton client and index cache ---
 _PC_SINGLETON: Optional[Pinecone] = None
 _INDEX_CACHE: dict[str, object] = {}
+
+# --- Stats cache for performance ---
+_STATS_CACHE: dict[str, Tuple[Optional[dict], float]] = {}
+_STATS_CACHE_TTL = 300  # 5 minutes
+_STATS_CACHE_LOCK = threading.Lock()
 
 def init_pinecone() -> Optional[Pinecone]:
     """Initialize Pinecone with environment variables and return a Pinecone instance.
@@ -179,11 +185,20 @@ def create_namespace(index_name: str, namespace: str) -> bool:
         return False
 
 def get_index_stats(index_name: str) -> Optional[dict]:
-    """Get statistics for a Pinecone index.
+    """Get statistics for a Pinecone index with caching.
 
     Returns:
         A dictionary of index statistics if successful, None otherwise.
     """
+    # Check cache first
+    with _STATS_CACHE_LOCK:
+        if index_name in _STATS_CACHE:
+            cached_stats, cached_at = _STATS_CACHE[index_name]
+            if time.time() - cached_at < _STATS_CACHE_TTL:
+                logger.debug(f"Returning cached stats for index '{index_name}'")
+                return cached_stats
+
+    # Cache miss - fetch from Pinecone
     try:
         pc = init_pinecone()
         if not pc:
@@ -193,10 +208,18 @@ def get_index_stats(index_name: str) -> Optional[dict]:
         _INDEX_CACHE[index_name] = index
         stats = index.describe_index_stats()
         stats_dict = stats.to_dict() if hasattr(stats, 'to_dict') else stats
-        logger.info(f"Retrieved stats for index '{index_name}': {stats_dict}")
+
+        # Update cache
+        with _STATS_CACHE_LOCK:
+            _STATS_CACHE[index_name] = (stats_dict, time.time())
+
+        logger.info(f"Retrieved and cached stats for index '{index_name}'")
         return stats_dict
     except NotFoundException:
          logger.warning(f"Index '{index_name}' does not exist, cannot get stats.")
+         # Cache the failure too
+         with _STATS_CACHE_LOCK:
+             _STATS_CACHE[index_name] = (None, time.time())
          return None
     except Exception as e:
         logger.error(f"Error getting index stats for '{index_name}': {e}")

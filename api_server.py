@@ -1343,8 +1343,8 @@ retry_strategy_openai = retry(
 
 # Specific retry for Supabase auth transient errors
 retry_strategy_auth = retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(2),  # Reduced from 3 to 2
+    wait=wait_exponential(multiplier=1, min=1, max=5),  # Reduced max from 10 to 5
     retry_error_callback=log_retry_error,
     retry=retry_if_exception_type(AuthRetryableError)
 )
@@ -1684,11 +1684,11 @@ def admin_or_super_user_required(f):
 
 # Generic retry strategy for Supabase calls that might face transient network issues
 retry_strategy_supabase = retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1, min=1, max=15),
+    stop=stop_after_attempt(3),  # Reduced from 5 to 3
+    wait=wait_exponential(multiplier=1, min=1, max=8),  # Reduced max from 15 to 8
     retry_error_callback=log_retry_error,
     retry=retry_if_exception_type((
-        httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, 
+        httpx.RequestError, httpx.TimeoutException, httpx.ConnectError,
         httpx.RemoteProtocolError, ConnectionError, OSError
     ))
 )
@@ -7108,14 +7108,23 @@ def get_agents_capabilities(user: SupabaseUser):
         # Determine index name from env (fallback to default used in embedding handler)
         import os
         from utils.pinecone_utils import get_index_stats
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
         index_name = os.getenv('PINECONE_INDEX', 'river')
-        stats = get_index_stats(index_name)
+
+        # Wrap Pinecone call with 2-second timeout using ThreadPoolExecutor
         namespaces = {}
-        if stats:
-            # pinecone SDK returns namespaces as dict mapping namespace->meta
-            namespaces = stats.get('namespaces') or {}
-        else:
-            # If stats not available, treat capabilities as unknown/false
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(get_index_stats, index_name)
+                stats = future.result(timeout=2.0)  # 2 second timeout
+                if stats:
+                    namespaces = stats.get('namespaces') or {}
+        except FuturesTimeoutError:
+            logger.warning(f"Pinecone stats timeout for index '{index_name}', returning empty capabilities")
+            namespaces = {}
+        except Exception as timeout_err:
+            logger.warning(f"Error during Pinecone stats fetch: {timeout_err}")
             namespaces = {}
 
         for name in agent_names:
