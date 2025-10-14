@@ -1504,7 +1504,13 @@ def _fetch_user_event_memberships(agent_name: str, user_id: str) -> Set[str]:
                 res.error,
             )
             return set()
-        return {row.get("event_id") for row in (res.data or []) if row.get("event_id")}
+        # Normalize event IDs to lowercase for consistent comparison
+        memberships = set()
+        for row in (res.data or []):
+            raw_event_id = row.get("event_id")
+            if raw_event_id:
+                memberships.add(raw_event_id.strip().lower())
+        return memberships
     except Exception as exc:
         logger.error(
             "Unexpected error fetching event_members for agent '%s' user '%s': %s",
@@ -1528,6 +1534,11 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
     memberships = _fetch_user_event_memberships(agent_name, user_id)
     user_role = get_user_role(user_id)
     is_admin = user_role in {"admin", "super user"}
+
+    # Diagnostic logging
+    logger.info(f"[ACCESS] Agent={agent_name}, User={user_id[:8]}..., Role={user_role}, Admin={is_admin}")
+    logger.info(f"[ACCESS] Found {len(event_rows)} event rows, {len(memberships)} memberships")
+    logger.info(f"[ACCESS] Memberships (normalized): {sorted(list(memberships))}")
 
     allowed_events: Set[str] = set()
     visible_events: List[str] = []
@@ -1555,7 +1566,8 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
     allow_cross_group_read = (groups_read_mode != 'none')
 
     for row in event_rows:
-        event_id = row.get("event_id")
+        raw_event_id = row.get("event_id")
+        event_id = (raw_event_id or '').strip().lower()
         if not event_id:
             continue
 
@@ -1566,6 +1578,9 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         is_member = event_id in memberships
 
         event_metadata[event_id] = row
+        # Store original casing for display if needed
+        if raw_event_id and raw_event_id != event_id:
+            event_metadata[event_id]['_original_id'] = raw_event_id
         event_types[event_id] = event_type
 
         allowed = False
@@ -1591,6 +1606,9 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
                 if is_member or is_owner:
                     allowed = True
                     visible = not visibility_hidden
+
+        # Diagnostic logging for each event
+        logger.info(f"[ACCESS] Event '{event_id}' (raw: '{raw_event_id}'): type={event_type}, is_member={is_member}, is_owner={is_owner}, hidden={visibility_hidden}, allowed={allowed}")
 
         if allowed:
             allowed_events.add(event_id)
@@ -1620,6 +1638,10 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
         if ev not in personal_visible and ev != "0000"
     ])
     ordered_visible = personal_visible + shared_visible + other_visible
+
+    # Final diagnostic logging
+    logger.info(f"[ACCESS] Final allowed_events ({len(allowed_events)}): {sorted(list(allowed_events))}")
+    logger.info(f"[ACCESS] Final visible_events ({len(ordered_visible)}): {ordered_visible}")
 
     return {
         "allowed_events": allowed_events,
@@ -5155,7 +5177,9 @@ def handle_chat(user: SupabaseUser):
 
     # Extract all necessary data from the request *before* starting the stream
     agent_name = data.get('agent')
-    event_id = data.get('event', '0000')
+    # Normalize incoming event ID to lowercase for consistent comparison
+    event_id_raw = data.get('event', '0000')
+    event_id = event_id_raw.strip().lower() if isinstance(event_id_raw, str) else '0000'
     transcript_listen_mode = data.get('transcriptListenMode', 'latest')
     saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled')
     transcription_language_setting = data.get('transcriptionLanguage', 'any')
@@ -5197,13 +5221,24 @@ def handle_chat(user: SupabaseUser):
 
     if event_profile:
         allowed_event_ids_for_user = event_profile.get('allowed_events', set())
+        # allowed_event_ids_for_user is already normalized from get_event_access_profile()
         if event_id not in allowed_event_ids_for_user:
             logger.info(
-                "Event '%s' not allowed for user '%s' on agent '%s'. Falling back to '0000'.",
+                "Event '%s' (raw: '%s') not allowed for user '%s' on agent '%s'.",
                 event_id,
+                event_id_raw,
                 user.id,
                 agent_name,
             )
+            logger.debug(
+                "Access decision: allowed_events=%s, requested=%s",
+                sorted(list(allowed_event_ids_for_user))[:10],  # Sample first 10
+                event_id,
+            )
+            # Change behavior: return 403 instead of silent fallback when specific event requested
+            if event_id != '0000':
+                return jsonify({'error': f"Forbidden: event '{event_id_raw}' is not accessible for this user."}), 403
+            # If '0000' itself is denied (edge case), still fallback
             event_id = '0000'
 
     current_event_type = event_types_map.get(event_id, 'shared')
@@ -5764,6 +5799,7 @@ When you identify information that should be permanently stored in your agent do
 
                 elif groups_mode == 'breakout':
                     # Read all transcripts from breakout events only (excluding visibility_hidden=true)
+                    # Note: allowed_events is already normalized from get_event_access_profile()
                     breakout_event_ids = [
                         ev for ev in allowed_events
                         if ev != '0000'
