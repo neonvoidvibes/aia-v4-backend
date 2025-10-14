@@ -81,6 +81,7 @@ class RetrievalHandler:
         personal_event_id: Optional[str] = None,
         allowed_tier3_events: Optional[Iterable[str]] = None,
         include_personal_tier: bool = False,
+        include_t3: Optional[bool] = None,
     ):
         """Initialize retrieval handler."""
         if not agent_name: raise ValueError("agent_name required")
@@ -89,6 +90,8 @@ class RetrievalHandler:
         self.index_name = index_name
         self.namespace = agent_name
         self.session_id = session_id
+        # Store original event_id for policy checks
+        original_event_id = event_id or '0000'
         self.event_id = event_id if event_id and event_id != '0000' else None
         self.final_top_k = final_top_k
         self.initial_fetch_k = initial_fetch_k
@@ -111,6 +114,13 @@ class RetrievalHandler:
             self.allowed_tier3_events = None
         else:
             self.allowed_tier3_events = {ev for ev in allowed_tier3_events if ev and ev != '0000'}
+
+        # Safer default for Tier-3: only default-ON in shared space "0000"; OFF elsewhere unless caller opts in
+        if include_t3 is None:
+            self.include_t3 = (original_event_id == "0000")
+        else:
+            self.include_t3 = include_t3
+
         self.default_tier_caps: Dict[str, int] = {
             't0_foundation': 4,
             't_personal': 12,
@@ -521,7 +531,7 @@ class RetrievalHandler:
         tier_caps: Optional[Iterable[int]] = None,
         mmr_k: Optional[int] = None,
         mmr_lambda: float = 0.6,
-        include_t3: bool = True,
+        include_t3: Optional[bool] = None,
         metadata_filter: Optional[Dict] = None,
     ) -> List[Document]:
         """Tiered retrieval that prioritizes personal context when available."""
@@ -542,6 +552,11 @@ class RetrievalHandler:
 
         current_event = self.event_id or '0000'
         caps = self._resolve_tier_caps(tier_caps)
+
+        # Use instance default if include_t3 not explicitly provided
+        if include_t3 is None:
+            include_t3 = self.include_t3
+
         tiers: List[Dict[str, Any]] = []
         tier_hit_counts = {label: 0 for label in ['t0_foundation', 't_personal', 't1', 't2', 't3']}
 
@@ -570,18 +585,22 @@ class RetrievalHandler:
             t2_filter = merge_filter({'agent_name': self.namespace, 'event_id': '0000'})
             tiers.append({'filter': t2_filter, 'cap': caps['t2'], 'label': 't2'})
 
+        # --- Tier 3 (cross-event expansion; opt-in only) ---
         if include_t3 and caps['t3'] > 0:
+            t3_filter: Dict[str, Any] = {'agent_name': self.namespace}
             if self.allowed_tier3_events is not None:
-                if self.allowed_tier3_events:
-                    t3_event_clause: Optional[Dict[str, Any]] = {'$in': list(self.allowed_tier3_events)}
-                else:
-                    t3_event_clause = None
+                # Explicit policy from caller. Empty set => no T3.
+                if len(self.allowed_tier3_events) > 0:
+                    t3_filter['event_id'] = {'$in': list(self.allowed_tier3_events)}
+                    tiers.append({'filter': merge_filter(t3_filter), 'cap': caps['t3'], 'label': 't3'})
             else:
-                t3_event_clause = {'$nin': [current_event, '0000']}
-
-            if t3_event_clause:
-                t3_filter = merge_filter({'agent_name': self.namespace, 'event_id': t3_event_clause})
-                tiers.append({'filter': t3_filter, 'cap': caps['t3'], 'label': 't3'})
+                # No implicit cross-event search.
+                # If someone forced include_t3=True without allowlist:
+                # - In shared "0000": omit event_id to span all events for this agent
+                # - Else: do not run T3 (strict isolation)
+                if current_event == "0000":
+                    # For shared space, span all events (don't add event_id filter)
+                    tiers.append({'filter': merge_filter(t3_filter), 'cap': caps['t3'], 'label': 't3'})
 
         all_matches = []
         for tier in tiers:

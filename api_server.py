@@ -5328,6 +5328,7 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                 try:
                     normalized_query = (last_actual_user_message_for_rag or "").strip().lower().rstrip('.!?')
                     if normalized_query and normalized_query not in SIMPLE_QUERIES_TO_BYPASS_RAG:
+                        # Tier-3 policy: ON for "0000" with allowlist, OFF for isolated events
                         retriever = RetrievalHandler(
                             index_name="river",
                             agent_name=agent_name,
@@ -5337,6 +5338,7 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                             openai_api_key=get_api_key(agent_name, 'openai'),
                             event_type=current_event_type,
                             personal_event_id=personal_event_id,
+                            include_t3=(event_id == "0000" and bool(tier3_allow_events)),
                             allowed_tier3_events=tier3_allow_events,
                             include_personal_tier=(current_event_type == 'personal'),
                         )
@@ -5555,6 +5557,7 @@ When you identify information that should be permanently stored in your agent do
                     analyzed_summaries_context = ""
                     try:
                         # Multi-pass retrieval: Phase 1 - Metadata filtering + Phase 2 - Semantic search
+                        # Tier-3 policy: ON for "0000" with allowlist, OFF for isolated events
                         meeting_retriever = RetrievalHandler(
                             index_name="river",
                             agent_name=agent_name,
@@ -5563,6 +5566,7 @@ When you identify information that should be permanently stored in your agent do
                             openai_api_key=get_api_key(agent_name, 'openai'),
                             event_type=current_event_type,
                             personal_event_id=personal_event_id,
+                            include_t3=(event_id == "0000" and bool(tier3_allow_events)),
                             allowed_tier3_events=tier3_allow_events,
                             include_personal_tier=(current_event_type == 'personal')
                         )
@@ -6231,12 +6235,15 @@ def pinecone_query_proxy(user: SupabaseUser):
         return jsonify({"error": "agent and query are required"}), 400
 
     try:
+        # Tier-3 policy: strict isolation for non-0000 events
         retriever = RetrievalHandler(
             index_name="river",
             agent_name=agent_name,
             event_id=event_id,
             anthropic_api_key=get_api_key(agent_name, 'anthropic'),
-            openai_api_key=get_api_key(agent_name, 'openai')
+            openai_api_key=get_api_key(agent_name, 'openai'),
+            include_t3=False,
+            allowed_tier3_events=set()
         )
         tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '7,6,6,4').split(',')
         try:
