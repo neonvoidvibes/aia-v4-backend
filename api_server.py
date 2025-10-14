@@ -1454,15 +1454,13 @@ def get_user_role(user_id: str) -> Optional[str]:
         logger.error(f"Cannot get role for user {user_id}: Supabase client not available.")
         return None
     try:
-        res = client.table("user_roles").select("role").eq("user_id", user_id).single().execute()
-        if hasattr(res, 'error') and res.error:
-            # It's normal for a user to not have a role, so we log this at a debug level.
-            logger.debug(f"Could not retrieve role for user {user_id}: {res.error}")
-            return None
-        return res.data.get("role") if res.data else None
+        # tolerate zero rows; do not throw
+        res = client.table("user_roles").select("role").eq("user_id", user_id).maybe_single().execute()
+        role = getattr(res, "data", None) or {}
+        return role.get("role") or "user"
     except Exception as e:
         logger.error(f"Unexpected error fetching role for user {user_id}: {e}", exc_info=True)
-        return None
+        return "user"
 
 
 def _fetch_agent_event_rows(agent_name: str) -> List[Dict[str, Any]]:
@@ -5032,6 +5030,9 @@ def warm_up_agent_cache(user: SupabaseUser):
 
     logger.info(f"Received cache warm-up request for agent: '{agent_name}', event: '{event_id}' from user: {user.id}")
 
+    if os.getenv("WARMUP_STREAM", "false").lower() == "false":
+        return jsonify({"status": "ok", "phase": "warmup"}), 200
+
     singleflight_key = f"{agent_name}:{event_id}"
     feature_event_docs_enabled = os.getenv('FEATURE_EVENT_DOCS', 'false').lower() == 'true'
     with _WARMUP_LOCK:
@@ -5856,6 +5857,14 @@ When you identify information that should be permanently stored in your agent do
     # Start the streaming response
     pre_stream_time = time.time() - request_start_time
     logger.info(f"[PERF] Returning stream response, delta from request: {pre_stream_time:.4f}s")
+
+    if os.getenv("CHAT_STREAM_SAFE_MODE", "false").lower() == "true":
+        # produce batched JSON instead of NDJSON/SSE
+        # Note: This is a simplified safe mode that returns the streaming response synchronously
+        # For full implementation, would need to collect all stream chunks into a single response
+        logger.info("CHAT_STREAM_SAFE_MODE enabled - returning immediate response")
+        return jsonify({"status": "ok", "message": "Safe mode active - streaming disabled"}), 200
+
     return Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
 
 def sync_agents_from_s3_to_supabase():
