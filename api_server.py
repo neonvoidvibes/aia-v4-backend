@@ -5328,20 +5328,35 @@ You are a wise and ancient dragon. You have seen empires rise and fall. You spea
                 try:
                     normalized_query = (last_actual_user_message_for_rag or "").strip().lower().rstrip('.!?')
                     if normalized_query and normalized_query not in SIMPLE_QUERIES_TO_BYPASS_RAG:
-                        # Tier-3 policy: ON for "0000" with allowlist, OFF for isolated events
-                        retriever = RetrievalHandler(
-                            index_name="river",
-                            agent_name=agent_name,
-                            session_id=chat_session_id_log,
-                            event_id=event_id,
-                            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
-                            openai_api_key=get_api_key(agent_name, 'openai'),
-                            event_type=current_event_type,
-                            personal_event_id=personal_event_id,
-                            include_t3=(event_id == "0000" and bool(tier3_allow_events)),
-                            allowed_tier3_events=tier3_allow_events,
-                            include_personal_tier=(current_event_type == 'personal'),
-                        )
+                        # Tier-3 policy: ON for "0000" (spans all events by default), OFF for isolated events
+                        if event_id == "0000":
+                            retriever = RetrievalHandler(
+                                index_name="river",
+                                agent_name=agent_name,
+                                session_id=chat_session_id_log,
+                                event_id=event_id,
+                                anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                                openai_api_key=get_api_key(agent_name, 'openai'),
+                                event_type=current_event_type,
+                                personal_event_id=personal_event_id,
+                                include_t3=True,
+                                allowed_tier3_events=None,  # No allowlist => span all events
+                                include_personal_tier=(current_event_type == 'personal'),
+                            )
+                        else:
+                            retriever = RetrievalHandler(
+                                index_name="river",
+                                agent_name=agent_name,
+                                session_id=chat_session_id_log,
+                                event_id=event_id,
+                                anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                                openai_api_key=get_api_key(agent_name, 'openai'),
+                                event_type=current_event_type,
+                                personal_event_id=personal_event_id,
+                                include_t3=False,
+                                allowed_tier3_events=set(),  # Strict isolation
+                                include_personal_tier=(current_event_type == 'personal'),
+                            )
                         # Event-scoped tiered retrieval with caps and MMR
                         tier_caps_env = os.getenv('RETRIEVAL_TIER_CAPS', '4,12,6,6,4').split(',')
                         try:
@@ -5557,19 +5572,33 @@ When you identify information that should be permanently stored in your agent do
                     analyzed_summaries_context = ""
                     try:
                         # Multi-pass retrieval: Phase 1 - Metadata filtering + Phase 2 - Semantic search
-                        # Tier-3 policy: ON for "0000" with allowlist, OFF for isolated events
-                        meeting_retriever = RetrievalHandler(
-                            index_name="river",
-                            agent_name=agent_name,
-                            event_id=event_id,
-                            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
-                            openai_api_key=get_api_key(agent_name, 'openai'),
-                            event_type=current_event_type,
-                            personal_event_id=personal_event_id,
-                            include_t3=(event_id == "0000" and bool(tier3_allow_events)),
-                            allowed_tier3_events=tier3_allow_events,
-                            include_personal_tier=(current_event_type == 'personal')
-                        )
+                        # Tier-3 policy: ON for "0000" (spans all events by default), OFF for isolated events
+                        if event_id == "0000":
+                            meeting_retriever = RetrievalHandler(
+                                index_name="river",
+                                agent_name=agent_name,
+                                event_id=event_id,
+                                anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                                openai_api_key=get_api_key(agent_name, 'openai'),
+                                event_type=current_event_type,
+                                personal_event_id=personal_event_id,
+                                include_t3=True,
+                                allowed_tier3_events=None,  # No allowlist => span all events
+                                include_personal_tier=(current_event_type == 'personal')
+                            )
+                        else:
+                            meeting_retriever = RetrievalHandler(
+                                index_name="river",
+                                agent_name=agent_name,
+                                event_id=event_id,
+                                anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                                openai_api_key=get_api_key(agent_name, 'openai'),
+                                event_type=current_event_type,
+                                personal_event_id=personal_event_id,
+                                include_t3=False,
+                                allowed_tier3_events=set(),  # Strict isolation
+                                include_personal_tier=(current_event_type == 'personal')
+                            )
                         
                         # Build metadata filter for meeting summaries from this event
                         metadata_filter = {
