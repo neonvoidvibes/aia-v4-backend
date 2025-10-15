@@ -203,6 +203,13 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         groups_read_mode = data.get('groupsReadMode', 'none')
         logger.info(f"Canvas: transcript_listen_mode={transcript_listen_mode}, groups_read_mode={groups_read_mode} for {agent_name}")
 
+        # Get event access profile (same as main chat agent - api_server.py:5208)
+        from api_server import get_event_access_profile
+        event_profile = get_event_access_profile(agent_name, user.id)
+        allowed_events = set(event_profile.get('allowed_events') or {"0000"}) if event_profile else {"0000"}
+        event_types_map = dict(event_profile.get('event_types') or {}) if event_profile else {}
+        logger.info(f"Canvas: event_profile loaded with {len(allowed_events)} allowed events, {len(event_types_map)} event types")
+
         # Get per-agent custom API key or fallback to default
         agent_anthropic_key = get_api_key(agent_name, 'anthropic')
         if not agent_anthropic_key:
@@ -238,7 +245,10 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                             individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                             event_type='shared',  # Canvas typically uses shared context
                             personal_layer=None,  # Canvas doesn't use personal layers for now
-                            personal_event_id=None
+                            personal_event_id=None,
+                            allowed_events=allowed_events,
+                            event_types_map=event_types_map,
+                            event_profile=event_profile
                         )
 
                         analyses[mode] = {
@@ -270,7 +280,10 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         event_id=event_id,
                         transcript_listen_mode=transcript_listen_mode,
                         groups_read_mode=groups_read_mode,
-                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states
+                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+                        allowed_events=allowed_events,
+                        event_types_map=event_types_map,
+                        event_profile=event_profile
                     )
 
                     if raw_transcript_content:
@@ -508,6 +521,12 @@ This is a voice interface - every word must count.
             groups_read_mode = data.get('groupsReadMode', 'none')
             logger.info(f"Canvas refresh: transcript_listen_mode={transcript_listen_mode}, groups_read_mode={groups_read_mode} for {agent_name}")
 
+            # Get event access profile (same as main chat agent - api_server.py:5208)
+            from api_server import get_event_access_profile
+            event_profile = get_event_access_profile(agent_name, user.id)
+            allowed_events = set(event_profile.get('allowed_events') or {"0000"}) if event_profile else {"0000"}
+            event_types_map = dict(event_profile.get('event_types') or {}) if event_profile else {}
+
             # Refresh all three modes in parallel (for now, sequential is simpler)
             results = {}
             for mode in ['mirror', 'lens', 'portal']:
@@ -524,7 +543,10 @@ This is a voice interface - every word must count.
                         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                         event_type='shared',
                         personal_layer=None,
-                        personal_event_id=None
+                        personal_event_id=None,
+                        allowed_events=allowed_events,
+                        event_types_map=event_types_map,
+                        event_profile=event_profile
                     )
                     results[mode] = {
                         'success': doc is not None,

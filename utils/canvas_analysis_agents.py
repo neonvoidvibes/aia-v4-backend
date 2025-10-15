@@ -296,7 +296,10 @@ def get_transcript_content_for_analysis(
     event_id: str,
     transcript_listen_mode: str = 'latest',
     groups_read_mode: str = 'none',
-    individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None
+    individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
+    allowed_events: Optional[set] = None,
+    event_types_map: Optional[Dict[str, str]] = None,
+    event_profile: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
     """
     Get transcript content based on Settings > Memory configuration.
@@ -310,6 +313,9 @@ def get_transcript_content_for_analysis(
         transcript_listen_mode: 'none' | 'latest' | 'some' | 'all' (for event's own transcripts)
         groups_read_mode: 'none' | 'latest' | 'all' | 'breakout' (for group events)
         individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode filtering
+        allowed_events: Set of event IDs user has access to (from get_event_access_profile)
+        event_types_map: Dict mapping event_id -> event_type (from get_event_access_profile)
+        event_profile: Full event profile dict (includes event_metadata for visibility_hidden check)
 
     Returns:
         Combined transcript content or None
@@ -412,75 +418,75 @@ def get_transcript_content_for_analysis(
         else:
             logger.warning(f"No transcript content available for event {event_id} in '{transcript_listen_mode}' mode")
 
-    # 2. Get group transcripts if enabled (mirrors api_server.py:5713-5746)
+    # 2. Get group transcripts if enabled (mirrors api_server.py:5713-5824)
     if event_id == '0000' and groups_read_mode != 'none':
-        # Get allowed group events from Supabase
-        from .supabase_client import get_supabase_client
+        # Use event access profile to get allowed events (consistent with main chat agent)
+        # Fallback to empty set if event profile not provided
+        if allowed_events is None:
+            logger.warning("Event access profile not provided for groups_read_mode, using fallback (empty)")
+            allowed_events = {"0000"}
+        if event_types_map is None:
+            event_types_map = {}
+        if event_profile is None:
+            event_profile = {}
 
-        client = get_supabase_client()
-        if client:
-            try:
-                # Get user_id from current context (we'll need to pass this)
-                # For now, get all group events for this agent
-                event_rows = client.table("events").select("*").eq("agent_name", agent_name).execute()
-                tier3_allow_events = {
-                    row['event_id'] for row in event_rows.data
-                    if row.get('type', 'group').lower() == 'group' and row['event_id'] != '0000'
-                }
+        # Get tier 3 (group) events from allowed_events
+        tier3_allow_events = {
+            ev for ev in allowed_events
+            if ev != '0000' and event_types_map.get(ev, 'group').lower() == 'group'
+        }
 
-                if tier3_allow_events:
-                    if groups_read_mode == 'latest':
-                        logger.info(f"Groups read mode 'latest': fetching from {len(tier3_allow_events)} group events")
-                        multi_content, success = read_new_transcript_content_multi(agent_name, list(tier3_allow_events))
-                        if success and multi_content:
-                            transcript_parts.append(f"=== GROUP EVENTS LATEST TRANSCRIPTS ===\n{multi_content}\n=== END GROUP EVENTS LATEST TRANSCRIPTS ===")
-                            logger.info(f"Loaded group transcripts: {len(multi_content)} chars")
+        if tier3_allow_events:
+            if groups_read_mode == 'latest':
+                logger.info(f"Groups read mode 'latest': fetching from {len(tier3_allow_events)} group events")
+                multi_content, success = read_new_transcript_content_multi(agent_name, list(tier3_allow_events))
+                if success and multi_content:
+                    transcript_parts.append(f"=== GROUP EVENTS LATEST TRANSCRIPTS ===\n{multi_content}\n=== END GROUP EVENTS LATEST TRANSCRIPTS ===")
+                    logger.info(f"Loaded group transcripts: {len(multi_content)} chars")
 
-                    elif groups_read_mode == 'all':
-                        logger.info(f"Groups read mode 'all': fetching all transcripts from {len(tier3_allow_events)} group events")
-                        groups_contents = []
-                        for gid in tier3_allow_events:
-                            all_content = read_all_transcripts_in_folder(agent_name, gid)
-                            if all_content:
-                                # Standardized header format
-                                groups_contents.append(
-                                    f"=== SOURCE: Group Event - {gid} (Type: group) ===\n"
-                                    f"{all_content}\n"
-                                    f"=== END SOURCE: Group Event - {gid} ==="
-                                )
-                        if groups_contents:
-                            combined = "\n\n--- EVENT SEPARATOR ---\n\n".join(groups_contents)
-                            transcript_parts.append(f"=== ALL GROUP EVENTS TRANSCRIPTS ===\n{combined}\n=== END ALL GROUP EVENTS TRANSCRIPTS ===")
-                            logger.info(f"Loaded all group transcripts: {len(combined)} chars")
+            elif groups_read_mode == 'all':
+                logger.info(f"Groups read mode 'all': fetching all transcripts from {len(tier3_allow_events)} group events")
+                groups_contents = []
+                for gid in tier3_allow_events:
+                    all_content = read_all_transcripts_in_folder(agent_name, gid)
+                    if all_content:
+                        # Standardized header format
+                        groups_contents.append(
+                            f"=== SOURCE: Group Event - {gid} (Type: group) ===\n"
+                            f"{all_content}\n"
+                            f"=== END SOURCE: Group Event - {gid} ==="
+                        )
+                if groups_contents:
+                    combined = "\n\n--- EVENT SEPARATOR ---\n\n".join(groups_contents)
+                    transcript_parts.append(f"=== ALL GROUP EVENTS TRANSCRIPTS ===\n{combined}\n=== END ALL GROUP EVENTS TRANSCRIPTS ===")
+                    logger.info(f"Loaded all group transcripts: {len(combined)} chars")
 
-                    elif groups_read_mode == 'breakout':
-                        # Read all transcripts from breakout events only (excluding visibility_hidden=true)
-                        # Get breakout events for this agent
-                        breakout_rows = client.table("events").select("*").eq("agent_name", agent_name).execute()
-                        breakout_event_ids = [
-                            row['event_id'] for row in breakout_rows.data
-                            if row.get('event_id') != '0000'
-                            and row.get('type', '').lower() == 'breakout'
-                            and not row.get('visibility_hidden', False)
-                        ]
-                        logger.info(f"Groups read mode 'breakout': fetching all transcripts from {len(breakout_event_ids)} breakout events")
-                        breakout_contents = []
-                        for breakout_event_id in breakout_event_ids:
-                            breakout_transcripts = read_all_transcripts_in_folder(agent_name, breakout_event_id)
-                            if breakout_transcripts:
-                                # Standardized header format
-                                breakout_contents.append(
-                                    f"=== SOURCE: Group Event - {breakout_event_id} (Type: breakout) ===\n"
-                                    f"{breakout_transcripts}\n"
-                                    f"=== END SOURCE: Group Event - {breakout_event_id} ==="
-                                )
-                        if breakout_contents:
-                            breakout_block = "\n\n--- EVENT SEPARATOR ---\n\n".join(breakout_contents)
-                            transcript_parts.append(f"=== BREAKOUT EVENTS TRANSCRIPTS ===\n{breakout_block}\n=== END BREAKOUT EVENTS TRANSCRIPTS ===")
-                            logger.info(f"Loaded breakout transcripts: {len(breakout_block)} chars")
-
-            except Exception as e:
-                logger.error(f"Error fetching group transcripts: {e}", exc_info=True)
+            elif groups_read_mode == 'breakout':
+                # Read all transcripts from breakout events only (excluding visibility_hidden=true)
+                # MATCHES api_server.py:5809-5813 exactly
+                breakout_event_ids = [
+                    ev for ev in allowed_events
+                    if ev != '0000'
+                    and event_types_map.get(ev) == 'breakout'
+                    and not event_profile.get('event_metadata', {}).get(ev, {}).get('visibility_hidden', False)
+                ]
+                logger.info(f"Groups read mode 'breakout': fetching all transcripts from {len(breakout_event_ids)} breakout events")
+                breakout_contents = []
+                for breakout_event_id in breakout_event_ids:
+                    breakout_transcripts = read_all_transcripts_in_folder(agent_name, breakout_event_id)
+                    if breakout_transcripts:
+                        # Standardized header format
+                        breakout_contents.append(
+                            f"=== SOURCE: Group Event - {breakout_event_id} (Type: breakout) ===\n"
+                            f"{breakout_transcripts}\n"
+                            f"=== END SOURCE: Group Event - {breakout_event_id} ==="
+                        )
+                if breakout_contents:
+                    breakout_block = "\n\n--- EVENT SEPARATOR ---\n\n".join(breakout_contents)
+                    transcript_parts.append(f"=== BREAKOUT EVENTS TRANSCRIPTS ===\n{breakout_block}\n=== END BREAKOUT EVENTS TRANSCRIPTS ===")
+                    logger.info(f"Loaded breakout transcripts: {len(breakout_block)} chars")
+        else:
+            logger.info(f"No group events found in allowed_events for groups_read_mode={groups_read_mode}")
 
     if not transcript_parts:
         logger.warning("No transcript content available for analysis")
@@ -880,7 +886,10 @@ def get_all_canvas_source_content(
     event_id: str,
     transcript_listen_mode: str = 'latest',
     groups_read_mode: str = 'none',
-    individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None
+    individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
+    allowed_events: Optional[set] = None,
+    event_types_map: Optional[Dict[str, str]] = None,
+    event_profile: Optional[Dict[str, Any]] = None
 ) -> str:
     """
     Get all source content for canvas/MLP agents:
@@ -893,6 +902,9 @@ def get_all_canvas_source_content(
         transcript_listen_mode: 'none' | 'latest' | 'some' | 'all'
         groups_read_mode: 'none' | 'latest' | 'all' | 'breakout'
         individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode
+        allowed_events: Set of event IDs user has access to (from get_event_access_profile)
+        event_types_map: Dict mapping event_id -> event_type (from get_event_access_profile)
+        event_profile: Full event profile dict (includes event_metadata for visibility_hidden check)
 
     Returns:
         Combined source content with standardized headers
@@ -905,7 +917,10 @@ def get_all_canvas_source_content(
         event_id=event_id,
         transcript_listen_mode=transcript_listen_mode,
         groups_read_mode=groups_read_mode,
-        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states
+        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+        allowed_events=allowed_events,
+        event_types_map=event_types_map,
+        event_profile=event_profile
     )
 
     if transcript_content:
@@ -1054,7 +1069,10 @@ def get_or_generate_analysis_doc(
     individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
-    personal_event_id: Optional[str] = None
+    personal_event_id: Optional[str] = None,
+    allowed_events: Optional[set] = None,
+    event_types_map: Optional[Dict[str, str]] = None,
+    event_profile: Optional[Dict[str, Any]] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Get analysis documents (current and previous) for the specified mode, generating if needed.
@@ -1072,6 +1090,9 @@ def get_or_generate_analysis_doc(
         event_type: Event type
         personal_layer: Personal agent layer
         personal_event_id: Personal event ID
+        allowed_events: Set of event IDs user has access to (from get_event_access_profile)
+        event_types_map: Dict mapping event_id -> event_type (from get_event_access_profile)
+        event_profile: Full event profile dict (includes event_metadata for visibility_hidden check)
 
     Returns:
         Tuple of (current_doc, previous_doc) - either can be None
@@ -1127,7 +1148,10 @@ def get_or_generate_analysis_doc(
         event_id=event_id,
         transcript_listen_mode=transcript_listen_mode,
         groups_read_mode=groups_read_mode,
-        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states
+        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+        allowed_events=allowed_events,
+        event_types_map=event_types_map,
+        event_profile=event_profile
     )
 
     if not all_source_content:
