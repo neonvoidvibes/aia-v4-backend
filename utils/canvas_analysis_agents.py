@@ -969,6 +969,76 @@ def get_all_canvas_source_content(
     return combined
 
 
+def generate_analysis_metadata_header(
+    agent_name: str,
+    event_id: str,
+    mode: str,
+    transcript_listen_mode: str,
+    groups_read_mode: str,
+    source_content: str,
+    allowed_events: Optional[set] = None,
+    event_types_map: Optional[Dict[str, str]] = None
+) -> str:
+    """
+    Generate metadata header for MLP analysis documents showing sources used.
+
+    Args:
+        agent_name: Agent name
+        event_id: Event ID
+        mode: Analysis mode (mirror/lens/portal)
+        transcript_listen_mode: Transcript listen mode setting
+        groups_read_mode: Groups read mode setting
+        source_content: The actual source content that was analyzed
+        allowed_events: Set of allowed events (for counting group/breakout events)
+        event_types_map: Event types map (for identifying breakout events)
+
+    Returns:
+        Markdown header string
+    """
+    from datetime import datetime, timezone
+
+    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    # Count sources from the source_content string by looking for source markers
+    transcript_count = source_content.count('=== SOURCE: Transcript -')
+    group_event_count = source_content.count('=== SOURCE: Group Event -')
+    document_count = source_content.count('=== SOURCE: Document -')
+
+    # Identify breakout events if in breakout mode
+    breakout_events = []
+    if groups_read_mode == 'breakout' and allowed_events and event_types_map:
+        breakout_events = [
+            ev for ev in allowed_events
+            if ev != '0000' and event_types_map.get(ev) == 'breakout'
+        ]
+
+    header = f"""# Analysis Metadata
+
+**Agent:** {agent_name}
+**Event:** {event_id}
+**Mode:** {mode.upper()}
+**Generated:** {timestamp}
+
+## Sources Analyzed
+
+**Transcript Settings:**
+- Listen Mode: `{transcript_listen_mode}`
+- Groups Mode: `{groups_read_mode}`
+
+**Sources Loaded:**
+- Individual Transcripts: {transcript_count}
+- Group Events: {group_event_count}
+- Additional Documents: {document_count}
+"""
+
+    if breakout_events:
+        header += f"\n**Breakout Events Included:** {', '.join(sorted(breakout_events))}\n"
+
+    header += "\n---\n\n"
+
+    return header
+
+
 def run_analysis_agent(
     agent_name: str,
     event_id: str,
@@ -1173,15 +1243,28 @@ def get_or_generate_analysis_doc(
         logger.error(f"Failed to generate {depth_mode} analysis")
         return None, None
 
+    # 3.5. Prepend metadata header showing sources used
+    metadata_header = generate_analysis_metadata_header(
+        agent_name=agent_name,
+        event_id=event_id,
+        mode=depth_mode,
+        transcript_listen_mode=transcript_listen_mode,
+        groups_read_mode=groups_read_mode,
+        source_content=all_source_content,
+        allowed_events=allowed_events,
+        event_types_map=event_types_map
+    )
+    new_analysis_doc_with_header = metadata_header + new_analysis_doc
+
     # 4. Save to S3 (this moves current to previous automatically)
-    save_analysis_doc_to_s3(agent_name, event_id, depth_mode, new_analysis_doc)
+    save_analysis_doc_to_s3(agent_name, event_id, depth_mode, new_analysis_doc_with_header)
 
     # 5. Load the previous that was just created (what was current before)
     previous_doc = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, version='previous')
 
     # 6. Cache result in memory with both current and previous
     CANVAS_ANALYSIS_CACHE[cache_key] = {
-        'current': new_analysis_doc,
+        'current': new_analysis_doc_with_header,
         'previous': previous_doc,
         'timestamp': datetime.now(timezone.utc),
         'mode': depth_mode,
@@ -1190,7 +1273,7 @@ def get_or_generate_analysis_doc(
     }
 
     logger.info(f"Cached {depth_mode} analysis (current + previous) in memory and S3 for {agent_name}/{event_id}")
-    return new_analysis_doc, previous_doc
+    return new_analysis_doc_with_header, previous_doc
 
 
 def get_analysis_status(agent_name: str, event_id: str, depth_mode: str) -> Dict[str, Any]:
