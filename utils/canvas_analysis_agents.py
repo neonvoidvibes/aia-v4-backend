@@ -74,10 +74,13 @@ def get_analysis_agent_prompt(
 {transcript_content}
 === END TRANSCRIPT DATA ===
 
-CRITICAL: The transcript data above may contain MULTIPLE SOURCES with distinct labels (e.g., different breakout groups, events, or transcript files). Each source is clearly marked with headers like "--- Breakout Event: X ---" or "--- START Transcript Source: Y ---".
+CRITICAL: The transcript data above may contain MULTIPLE SOURCES with distinct labels (e.g., different breakout groups, events, transcript files, or uploaded documents). Each source is clearly marked with standardized headers like:
+- "=== SOURCE: Transcript - filename (Event: event_id) ==="
+- "=== SOURCE: Group Event - event_id (Type: breakout) ==="
+- "=== SOURCE: Document - filename (Type: PDF, Size: 100KB) ==="
 
 SOURCE DIFFERENTIATION REQUIREMENT:
-When analyzing transcripts from multiple sources, you MUST maintain clear attribution in your analysis:
+When analyzing data from multiple sources, you MUST maintain clear attribution in your analysis:
 - Identify patterns or themes WITHIN each source
 - Compare/contrast patterns BETWEEN sources when relevant
 - Always specify which source(s) your observations come from
@@ -395,7 +398,12 @@ def get_transcript_content_for_analysis(
                 if key:
                     content = read_file_content(key, f"transcript {name}")
                     if content:
-                        transcript_contents.append(f"--- START Transcript Source: {name} ---\n{content}\n--- END Transcript Source: {name} ---")
+                        # Standardized header format
+                        transcript_contents.append(
+                            f"=== SOURCE: Transcript - {name} (Event: {event_id}) ===\n"
+                            f"{content}\n"
+                            f"=== END SOURCE: Transcript - {name} ==="
+                        )
 
             if transcript_contents:
                 combined = "\n\n".join(transcript_contents)
@@ -435,7 +443,12 @@ def get_transcript_content_for_analysis(
                         for gid in tier3_allow_events:
                             all_content = read_all_transcripts_in_folder(agent_name, gid)
                             if all_content:
-                                groups_contents.append(f"--- Group Event: {gid} ---\n{all_content}")
+                                # Standardized header format
+                                groups_contents.append(
+                                    f"=== SOURCE: Group Event - {gid} (Type: group) ===\n"
+                                    f"{all_content}\n"
+                                    f"=== END SOURCE: Group Event - {gid} ==="
+                                )
                         if groups_contents:
                             combined = "\n\n--- EVENT SEPARATOR ---\n\n".join(groups_contents)
                             transcript_parts.append(f"=== ALL GROUP EVENTS TRANSCRIPTS ===\n{combined}\n=== END ALL GROUP EVENTS TRANSCRIPTS ===")
@@ -456,7 +469,12 @@ def get_transcript_content_for_analysis(
                         for breakout_event_id in breakout_event_ids:
                             breakout_transcripts = read_all_transcripts_in_folder(agent_name, breakout_event_id)
                             if breakout_transcripts:
-                                breakout_contents.append(f"--- Breakout Event: {breakout_event_id} ---\n{breakout_transcripts}")
+                                # Standardized header format
+                                breakout_contents.append(
+                                    f"=== SOURCE: Group Event - {breakout_event_id} (Type: breakout) ===\n"
+                                    f"{breakout_transcripts}\n"
+                                    f"=== END SOURCE: Group Event - {breakout_event_id} ==="
+                                )
                         if breakout_contents:
                             breakout_block = "\n\n--- EVENT SEPARATOR ---\n\n".join(breakout_contents)
                             transcript_parts.append(f"=== BREAKOUT EVENTS TRANSCRIPTS ===\n{breakout_block}\n=== END BREAKOUT EVENTS TRANSCRIPTS ===")
@@ -474,18 +492,36 @@ def get_transcript_content_for_analysis(
     return combined_content
 
 
-def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str, previous: bool = False) -> str:
+def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str, version: str = 'latest') -> str:
     """
     Get S3 key for storing analysis document per agent.
 
-    Format: organizations/{org}/agents/{agent_name}/_canvas/{event}_{mode}.md
-    Or:     organizations/{org}/agents/{agent_name}/_canvas/{event}_{mode}_previous.md
+    Args:
+        agent_name: Agent name
+        event_id: Event ID
+        mode: Analysis mode (mirror/lens/portal)
+        version: 'latest' | 'previous' | 'YYYYMMDD' (for history)
+
+    Returns:
+        S3 key path for the analysis document
+
+    Format:
+        latest:   organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-latest/{event}_{mode}.md
+        previous: organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event}_{mode}_{date}.md
+        history:  organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-history/{event}_{mode}_{date}.md
     """
-    suffix = "_previous" if previous else ""
-    return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/{event_id}_{mode}{suffix}.md"
+    if version == 'latest':
+        return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-latest/{event_id}_{mode}.md"
+    elif version == 'previous':
+        # For previous, we include a date suffix but use special folder
+        date_str = datetime.now(timezone.utc).strftime('%Y%m%d')
+        return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_{date_str}.md"
+    else:
+        # version is a date string YYYYMMDD for history
+        return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-history/{event_id}_{mode}_{version}.md"
 
 
-def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, previous: bool = False) -> Optional[str]:
+def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, version: str = 'latest') -> Optional[str]:
     """
     Load analysis document from S3.
 
@@ -493,24 +529,22 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, previou
         agent_name: Agent name
         event_id: Event ID
         mode: Analysis mode (mirror/lens/portal)
-        previous: If True, load the _previous version
+        version: 'latest' | 'previous' | 'YYYYMMDD' (for history)
 
     Returns:
         Markdown content string or None if not found
     """
     try:
         s3_client = get_s3_client()
-        key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=previous)
+        key = get_s3_analysis_doc_key(agent_name, event_id, mode, version=version)
 
         response = s3_client.get_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=key)
         content = response['Body'].read().decode('utf-8')
 
-        version_label = "previous" if previous else "current"
-        logger.info(f"Loaded {version_label} {mode} analysis from S3: {key}")
+        logger.info(f"Loaded {version} {mode} analysis from S3: {key}")
         return content
     except s3_client.exceptions.NoSuchKey:
-        version_label = "previous" if previous else "current"
-        logger.info(f"No S3 {version_label} analysis document found for {agent_name}/{event_id}/{mode}")
+        logger.info(f"No S3 {version} analysis document found for {agent_name}/{event_id}/{mode}")
         return None
     except Exception as e:
         logger.error(f"Error loading analysis from S3: {e}", exc_info=True)
@@ -532,7 +566,9 @@ def delete_previous_analysis(agent_name: str, event_id: str, mode: str) -> bool:
     """
     try:
         s3_client = get_s3_client()
-        previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=True)
+
+        # Delete from mlp-previous folder (gets today's date automatically)
+        previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version='previous')
 
         try:
             s3_client.delete_object(
@@ -552,7 +588,7 @@ def delete_previous_analysis(agent_name: str, event_id: str, mode: str) -> bool:
 def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: str) -> bool:
     """
     Save analysis document to S3 as markdown.
-    Moves current version to _previous before saving new version.
+    Implements versioning flow: latest → previous (with date) → history (if previous exists)
 
     Args:
         agent_name: Agent name
@@ -565,41 +601,244 @@ def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: 
     """
     try:
         s3_client = get_s3_client()
-        current_key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=False)
-        previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, previous=True)
+        date_str = datetime.now(timezone.utc).strftime('%Y%m%d')
 
-        # Move current to previous (if current exists)
+        latest_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version='latest')
+        previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version='previous')
+
+        # Step 1: If previous exists, move it to history
         try:
+            previous_obj = s3_client.head_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=previous_key)
+            # Extract date from previous metadata or use today's date
+            previous_date = previous_obj.get('Metadata', {}).get('date', date_str)
+            history_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version=previous_date)
+
+            # Copy previous to history
             s3_client.copy_object(
                 Bucket=CANVAS_ANALYSIS_BUCKET,
-                CopySource={'Bucket': CANVAS_ANALYSIS_BUCKET, 'Key': current_key},
-                Key=previous_key
+                CopySource={'Bucket': CANVAS_ANALYSIS_BUCKET, 'Key': previous_key},
+                Key=history_key
             )
-            logger.info(f"Moved current {mode} analysis to previous: {previous_key}")
+            logger.info(f"Archived previous {mode} analysis to history: {history_key}")
         except s3_client.exceptions.NoSuchKey:
-            logger.info(f"No existing current analysis to move to previous for {mode}")
-        except Exception as copy_err:
-            logger.warning(f"Could not copy current to previous: {copy_err}")
+            logger.info(f"No existing previous {mode} analysis to archive to history")
+        except Exception as archive_err:
+            logger.warning(f"Could not archive previous to history: {archive_err}")
 
-        # Save new current
+        # Step 2: Move current latest to previous (with today's date in metadata)
+        try:
+            latest_obj = s3_client.head_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=latest_key)
+
+            # Copy latest to previous
+            s3_client.copy_object(
+                Bucket=CANVAS_ANALYSIS_BUCKET,
+                CopySource={'Bucket': CANVAS_ANALYSIS_BUCKET, 'Key': latest_key},
+                Key=previous_key,
+                Metadata={
+                    'date': date_str,
+                    'mode': mode,
+                    'agent': agent_name,
+                    'event': event_id,
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                },
+                MetadataDirective='REPLACE'
+            )
+            logger.info(f"Moved latest {mode} analysis to previous: {previous_key}")
+        except s3_client.exceptions.NoSuchKey:
+            logger.info(f"No existing latest {mode} analysis to move to previous")
+        except Exception as move_err:
+            logger.warning(f"Could not move latest to previous: {move_err}")
+
+        # Step 3: Save new content as latest
         s3_client.put_object(
             Bucket=CANVAS_ANALYSIS_BUCKET,
-            Key=current_key,
+            Key=latest_key,
             Body=content.encode('utf-8'),
             ContentType='text/markdown',
             Metadata={
                 'timestamp': datetime.now(timezone.utc).isoformat(),
+                'date': date_str,
                 'mode': mode,
                 'agent': agent_name,
                 'event': event_id
             }
         )
 
-        logger.info(f"Saved {mode} analysis to S3: {current_key}")
+        logger.info(f"Saved {mode} analysis to latest: {latest_key}")
         return True
     except Exception as e:
         logger.error(f"Error saving analysis to S3: {e}", exc_info=True)
         return False
+
+
+def list_canvas_docs(agent_name: str) -> List[Dict[str, Any]]:
+    """
+    List all documents in _canvas/docs/ folder.
+
+    Args:
+        agent_name: Agent name
+
+    Returns:
+        List of dict with keys: 'key', 'filename', 'size', 'last_modified'
+    """
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.error("S3 client unavailable for listing canvas docs")
+        return []
+
+    prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/docs/"
+    docs = []
+
+    try:
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=CANVAS_ANALYSIS_BUCKET, Prefix=prefix):
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    # Skip the folder itself
+                    if obj['Key'] == prefix or obj['Key'].endswith('/'):
+                        continue
+
+                    docs.append({
+                        'key': obj['Key'],
+                        'filename': os.path.basename(obj['Key']),
+                        'size': obj['Size'],
+                        'last_modified': obj['LastModified']
+                    })
+
+        logger.info(f"Found {len(docs)} documents in canvas docs folder for {agent_name}")
+        return docs
+
+    except Exception as e:
+        logger.error(f"Error listing canvas docs for {agent_name}: {e}", exc_info=True)
+        return []
+
+
+def read_canvas_doc(s3_key: str) -> Optional[str]:
+    """
+    Read a document from _canvas/docs/.
+
+    Args:
+        s3_key: Full S3 key path to the document
+
+    Returns:
+        Document content as string, or None if error
+
+    Note:
+        Currently supports text/markdown files. PDF extraction is TODO.
+    """
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.error("S3 client unavailable for reading canvas doc")
+        return None
+
+    try:
+        response = s3_client.get_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=s3_key)
+
+        # Get content type
+        content_type = response.get('ContentType', '')
+        filename = os.path.basename(s3_key)
+
+        # Handle different file types
+        if 'text' in content_type or 'markdown' in content_type or s3_key.endswith(('.txt', '.md')):
+            content = response['Body'].read().decode('utf-8')
+            logger.info(f"Read text document: {filename} ({len(content)} chars)")
+            return content
+
+        elif 'pdf' in content_type or s3_key.endswith('.pdf'):
+            # TODO: Add PDF extraction (could use PyPDF2, pdfplumber, or similar)
+            logger.warning(f"PDF extraction not yet implemented for {filename}")
+            return f"[PDF Document: {filename}]\n(PDF content extraction not yet implemented)"
+
+        else:
+            # Unsupported or binary file
+            logger.warning(f"Unsupported content type '{content_type}' for {filename}")
+            return f"[Binary Document: {filename}]\n(Content type: {content_type})"
+
+    except s3_client.exceptions.NoSuchKey:
+        logger.warning(f"Canvas doc not found: {s3_key}")
+        return None
+    except Exception as e:
+        logger.error(f"Error reading canvas doc {s3_key}: {e}", exc_info=True)
+        return None
+
+
+def get_all_canvas_source_content(
+    agent_name: str,
+    event_id: str,
+    transcript_listen_mode: str = 'latest',
+    groups_read_mode: str = 'none',
+    individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None
+) -> str:
+    """
+    Get all source content for canvas/MLP agents:
+    1. Transcripts (based on settings toggles)
+    2. Additional docs from _canvas/docs/
+
+    Args:
+        agent_name: Agent name
+        event_id: Event ID
+        transcript_listen_mode: 'none' | 'latest' | 'some' | 'all'
+        groups_read_mode: 'none' | 'latest' | 'all' | 'breakout'
+        individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode
+
+    Returns:
+        Combined source content with standardized headers
+    """
+    parts = []
+
+    # 1. Get transcripts (existing function with standardized headers)
+    transcript_content = get_transcript_content_for_analysis(
+        agent_name=agent_name,
+        event_id=event_id,
+        transcript_listen_mode=transcript_listen_mode,
+        groups_read_mode=groups_read_mode,
+        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states
+    )
+
+    if transcript_content:
+        parts.append(transcript_content)
+        logger.info(f"Loaded transcript content: {len(transcript_content)} chars")
+
+    # 2. Get additional canvas docs
+    canvas_docs = list_canvas_docs(agent_name)
+
+    if canvas_docs:
+        docs_parts = []
+        for doc in canvas_docs:
+            content = read_canvas_doc(doc['key'])
+            if content:
+                # Determine file type for header
+                filename = doc['filename']
+                file_ext = os.path.splitext(filename)[1].lower()
+                file_type = {
+                    '.pdf': 'PDF',
+                    '.txt': 'Text',
+                    '.md': 'Markdown',
+                    '.doc': 'Word',
+                    '.docx': 'Word'
+                }.get(file_ext, 'Document')
+
+                size_kb = doc['size'] // 1024
+
+                # Standardized header format
+                docs_parts.append(
+                    f"=== SOURCE: Document - {filename} (Type: {file_type}, Size: {size_kb}KB) ===\n"
+                    f"{content}\n"
+                    f"=== END SOURCE: Document - {filename} ==="
+                )
+
+        if docs_parts:
+            combined_docs = "\n\n".join(docs_parts)
+            parts.append(f"=== ADDITIONAL DOCUMENTS ===\n{combined_docs}\n=== END ADDITIONAL DOCUMENTS ===")
+            logger.info(f"Loaded {len(canvas_docs)} additional documents: {len(combined_docs)} chars")
+
+    if not parts:
+        logger.warning("No source content available (no transcripts, no canvas docs)")
+        return ""
+
+    combined = "\n\n".join(parts)
+    logger.info(f"Total canvas source content: {len(combined)} chars")
+    return combined
 
 
 def run_analysis_agent(
@@ -748,8 +987,8 @@ def get_or_generate_analysis_doc(
 
     # 2. Check S3 storage (unless forced refresh)
     if not force_refresh:
-        s3_current = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=False)
-        s3_previous = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=True)
+        s3_current = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, version='latest')
+        s3_previous = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, version='previous')
 
         if s3_current:
             # S3 docs found - restore to memory cache with current timestamp
@@ -801,7 +1040,7 @@ def get_or_generate_analysis_doc(
     save_analysis_doc_to_s3(agent_name, event_id, depth_mode, new_analysis_doc)
 
     # 5. Load the previous that was just created (what was current before)
-    previous_doc = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=True)
+    previous_doc = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, version='previous')
 
     # 6. Cache result in memory with both current and previous
     CANVAS_ANALYSIS_CACHE[cache_key] = {
@@ -845,7 +1084,7 @@ def get_analysis_status(agent_name: str, event_id: str, depth_mode: str) -> Dict
             }
 
     # Check S3 storage
-    s3_current = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, previous=False)
+    s3_current = load_analysis_doc_from_s3(agent_name, event_id, depth_mode, version='latest')
     if s3_current:
         # S3 docs exist, report as ready
         return {
