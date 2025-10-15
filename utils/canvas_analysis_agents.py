@@ -492,7 +492,59 @@ def get_transcript_content_for_analysis(
     return combined_content
 
 
-def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str, version: str = 'latest') -> str:
+def get_next_sequence_number(agent_name: str, event_id: str, mode: str, date_str: str, folder: str = 'mlp-previous') -> int:
+    """
+    Get the next available sequence number for a given date.
+
+    Args:
+        agent_name: Agent name
+        event_id: Event ID
+        mode: Analysis mode (mirror/lens/portal)
+        date_str: Date string in YYYYMMDD format
+        folder: Folder to check ('mlp-previous' or 'mlp-history')
+
+    Returns:
+        Next available sequence number (e.g., 1, 2, 3...)
+    """
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.warning("S3 client unavailable, defaulting to sequence 1")
+        return 1
+
+    prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/{folder}/{event_id}_{mode}_{date_str}_"
+
+    try:
+        response = s3_client.list_objects_v2(Bucket=CANVAS_ANALYSIS_BUCKET, Prefix=prefix)
+
+        if 'Contents' not in response:
+            return 1
+
+        # Extract sequence numbers from existing files
+        sequence_numbers = []
+        for obj in response['Contents']:
+            filename = os.path.basename(obj['Key'])
+            # Format: 0000_mirror_20251015_001.md
+            if filename.endswith('.md'):
+                parts = filename.replace('.md', '').split('_')
+                if len(parts) >= 4:
+                    try:
+                        seq = int(parts[-1])
+                        sequence_numbers.append(seq)
+                    except ValueError:
+                        continue
+
+        if not sequence_numbers:
+            return 1
+
+        # Return max + 1
+        return max(sequence_numbers) + 1
+
+    except Exception as e:
+        logger.error(f"Error getting next sequence number: {e}", exc_info=True)
+        return 1
+
+
+def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str, version: str = 'latest', sequence: Optional[int] = None) -> str:
     """
     Get S3 key for storing analysis document per agent.
 
@@ -500,25 +552,38 @@ def get_s3_analysis_doc_key(agent_name: str, event_id: str, mode: str, version: 
         agent_name: Agent name
         event_id: Event ID
         mode: Analysis mode (mirror/lens/portal)
-        version: 'latest' | 'previous' | 'YYYYMMDD' (for history)
+        version: 'latest' | 'previous' | 'YYYYMMDD' (for history) | 'YYYYMMDD_NNN' (for specific version)
+        sequence: Optional sequence number (auto-determined if None for previous/history)
 
     Returns:
         S3 key path for the analysis document
 
     Format:
         latest:   organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-latest/{event}_{mode}.md
-        previous: organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event}_{mode}_{date}.md
-        history:  organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-history/{event}_{mode}_{date}.md
+        previous: organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event}_{mode}_{date}_{seq}.md
+        history:  organizations/{org}/agents/{agent_name}/_canvas/mlp/mlp-history/{event}_{mode}_{date}_{seq}.md
     """
     if version == 'latest':
         return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-latest/{event_id}_{mode}.md"
     elif version == 'previous':
-        # For previous, we include a date suffix but use special folder
+        # For previous, we include a date suffix and sequence number
         date_str = datetime.now(timezone.utc).strftime('%Y%m%d')
-        return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_{date_str}.md"
+        if sequence is None:
+            sequence = get_next_sequence_number(agent_name, event_id, mode, date_str, folder='mlp-previous')
+        seq_str = f"{sequence:03d}"  # Zero-padded 3 digits (001, 002, etc.)
+        return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_{date_str}_{seq_str}.md"
     else:
-        # version is a date string YYYYMMDD for history
-        return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-history/{event_id}_{mode}_{version}.md"
+        # version is a date string YYYYMMDD or YYYYMMDD_NNN for history
+        # If version contains underscore, it includes sequence number
+        if '_' in version:
+            # Format: YYYYMMDD_NNN
+            return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-history/{event_id}_{mode}_{version}.md"
+        else:
+            # Format: YYYYMMDD - need to find next sequence
+            if sequence is None:
+                sequence = get_next_sequence_number(agent_name, event_id, mode, version, folder='mlp-history')
+            seq_str = f"{sequence:03d}"
+            return f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-history/{event_id}_{mode}_{version}_{seq_str}.md"
 
 
 def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, version: str = 'latest') -> Optional[str]:
@@ -529,14 +594,29 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, version
         agent_name: Agent name
         event_id: Event ID
         mode: Analysis mode (mirror/lens/portal)
-        version: 'latest' | 'previous' | 'YYYYMMDD' (for history)
+        version: 'latest' | 'previous' | 'YYYYMMDD_NNN' (for specific history)
 
     Returns:
         Markdown content string or None if not found
     """
     try:
         s3_client = get_s3_client()
-        key = get_s3_analysis_doc_key(agent_name, event_id, mode, version=version)
+
+        # Special handling for 'previous' - load most recent previous file
+        if version == 'previous':
+            previous_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_"
+            response = s3_client.list_objects_v2(Bucket=CANVAS_ANALYSIS_BUCKET, Prefix=previous_prefix)
+
+            if 'Contents' not in response or not response['Contents']:
+                logger.info(f"No previous {mode} analysis found for {agent_name}/{event_id}")
+                return None
+
+            # Sort by last modified to get most recent
+            sorted_files = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
+            key = sorted_files[0]['Key']
+        else:
+            # For 'latest' or specific version, use direct key
+            key = get_s3_analysis_doc_key(agent_name, event_id, mode, version=version)
 
         response = s3_client.get_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=key)
         content = response['Body'].read().decode('utf-8')
@@ -553,7 +633,7 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, version
 
 def delete_previous_analysis(agent_name: str, event_id: str, mode: str) -> bool:
     """
-    Delete previous analysis document from S3.
+    Delete all previous analysis documents from S3.
     Used when starting a new meeting/session to clear old context.
 
     Args:
@@ -567,15 +647,22 @@ def delete_previous_analysis(agent_name: str, event_id: str, mode: str) -> bool:
     try:
         s3_client = get_s3_client()
 
-        # Delete from mlp-previous folder (gets today's date automatically)
-        previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version='previous')
+        # Delete all files in mlp-previous folder for this mode
+        previous_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_"
 
         try:
-            s3_client.delete_object(
-                Bucket=CANVAS_ANALYSIS_BUCKET,
-                Key=previous_key
-            )
-            logger.info(f"Deleted previous {mode} analysis: {previous_key}")
+            response = s3_client.list_objects_v2(Bucket=CANVAS_ANALYSIS_BUCKET, Prefix=previous_prefix)
+
+            if 'Contents' in response:
+                deleted_count = 0
+                for obj in response['Contents']:
+                    s3_client.delete_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=obj['Key'])
+                    deleted_count += 1
+                    logger.info(f"Deleted previous {mode} analysis: {obj['Key']}")
+                logger.info(f"Deleted {deleted_count} previous {mode} analysis file(s)")
+            else:
+                logger.info(f"No previous {mode} analysis files to delete")
+
         except s3_client.exceptions.NoSuchKey:
             logger.info(f"No previous {mode} analysis to delete")
 
@@ -608,18 +695,38 @@ def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: 
 
         # Step 1: If previous exists, move it to history
         try:
-            previous_obj = s3_client.head_object(Bucket=CANVAS_ANALYSIS_BUCKET, Key=previous_key)
-            # Extract date from previous metadata or use today's date
-            previous_date = previous_obj.get('Metadata', {}).get('date', date_str)
-            history_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version=previous_date)
+            # First, list all previous versions to find the most recent one
+            previous_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_"
+            previous_response = s3_client.list_objects_v2(Bucket=CANVAS_ANALYSIS_BUCKET, Prefix=previous_prefix)
 
-            # Copy previous to history
-            s3_client.copy_object(
-                Bucket=CANVAS_ANALYSIS_BUCKET,
-                CopySource={'Bucket': CANVAS_ANALYSIS_BUCKET, 'Key': previous_key},
-                Key=history_key
-            )
-            logger.info(f"Archived previous {mode} analysis to history: {history_key}")
+            if 'Contents' in previous_response and previous_response['Contents']:
+                # Sort by last modified to get the most recent previous
+                sorted_previous = sorted(previous_response['Contents'], key=lambda x: x['LastModified'], reverse=True)
+                most_recent_previous_key = sorted_previous[0]['Key']
+
+                # Extract date and sequence from filename
+                # Format: 0000_mirror_20251015_001.md
+                previous_filename = os.path.basename(most_recent_previous_key)
+                parts = previous_filename.replace('.md', '').split('_')
+
+                if len(parts) >= 4:
+                    previous_date = parts[-2]  # YYYYMMDD
+                    previous_seq = parts[-1]   # 001
+                    history_version = f"{previous_date}_{previous_seq}"
+                    history_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version=history_version)
+
+                    # Copy previous to history
+                    s3_client.copy_object(
+                        Bucket=CANVAS_ANALYSIS_BUCKET,
+                        CopySource={'Bucket': CANVAS_ANALYSIS_BUCKET, 'Key': most_recent_previous_key},
+                        Key=history_key
+                    )
+                    logger.info(f"Archived previous {mode} analysis to history: {history_key}")
+                else:
+                    logger.warning(f"Could not parse previous filename: {previous_filename}")
+            else:
+                logger.info(f"No existing previous {mode} analysis to archive to history")
+
         except s3_client.exceptions.NoSuchKey:
             logger.info(f"No existing previous {mode} analysis to archive to history")
         except Exception as archive_err:

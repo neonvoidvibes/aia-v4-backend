@@ -118,10 +118,10 @@ def migrate_doc(s3_client, old_key: str, dry_run: bool = False):
             is_previous = 'previous' in name_parts
 
             if is_previous:
-                # Migrate previous to mlp-previous with today's date
+                # Migrate previous to mlp-previous with today's date and sequence _001
                 date_str = datetime.now(timezone.utc).strftime('%Y%m%d')
-                new_key = f"organizations/{S3_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_{date_str}.md"
-                operation = "previous → mlp-previous (with date)"
+                new_key = f"organizations/{S3_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_{date_str}_001.md"
+                operation = "previous → mlp-previous (with date and seq)"
             else:
                 # Migrate current to mlp-latest
                 new_key = f"organizations/{S3_ORG}/agents/{agent_name}/_canvas/mlp/mlp-latest/{event_id}_{mode}.md"
