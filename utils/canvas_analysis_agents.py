@@ -693,7 +693,7 @@ def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: 
         latest_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version='latest')
         previous_key = get_s3_analysis_doc_key(agent_name, event_id, mode, version='previous')
 
-        # Step 1: If previous exists, move it to history
+        # Step 1: If previous exists, move it to history (copy then delete)
         try:
             # First, list all previous versions to find the most recent one
             previous_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_"
@@ -721,7 +721,14 @@ def save_analysis_doc_to_s3(agent_name: str, event_id: str, mode: str, content: 
                         CopySource={'Bucket': CANVAS_ANALYSIS_BUCKET, 'Key': most_recent_previous_key},
                         Key=history_key
                     )
-                    logger.info(f"Archived previous {mode} analysis to history: {history_key}")
+                    logger.info(f"Copied previous {mode} analysis to history: {history_key}")
+
+                    # Delete from previous folder after successful copy
+                    s3_client.delete_object(
+                        Bucket=CANVAS_ANALYSIS_BUCKET,
+                        Key=most_recent_previous_key
+                    )
+                    logger.info(f"Deleted previous {mode} analysis from previous folder: {most_recent_previous_key}")
                 else:
                     logger.warning(f"Could not parse previous filename: {previous_filename}")
             else:
