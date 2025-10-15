@@ -1147,9 +1147,8 @@ def run_analysis_agent(
         rag_context=rag_context
     )
 
-    # Get API key
+    # Get API key (get_api_key already imported at top of file)
     if not groq_api_key:
-        from .api_key_manager import get_api_key
         groq_api_key = get_api_key(agent_name, 'groq')
 
     if not groq_api_key:
@@ -1163,37 +1162,60 @@ def run_analysis_agent(
         logger.error(f"Failed to initialize Groq client: {e}", exc_info=True)
         return None
 
-    # Call Groq LLM for analysis
-    try:
-        model = "openai/gpt-oss-120b"  # Groq model for canvas analysis
-        logger.info(f"Calling Groq API for {mode} analysis (model: {model})")
+    # Call Groq LLM for analysis with retry logic for rate limits
+    import time
+    from groq import RateLimitError
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Please analyze the source data and produce the {mode} mode analysis document as instructed."}
-        ]
+    max_retries = 3
+    retry_delay = 1.0  # Start with 1 second
 
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=4096,
-            temperature=0.7,
-            stream=False
-        )
+    for attempt in range(max_retries):
+        try:
+            model = "openai/gpt-oss-120b"  # Groq model for canvas analysis
+            logger.info(f"Calling Groq API for {mode} analysis (model: {model}, attempt {attempt + 1}/{max_retries})")
 
-        # Extract content from response
-        analysis_doc = response.choices[0].message.content
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Please analyze the source data and produce the {mode} mode analysis document as instructed."}
+            ]
 
-        if not analysis_doc:
-            logger.error(f"Empty analysis document returned for {mode} mode")
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=4096,
+                temperature=0.7,
+                stream=False
+            )
+
+            # Extract content from response
+            analysis_doc = response.choices[0].message.content
+
+            if not analysis_doc:
+                logger.error(f"Empty analysis document returned for {mode} mode")
+                return None
+
+            logger.info(f"Successfully generated {mode} analysis: {len(analysis_doc)} chars")
+            return analysis_doc
+
+        except RateLimitError as rate_err:
+            # Extract retry-after time from error message if available
+            error_msg = str(rate_err)
+            logger.warning(f"Groq rate limit hit for {mode} analysis (attempt {attempt + 1}/{max_retries}): {error_msg}")
+
+            # If this is the last attempt, give up
+            if attempt == max_retries - 1:
+                logger.error(f"Groq rate limit exceeded after {max_retries} attempts for {mode} analysis. Please try again later.")
+                return None
+
+            # Otherwise, wait and retry with exponential backoff
+            wait_time = retry_delay * (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+            logger.info(f"Waiting {wait_time:.1f}s before retry...")
+            time.sleep(wait_time)
+            continue
+
+        except Exception as e:
+            logger.error(f"Error running {mode} analysis agent: {e}", exc_info=True)
             return None
-
-        logger.info(f"Successfully generated {mode} analysis: {len(analysis_doc)} chars")
-        return analysis_doc
-
-    except Exception as e:
-        logger.error(f"Error running {mode} analysis agent: {e}", exc_info=True)
-        return None
 
 
 def get_or_generate_analysis_doc(
