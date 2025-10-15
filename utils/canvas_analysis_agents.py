@@ -414,8 +414,7 @@ def get_transcript_content_for_analysis(
 
     # 2. Get group transcripts if enabled (mirrors api_server.py:5713-5746)
     if event_id == '0000' and groups_read_mode != 'none':
-        # Get allowed group events from event profile
-        from .auth_helpers import get_event_profile
+        # Get allowed group events from Supabase
         from .supabase_client import get_supabase_client
 
         client = get_supabase_client()
