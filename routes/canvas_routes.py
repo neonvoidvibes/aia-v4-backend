@@ -235,11 +235,14 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             try:
                 logger.info(f"Canvas stream started for Agent: {agent_name}, User: {user.id}, Depth: {depth_mode}, Force refresh: {force_refresh_analysis}, Clear previous: {clear_previous_analysis}")
 
-                # OPTION C (HYBRID): Load ALL three analysis documents (mirror, lens, portal)
+                # OPTION C (HYBRID): Load ALL three analysis documents (mirror, lens, portal) IN PARALLEL
                 # The depth_mode becomes an "emphasis hint" rather than a filter
                 analyses = {}
                 try:
-                    for mode in ['mirror', 'lens', 'portal']:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                    def load_single_analysis(mode):
+                        """Helper to load a single analysis mode"""
                         current_doc, previous_doc = get_or_generate_analysis_doc(
                             agent_name=agent_name,
                             event_id=event_id,
@@ -257,17 +260,22 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                             event_profile=event_profile
                         )
 
-                        analyses[mode] = {
-                            'current': current_doc,
-                            'previous': previous_doc
-                        }
-
                         if current_doc:
                             logger.info(f"Canvas: Loaded current {mode} analysis ({len(current_doc)} chars)")
                         if previous_doc:
                             logger.info(f"Canvas: Loaded previous {mode} analysis ({len(previous_doc)} chars)")
                         if not current_doc:
                             logger.info(f"Canvas: No current {mode} analysis available")
+
+                        return mode, {'current': current_doc, 'previous': previous_doc}
+
+                    # Load all three modes concurrently
+                    with ThreadPoolExecutor(max_workers=3) as executor:
+                        futures = {executor.submit(load_single_analysis, mode): mode for mode in ['mirror', 'lens', 'portal']}
+
+                        for future in as_completed(futures):
+                            mode, docs = future.result()
+                            analyses[mode] = docs
 
                 except Exception as analysis_err:
                     logger.error(f"Error getting analysis documents: {analysis_err}", exc_info=True)
@@ -574,6 +582,7 @@ This is a voice interface - every word must count.
         """
         Manually trigger refresh of all analysis documents (mirror, lens, portal).
         This is called when the user clicks the sparkles icon.
+        Runs all three modes in parallel for faster results.
         """
         logger.info(f"Received POST request to /api/canvas/analysis/refresh from user: {user.id}")
 
@@ -599,9 +608,12 @@ This is a voice interface - every word must count.
             allowed_events = set(event_profile.get('allowed_events') or {"0000"}) if event_profile else {"0000"}
             event_types_map = dict(event_profile.get('event_types') or {}) if event_profile else {}
 
-            # Refresh all three modes in parallel (for now, sequential is simpler)
-            results = {}
-            for mode in ['mirror', 'lens', 'portal']:
+            # Refresh all three modes in PARALLEL for speed
+            # Race condition analysis: Each mode has unique cache keys and S3 paths, only reads shared resources
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def refresh_single_mode(mode):
+                """Helper to refresh a single analysis mode"""
                 try:
                     logger.info(f"Refreshing {mode} analysis for {agent_name} (clear_previous={clear_previous})")
                     doc, _ = get_or_generate_analysis_doc(
@@ -620,17 +632,24 @@ This is a voice interface - every word must count.
                         event_types_map=event_types_map,
                         event_profile=event_profile
                     )
-                    results[mode] = {
-                        'success': doc is not None,
-                        'length': len(doc) if doc else 0
-                    }
                     if doc:
                         logger.info(f"Successfully refreshed {mode} analysis ({len(doc)} chars)")
+                        return mode, {'success': True, 'length': len(doc)}
                     else:
                         logger.warning(f"Failed to refresh {mode} analysis")
+                        return mode, {'success': False}
                 except Exception as e:
                     logger.error(f"Error refreshing {mode} analysis: {e}", exc_info=True)
-                    results[mode] = {'success': False, 'error': str(e)}
+                    return mode, {'success': False, 'error': str(e)}
+
+            results = {}
+            # Execute all three modes concurrently with max 3 workers (one per mode)
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = {executor.submit(refresh_single_mode, mode): mode for mode in ['mirror', 'lens', 'portal']}
+
+                for future in as_completed(futures):
+                    mode, result = future.result()
+                    results[mode] = result
 
             # Get status for response
             status = get_analysis_status(agent_name, event_id, 'mirror')  # Can use any mode
