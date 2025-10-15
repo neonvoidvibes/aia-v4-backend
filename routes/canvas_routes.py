@@ -84,9 +84,11 @@ WHEN NO TRANSCRIPT/ANALYSIS IS AVAILABLE:
 - Stay warm, helpful, and engaged
 
 KNOWLEDGE SOURCES:
-- You draw on OBJECTIVE FUNCTION, AGENT CONTEXT, and ANALYSIS DOCUMENTS (when provided)
-- CURRENT ANALYSIS is your primary knowledge source
-- PREVIOUS ANALYSIS provides historical context
+- You draw on OBJECTIVE FUNCTION, AGENT CONTEXT, RAW SOURCES, and ANALYSIS DOCUMENTS (when provided)
+- RAW SOURCES contain unprocessed transcripts and documents for verification and specific quotes
+- ANALYSIS DOCUMENTS provide interpreted insights (current and previous)
+- CURRENT ANALYSIS is your primary analysis knowledge source
+- PREVIOUS ANALYSIS provides historical analysis context
 - Synthesize these naturally - never mention them explicitly
 - If no analysis exists, respond based on the user's message using your general understanding
 
@@ -258,6 +260,27 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         if mode not in analyses:
                             analyses[mode] = {'current': None, 'previous': None}
 
+                # Get raw transcript content based on Settings toggles
+                raw_transcript_content = None
+                try:
+                    from utils.canvas_analysis_agents import get_all_canvas_source_content
+
+                    raw_transcript_content = get_all_canvas_source_content(
+                        agent_name=agent_name,
+                        event_id=event_id,
+                        transcript_listen_mode=transcript_listen_mode,
+                        groups_read_mode=groups_read_mode,
+                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states
+                    )
+
+                    if raw_transcript_content:
+                        logger.info(f"Canvas: Loaded raw source content ({len(raw_transcript_content)} chars)")
+                    else:
+                        logger.info("Canvas: No raw source content available")
+                except Exception as source_err:
+                    logger.error(f"Error loading source content for canvas: {source_err}", exc_info=True)
+                    raw_transcript_content = None
+
                 # Build canvas system prompt (lightweight, NO full taxonomy)
                 # Structure: Canvas Base + MLP Depth + Objective Function + Analysis Doc (if available) + Agent-Specific + Time
                 canvas_base_and_depth = get_canvas_base_and_depth_prompt(depth_mode)
@@ -303,7 +326,16 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 # 3. Canvas base + MLP depth (trunk - how you operate)
                 system_prompt += f"\n\n{canvas_base_and_depth}"
 
-                # 4. Previous analyses (branches - historical context for all modes)
+                # 4. Raw sources (unprocessed content - transcripts and documents)
+                if raw_transcript_content:
+                    system_prompt += f"\n\n=== RAW SOURCES ===\n"
+                    system_prompt += "You have access to the raw source content that was used to generate the analyses below.\n"
+                    system_prompt += "Use this to verify analysis insights, find specific quotes, or surface details not captured in the analysis.\n"
+                    system_prompt += "When answering questions about specific statements or exact wording, reference these raw sources.\n\n"
+                    system_prompt += raw_transcript_content
+                    system_prompt += "\n=== END RAW SOURCES ==="
+
+                # 5. Previous analyses (branches - historical context for all modes)
                 has_previous_analyses = any(analyses[mode]['previous'] for mode in ['mirror', 'lens', 'portal'])
                 if has_previous_analyses:
                     system_prompt += f"\n\n=== PREVIOUS ANALYSES (HISTORICAL CONTEXT) ==="
@@ -313,7 +345,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                             system_prompt += f"\n\n--- Previous {mode_label} Analysis ---\n{analyses[mode]['previous']}"
                     system_prompt += f"\n\n=== END PREVIOUS ANALYSES ==="
 
-                # 5. Current analyses (branches - fresh content for all modes)
+                # 6. Current analyses (branches - fresh content for all modes)
                 has_current_analyses = any(analyses[mode]['current'] for mode in ['mirror', 'lens', 'portal'])
                 if has_current_analyses:
                     system_prompt += f"\n\n=== CURRENT ANALYSES (COMPREHENSIVE CONTEXT) ==="
@@ -331,7 +363,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                     system_prompt += f"=== END CURRENT ANALYSES ==="
 
-                # 6. Mode emphasis (guidance based on selected mode)
+                # 7. Mode emphasis (guidance based on selected mode)
                 if depth_mode == 'mirror':
                     mode_emphasis_text = "\n=== MODE EMPHASIS: MIRROR ===\nThe user has selected MIRROR mode. When relevant to their question:\n- Prioritize insights from the Mirror analysis (explicit/peripheral information)\n- Surface edge cases and minority viewpoints\n- Focus on what was actually stated but sits at the margins\nHowever, you may draw on Lens or Portal analyses if they better serve the user's question.\n=== END MODE EMPHASIS ==="
                 elif depth_mode == 'lens':
@@ -343,7 +375,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 system_prompt += f"\n\n{mode_emphasis_text}"
 
-                # 6b. CRITICAL: Brevity booster (reinforce after heavy context)
+                # 7b. CRITICAL: Brevity booster (reinforce after heavy context)
                 brevity_booster = """
 
 === CRITICAL REMINDER ===
@@ -356,7 +388,7 @@ This is a voice interface - every word must count.
 === END REMINDER ==="""
                 system_prompt += brevity_booster
 
-                # 7. Current time (leaves - immediate moment)
+                # 8. Current time (leaves - immediate moment)
                 system_prompt += time_section
 
                 # Build prompt type description for logging (matches tree order)
@@ -366,6 +398,10 @@ This is a voice interface - every word must count.
                 if agent_specific:
                     prompt_components.append("agent")
                 prompt_components.extend(["base", "depth"])
+
+                # Track raw sources if present
+                if raw_transcript_content:
+                    prompt_components.append(f"raw_sources({len(raw_transcript_content)})")
 
                 # Count loaded analyses (all three modes)
                 loaded_current = [mode for mode in ['mirror', 'lens', 'portal'] if analyses[mode]['current']]
