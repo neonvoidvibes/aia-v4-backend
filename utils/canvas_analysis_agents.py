@@ -68,13 +68,13 @@ def get_analysis_agent_prompt(
         personal_event_id=personal_event_id
     )
 
-    # 2. Add transcript content with source attribution guidance
+    # 2. Add all source content (transcripts + documents) with source attribution guidance
     transcript_section = f"""
-=== TRANSCRIPT DATA ===
+=== SOURCE DATA ===
 {transcript_content}
-=== END TRANSCRIPT DATA ===
+=== END SOURCE DATA ===
 
-CRITICAL: The transcript data above may contain MULTIPLE SOURCES with distinct labels (e.g., different breakout groups, events, transcript files, or uploaded documents). Each source is clearly marked with standardized headers like:
+CRITICAL: The source data above may contain MULTIPLE SOURCES with distinct labels (e.g., different breakout groups, events, transcript files, or uploaded documents). Each source is clearly marked with standardized headers like:
 - "=== SOURCE: Transcript - filename (Event: event_id) ==="
 - "=== SOURCE: Group Event - event_id (Type: breakout) ==="
 - "=== SOURCE: Document - filename (Type: PDF, Size: 100KB) ==="
@@ -95,7 +95,7 @@ If only ONE source is present, you may refer to "the conversation" or "the group
     analysis_tasks = {
         'mirror': """
 === ANALYSIS TASK: MIRROR MODE (EXPLICIT INFORMATION) ===
-Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document reflecting EXPLICIT INFORMATION at both surface and depth levels.
+Analyze the source data thoroughly and produce a COMPREHENSIVE markdown document reflecting EXPLICIT INFORMATION at both surface and depth levels.
 
 Your role: Mirror what IS explicitly stated - both the obvious center and the peripheral edges.
 
@@ -154,7 +154,7 @@ Guidelines:
 
         'lens': """
 === ANALYSIS TASK: LENS MODE (HIDDEN INFORMATION) ===
-Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document identifying HIDDEN INFORMATION at both surface and depth levels.
+Analyze the source data thoroughly and produce a COMPREHENSIVE markdown document identifying HIDDEN INFORMATION at both surface and depth levels.
 
 Your role: Identify what's IMPLIED - patterns at the surface, latent needs at the depth.
 
@@ -219,7 +219,7 @@ Guidelines:
 
         'portal': """
 === ANALYSIS TASK: PORTAL MODE (EMERGENT QUESTIONS) ===
-Analyze the transcript(s) thoroughly and produce a COMPREHENSIVE markdown document composed ENTIRELY OF QUESTIONS that open possibility spaces.
+Analyze the source data thoroughly and produce a COMPREHENSIVE markdown document composed ENTIRELY OF QUESTIONS that open possibility spaces.
 
 Your role: Formulate transformative questions - general possibilities at surface, predictive interventions at depth.
 
@@ -1018,7 +1018,7 @@ def run_analysis_agent(
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Please analyze the transcript(s) and produce the {mode} mode analysis document as instructed."}
+            {"role": "user", "content": f"Please analyze the source data and produce the {mode} mode analysis document as instructed."}
         ]
 
         response = client.chat.completions.create(
@@ -1122,8 +1122,8 @@ def get_or_generate_analysis_doc(
     # 3. Generate new analysis
     logger.info(f"Generating fresh {depth_mode} analysis for {agent_name}/{event_id}")
 
-    # Get transcript content based on Settings > Memory
-    transcript_content = get_transcript_content_for_analysis(
+    # Get ALL source content (transcripts + additional docs) based on Settings > Memory
+    all_source_content = get_all_canvas_source_content(
         agent_name=agent_name,
         event_id=event_id,
         transcript_listen_mode=transcript_listen_mode,
@@ -1131,8 +1131,8 @@ def get_or_generate_analysis_doc(
         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states
     )
 
-    if not transcript_content:
-        logger.warning(f"No transcript content available for analysis")
+    if not all_source_content:
+        logger.warning(f"No source content available for analysis (no transcripts or docs)")
         return None, None
 
     # Run analysis agent
@@ -1140,7 +1140,7 @@ def get_or_generate_analysis_doc(
         agent_name=agent_name,
         event_id=event_id,
         mode=depth_mode,
-        transcript_content=transcript_content,
+        transcript_content=all_source_content,
         event_type=event_type,
         personal_layer=personal_layer,
         personal_event_id=personal_event_id
