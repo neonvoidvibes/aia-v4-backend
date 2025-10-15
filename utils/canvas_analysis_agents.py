@@ -18,6 +18,8 @@ from groq import Groq
 from .prompt_builder import prompt_builder
 from .s3_utils import get_s3_client
 from .transcript_utils import get_latest_transcript_file, read_all_transcripts_in_folder
+from .retrieval_handler import RetrievalHandler
+from .api_key_manager import get_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +42,11 @@ def get_analysis_agent_prompt(
     event_type: str,
     personal_layer: Optional[str],
     personal_event_id: Optional[str],
-    transcript_content: str
+    transcript_content: str,
+    rag_context: str = ""
 ) -> str:
     """
-    Build full taxonomy prompt + mode-specific analysis instructions.
+    Build full taxonomy prompt + RAG context + mode-specific analysis instructions.
 
     Args:
         agent_name: Agent name
@@ -53,6 +56,7 @@ def get_analysis_agent_prompt(
         personal_layer: Personal agent layer content
         personal_event_id: Personal event ID
         transcript_content: Transcript(s) to analyze
+        rag_context: Retrieved memory context from Pinecone (optional)
 
     Returns:
         Complete analysis agent system prompt
@@ -68,7 +72,20 @@ def get_analysis_agent_prompt(
         personal_event_id=personal_event_id
     )
 
-    # 2. Add all source content (transcripts + documents) with source attribution guidance
+    # 2. Add RAG context if available
+    rag_section = ""
+    if rag_context:
+        rag_section = f"""
+=== RETRIEVED MEMORY CONTEXT ===
+The following context was retrieved from the agent's long-term memory based on the source content.
+Use this to inform your analysis with relevant historical knowledge, foundational documents, or related conversations.
+
+{rag_context}
+=== END RETRIEVED MEMORY ===
+
+"""
+
+    # 3. Add all source content (transcripts + documents) with source attribution guidance
     transcript_section = f"""
 === SOURCE DATA ===
 {transcript_content}
@@ -91,7 +108,7 @@ When analyzing data from multiple sources, you MUST maintain clear attribution i
 If only ONE source is present, you may refer to "the conversation" or "the group" naturally. But with MULTIPLE sources, maintain their distinctness throughout your analysis.
 """
 
-    # 3. Add mode-specific analysis task
+    # 4. Add mode-specific analysis task
     analysis_tasks = {
         'mirror': """
 === ANALYSIS TASK: MIRROR MODE (EXPLICIT INFORMATION) ===
@@ -288,7 +305,8 @@ Guidelines:
         logger.error(f"Invalid analysis mode: {mode}")
         mode = 'mirror'
 
-    return base_prompt + "\n\n" + transcript_section + "\n\n" + analysis_tasks[mode]
+    # Combine: base → RAG → sources → task
+    return base_prompt + "\n\n" + rag_section + transcript_section + "\n\n" + analysis_tasks[mode]
 
 
 def get_transcript_content_for_analysis(
@@ -1047,7 +1065,8 @@ def run_analysis_agent(
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
     personal_event_id: Optional[str] = None,
-    groq_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None,
+    enable_rag: bool = True
 ) -> Optional[str]:
     """
     Run a single analysis agent to generate mode-specific analysis document.
@@ -1062,11 +1081,59 @@ def run_analysis_agent(
         personal_layer: Personal agent layer
         personal_event_id: Personal event ID
         groq_api_key: Groq API key (defaults to env)
+        enable_rag: If True, retrieve context from Pinecone (default: True)
 
     Returns:
         Analysis document markdown or None on error
     """
-    logger.info(f"Running {mode} analysis agent for {agent_name}/{event_id}")
+    logger.info(f"Running {mode} analysis agent for {agent_name}/{event_id} (RAG: {enable_rag})")
+
+    # RAG retrieval for MLP agents
+    rag_context = ""
+    if enable_rag:
+        try:
+            # Create summary of source content for RAG query
+            summary = transcript_content[:500] if len(transcript_content) > 500 else transcript_content
+            rag_query = f"Context for analyzing: {summary}"
+
+            retriever = RetrievalHandler(
+                index_name="river",
+                agent_name=agent_name,
+                event_id=event_id,
+                anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                openai_api_key=get_api_key(agent_name, 'openai'),
+                event_type=event_type,
+                personal_event_id=personal_event_id,
+                include_t3=(event_id == "0000"),
+            )
+
+            rag_docs = retriever.get_relevant_context_tiered(
+                query=rag_query,
+                tier_caps=[4, 8, 6, 6, 4],  # Modest caps for analysis
+                include_t3=(event_id == "0000")
+            )
+
+            if rag_docs:
+                rag_parts = []
+                for doc in rag_docs:
+                    source_label = doc.metadata.get('source_label', '')
+                    filename = doc.metadata.get('filename', 'unknown')
+                    tier = doc.metadata.get('retrieval_tier', 'unknown')
+                    score = doc.metadata.get('score', 0)
+
+                    rag_parts.append(
+                        f"--- Retrieved Context (tier: {tier}, score: {score:.3f}, source: {filename}) ---\n"
+                        f"{doc.page_content}\n"
+                        f"--- End Retrieved Context ---"
+                    )
+
+                rag_context = "\n\n".join(rag_parts)
+                logger.info(f"Retrieved {len(rag_docs)} context docs for {mode} analysis")
+            else:
+                logger.info(f"No RAG context retrieved for {mode} analysis")
+
+        except Exception as rag_err:
+            logger.error(f"RAG retrieval failed for {mode} analysis: {rag_err}", exc_info=True)
 
     # Build analysis prompt
     system_prompt = get_analysis_agent_prompt(
@@ -1076,7 +1143,8 @@ def run_analysis_agent(
         event_type=event_type,
         personal_layer=personal_layer,
         personal_event_id=personal_event_id,
-        transcript_content=transcript_content
+        transcript_content=transcript_content,
+        rag_context=rag_context
     )
 
     # Get API key

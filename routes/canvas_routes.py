@@ -294,6 +294,50 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                     logger.error(f"Error loading source content for canvas: {source_err}", exc_info=True)
                     raw_transcript_content = None
 
+                # RAG retrieval for canvas agent
+                rag_context = None
+                rag_docs = None
+                try:
+                    from utils.retrieval_handler import RetrievalHandler
+
+                    retriever = RetrievalHandler(
+                        index_name="river",
+                        agent_name=agent_name,
+                        event_id=event_id,
+                        anthropic_api_key=agent_anthropic_key,
+                        openai_api_key=get_api_key(agent_name, 'openai'),
+                        event_type='shared',
+                        include_t3=True,
+                    )
+
+                    # Query based on user message
+                    rag_docs = retriever.get_relevant_context_tiered(
+                        query=transcript_text,
+                        tier_caps=[4, 8, 6, 6, 4],
+                        include_t3=True
+                    )
+
+                    if rag_docs:
+                        rag_parts = []
+                        for doc in rag_docs:
+                            source_label = doc.metadata.get('source_label', '')
+                            filename = doc.metadata.get('filename', 'unknown')
+                            tier = doc.metadata.get('retrieval_tier', 'unknown')
+                            score = doc.metadata.get('score', 0)
+                            age_display = doc.metadata.get('age_display', 'unknown age')
+
+                            rag_parts.append(
+                                f"[{tier}] {filename} (score: {score:.3f}, age: {age_display})\n{doc.page_content}"
+                            )
+
+                        rag_context = "\n\n---\n\n".join(rag_parts)
+                        logger.info(f"Canvas: Retrieved {len(rag_docs)} context docs")
+                    else:
+                        logger.info("Canvas: No RAG context retrieved")
+
+                except Exception as rag_err:
+                    logger.error(f"Canvas RAG retrieval error: {rag_err}", exc_info=True)
+
                 # Build canvas system prompt (lightweight, NO full taxonomy)
                 # Structure: Canvas Base + MLP Depth + Objective Function + Analysis Doc (if available) + Agent-Specific + Time
                 canvas_base_and_depth = get_canvas_base_and_depth_prompt(depth_mode)
@@ -336,10 +380,18 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 if agent_specific:
                     system_prompt += f"\n\n=== AGENT CONTEXT ===\n{agent_specific}\n=== END AGENT CONTEXT ==="
 
-                # 3. Canvas base + MLP depth (trunk - how you operate)
+                # 3. RAG retrieved memory (contextual knowledge)
+                if rag_context:
+                    system_prompt += f"\n\n=== RETRIEVED MEMORY ===\n"
+                    system_prompt += "The following context was retrieved from long-term memory based on your current query.\n"
+                    system_prompt += "Draw on this when relevant to provide informed, contextual responses.\n\n"
+                    system_prompt += rag_context
+                    system_prompt += f"\n=== END RETRIEVED MEMORY ==="
+
+                # 4. Canvas base + MLP depth (trunk - how you operate)
                 system_prompt += f"\n\n{canvas_base_and_depth}"
 
-                # 4. Raw sources (unprocessed content - transcripts and documents)
+                # 5. Raw sources (unprocessed content - transcripts and documents)
                 if raw_transcript_content:
                     system_prompt += f"\n\n=== RAW SOURCES ===\n"
                     system_prompt += "You have access to the raw source content that was used to generate the analyses below.\n"
@@ -348,7 +400,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                     system_prompt += raw_transcript_content
                     system_prompt += "\n=== END RAW SOURCES ==="
 
-                # 5. Previous analyses (branches - historical context for all modes)
+                # 6. Previous analyses (branches - historical context for all modes)
                 has_previous_analyses = any(analyses[mode]['previous'] for mode in ['mirror', 'lens', 'portal'])
                 if has_previous_analyses:
                     system_prompt += f"\n\n=== PREVIOUS ANALYSES (HISTORICAL CONTEXT) ==="
@@ -358,7 +410,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                             system_prompt += f"\n\n--- Previous {mode_label} Analysis ---\n{analyses[mode]['previous']}"
                     system_prompt += f"\n\n=== END PREVIOUS ANALYSES ==="
 
-                # 6. Current analyses (branches - fresh content for all modes)
+                # 7. Current analyses (branches - fresh content for all modes)
                 has_current_analyses = any(analyses[mode]['current'] for mode in ['mirror', 'lens', 'portal'])
                 if has_current_analyses:
                     system_prompt += f"\n\n=== CURRENT ANALYSES (COMPREHENSIVE CONTEXT) ==="
@@ -376,7 +428,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                     system_prompt += f"=== END CURRENT ANALYSES ==="
 
-                # 7. Mode emphasis (guidance based on selected mode)
+                # 8. Mode emphasis (guidance based on selected mode)
                 if depth_mode == 'mirror':
                     mode_emphasis_text = "\n=== MODE EMPHASIS: MIRROR ===\nThe user has selected MIRROR mode. When relevant to their question:\n- Prioritize insights from the Mirror analysis (explicit/peripheral information)\n- Surface edge cases and minority viewpoints\n- Focus on what was actually stated but sits at the margins\nHowever, you may draw on Lens or Portal analyses if they better serve the user's question.\n=== END MODE EMPHASIS ==="
                 elif depth_mode == 'lens':
@@ -388,7 +440,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 system_prompt += f"\n\n{mode_emphasis_text}"
 
-                # 7b. CRITICAL: Brevity booster (reinforce after heavy context)
+                # 9. CRITICAL: Brevity booster (reinforce after heavy context)
                 brevity_booster = """
 
 === CRITICAL REMINDER ===
@@ -401,7 +453,7 @@ This is a voice interface - every word must count.
 === END REMINDER ==="""
                 system_prompt += brevity_booster
 
-                # 8. Current time (leaves - immediate moment)
+                # 10. Current time (leaves - immediate moment)
                 system_prompt += time_section
 
                 # Build prompt type description for logging (matches tree order)
@@ -410,6 +462,11 @@ This is a voice interface - every word must count.
                     prompt_components.append("objective")
                 if agent_specific:
                     prompt_components.append("agent")
+
+                # Track RAG context if present
+                if rag_context:
+                    prompt_components.append(f"rag({len(rag_docs)}docs)")
+
                 prompt_components.extend(["base", "depth"])
 
                 # Track raw sources if present
@@ -463,6 +520,15 @@ This is a voice interface - every word must count.
 
                 # Send completion signal
                 yield f"data: {json.dumps({'done': True})}\n\n"
+
+                # Reinforce retrieved memories
+                if rag_docs:
+                    try:
+                        retriever.reinforce_memories(rag_docs)
+                        logger.info(f"Canvas: Reinforced {len(rag_docs)} memories")
+                    except Exception as reinforce_err:
+                        logger.error(f"Canvas memory reinforcement error: {reinforce_err}")
+
                 logger.info(f"Canvas stream completed successfully for agent {agent_name}")
 
             except (AnthropicError, RetryError) as e:
