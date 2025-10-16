@@ -20,6 +20,7 @@ from .s3_utils import get_s3_client
 from .transcript_utils import get_latest_transcript_file, read_all_transcripts_in_folder
 from .retrieval_handler import RetrievalHandler
 from .api_key_manager import get_api_key
+from .groq_rate_limiter import get_groq_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -1162,60 +1163,44 @@ def run_analysis_agent(
         logger.error(f"Failed to initialize Groq client: {e}", exc_info=True)
         return None
 
-    # Call Groq LLM for analysis with retry logic for rate limits
-    import time
-    from groq import RateLimitError
+    # Get rate limiter for concurrent request management
+    rate_limiter = get_groq_rate_limiter()
 
-    max_retries = 3
-    retry_delay = 1.0  # Start with 1 second
+    # Define the Groq API call as a callable for rate limiter
+    def make_groq_call():
+        model = "openai/gpt-oss-120b"  # Groq model for canvas analysis
+        logger.info(f"Calling Groq API for {mode} analysis (model: {model})")
 
-    for attempt in range(max_retries):
-        try:
-            model = "openai/gpt-oss-120b"  # Groq model for canvas analysis
-            logger.info(f"Calling Groq API for {mode} analysis (model: {model}, attempt {attempt + 1}/{max_retries})")
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Please analyze the source data and produce the {mode} mode analysis document as instructed."}
+        ]
 
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Please analyze the source data and produce the {mode} mode analysis document as instructed."}
-            ]
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=4096,
+            temperature=0.7,
+            stream=False
+        )
 
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=4096,
-                temperature=0.7,
-                stream=False
-            )
+        # Extract content from response
+        analysis_doc = response.choices[0].message.content
 
-            # Extract content from response
-            analysis_doc = response.choices[0].message.content
-
-            if not analysis_doc:
-                logger.error(f"Empty analysis document returned for {mode} mode")
-                return None
-
-            logger.info(f"Successfully generated {mode} analysis: {len(analysis_doc)} chars")
-            return analysis_doc
-
-        except RateLimitError as rate_err:
-            # Extract retry-after time from error message if available
-            error_msg = str(rate_err)
-            logger.warning(f"Groq rate limit hit for {mode} analysis (attempt {attempt + 1}/{max_retries}): {error_msg}")
-
-            # If this is the last attempt, give up
-            if attempt == max_retries - 1:
-                logger.error(f"Groq rate limit exceeded after {max_retries} attempts for {mode} analysis. Please try again later.")
-                return None
-
-            # Otherwise, wait and retry with exponential backoff
-            wait_time = retry_delay * (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
-            logger.info(f"Waiting {wait_time:.1f}s before retry...")
-            time.sleep(wait_time)
-            continue
-
-        except Exception as e:
-            logger.error(f"Error running {mode} analysis agent: {e}", exc_info=True)
+        if not analysis_doc:
+            logger.error(f"Empty analysis document returned for {mode} mode")
             return None
+
+        logger.info(f"Successfully generated {mode} analysis: {len(analysis_doc)} chars")
+        return analysis_doc
+
+    # Execute with rate limiting and retry logic
+    result = rate_limiter.execute_with_rate_limit(
+        groq_call=make_groq_call,
+        context=f"{mode}_analysis_{agent_name}"
+    )
+
+    return result
 
 
 def get_or_generate_analysis_doc(

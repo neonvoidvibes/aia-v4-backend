@@ -15,6 +15,7 @@ from tenacity import RetryError
 from utils.s3_utils import get_cached_s3_file, find_file_any_extension, get_objective_function
 from utils.api_key_manager import get_api_key
 from utils.canvas_analysis_agents import get_or_generate_analysis_doc, get_analysis_status
+from utils.canvas_concurrent_analysis import run_concurrent_mlp_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -237,28 +238,30 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 # OPTION C (HYBRID): Load ALL three analysis documents (mirror, lens, portal) IN PARALLEL
                 # The depth_mode becomes an "emphasis hint" rather than a filter
+                # Uses rate-limited concurrent execution with proper Groq API compliance
                 analyses = {}
                 try:
-                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    # Run all three MLP analyses concurrently with rate limiting
+                    mlp_results = run_concurrent_mlp_analysis(
+                        agent_name=agent_name,
+                        event_id=event_id,
+                        force_refresh=force_refresh_analysis,
+                        clear_previous=clear_previous_analysis,
+                        transcript_listen_mode=transcript_listen_mode,
+                        groups_read_mode=groups_read_mode,
+                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+                        event_type='shared',  # Canvas typically uses shared context
+                        personal_layer=None,  # Canvas doesn't use personal layers for now
+                        personal_event_id=None,
+                        allowed_events=allowed_events,
+                        event_types_map=event_types_map,
+                        event_profile=event_profile,
+                        max_workers=3  # One worker per mode (mirror, lens, portal)
+                    )
 
-                    def load_single_analysis(mode):
-                        """Helper to load a single analysis mode"""
-                        current_doc, previous_doc = get_or_generate_analysis_doc(
-                            agent_name=agent_name,
-                            event_id=event_id,
-                            depth_mode=mode,
-                            force_refresh=force_refresh_analysis,
-                            clear_previous=clear_previous_analysis,
-                            transcript_listen_mode=transcript_listen_mode,
-                            groups_read_mode=groups_read_mode,
-                            individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
-                            event_type='shared',  # Canvas typically uses shared context
-                            personal_layer=None,  # Canvas doesn't use personal layers for now
-                            personal_event_id=None,
-                            allowed_events=allowed_events,
-                            event_types_map=event_types_map,
-                            event_profile=event_profile
-                        )
+                    # Convert results to expected format
+                    for mode, (current_doc, previous_doc) in mlp_results.items():
+                        analyses[mode] = {'current': current_doc, 'previous': previous_doc}
 
                         if current_doc:
                             logger.info(f"Canvas: Loaded current {mode} analysis ({len(current_doc)} chars)")
@@ -266,16 +269,6 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                             logger.info(f"Canvas: Loaded previous {mode} analysis ({len(previous_doc)} chars)")
                         if not current_doc:
                             logger.info(f"Canvas: No current {mode} analysis available")
-
-                        return mode, {'current': current_doc, 'previous': previous_doc}
-
-                    # Load all three modes concurrently
-                    with ThreadPoolExecutor(max_workers=3) as executor:
-                        futures = {executor.submit(load_single_analysis, mode): mode for mode in ['mirror', 'lens', 'portal']}
-
-                        for future in as_completed(futures):
-                            mode, docs = future.result()
-                            analyses[mode] = docs
 
                 except Exception as analysis_err:
                     logger.error(f"Error getting analysis documents: {analysis_err}", exc_info=True)
@@ -608,48 +601,43 @@ This is a voice interface - every word must count.
             allowed_events = set(event_profile.get('allowed_events') or {"0000"}) if event_profile else {"0000"}
             event_types_map = dict(event_profile.get('event_types') or {}) if event_profile else {}
 
-            # Refresh all three modes in PARALLEL for speed
-            # Race condition analysis: Each mode has unique cache keys and S3 paths, only reads shared resources
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+            # Refresh all three modes in PARALLEL with rate limiting for Groq API compliance
+            # Uses concurrent analysis helper for proper rate limiting and error handling
+            try:
+                mlp_results = run_concurrent_mlp_analysis(
+                    agent_name=agent_name,
+                    event_id=event_id,
+                    force_refresh=True,  # Force refresh
+                    clear_previous=clear_previous,  # Clear previous if requested
+                    transcript_listen_mode=transcript_listen_mode,
+                    groups_read_mode=groups_read_mode,
+                    individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+                    event_type='shared',
+                    personal_layer=None,
+                    personal_event_id=None,
+                    allowed_events=allowed_events,
+                    event_types_map=event_types_map,
+                    event_profile=event_profile,
+                    max_workers=3  # One worker per mode
+                )
 
-            def refresh_single_mode(mode):
-                """Helper to refresh a single analysis mode"""
-                try:
-                    logger.info(f"Refreshing {mode} analysis for {agent_name} (clear_previous={clear_previous})")
-                    doc, _ = get_or_generate_analysis_doc(
-                        agent_name=agent_name,
-                        event_id=event_id,
-                        depth_mode=mode,
-                        force_refresh=True,  # Force refresh
-                        clear_previous=clear_previous,  # Clear previous if requested
-                        transcript_listen_mode=transcript_listen_mode,
-                        groups_read_mode=groups_read_mode,
-                        individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
-                        event_type='shared',
-                        personal_layer=None,
-                        personal_event_id=None,
-                        allowed_events=allowed_events,
-                        event_types_map=event_types_map,
-                        event_profile=event_profile
-                    )
-                    if doc:
-                        logger.info(f"Successfully refreshed {mode} analysis ({len(doc)} chars)")
-                        return mode, {'success': True, 'length': len(doc)}
+                # Convert results to response format
+                results = {}
+                for mode, (current_doc, _) in mlp_results.items():
+                    if current_doc:
+                        logger.info(f"Successfully refreshed {mode} analysis ({len(current_doc)} chars)")
+                        results[mode] = {'success': True, 'length': len(current_doc)}
                     else:
-                        logger.warning(f"Failed to refresh {mode} analysis")
-                        return mode, {'success': False}
-                except Exception as e:
-                    logger.error(f"Error refreshing {mode} analysis: {e}", exc_info=True)
-                    return mode, {'success': False, 'error': str(e)}
+                        logger.warning(f"Failed to refresh {mode} analysis (likely rate limited or error)")
+                        results[mode] = {'success': False, 'error': 'Analysis generation failed'}
 
-            results = {}
-            # Execute all three modes concurrently with max 3 workers (one per mode)
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = {executor.submit(refresh_single_mode, mode): mode for mode in ['mirror', 'lens', 'portal']}
-
-                for future in as_completed(futures):
-                    mode, result = future.result()
-                    results[mode] = result
+            except Exception as e:
+                logger.error(f"Error in concurrent analysis refresh: {e}", exc_info=True)
+                # Return error results for all modes
+                results = {
+                    mode: {'success': False, 'error': str(e)}
+                    for mode in ['mirror', 'lens', 'portal']
+                }
 
             # Get status for response
             status = get_analysis_status(agent_name, event_id, 'mirror')  # Can use any mode
