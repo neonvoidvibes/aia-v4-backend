@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from flask import jsonify, Response, stream_with_context, g
+from flask import jsonify, Response, stream_with_context, g, request
 from gotrue.types import User as SupabaseUser
 from anthropic import Anthropic, AnthropicError
 from tenacity import RetryError
@@ -556,7 +556,8 @@ This is a voice interface - every word must count.
         """
         try:
             agent_name = g.get('agent_name')
-            depth_mode = g.get('json_data', {}).get('depth', 'mirror')
+            # Read depth from query parameters (GET request)
+            depth_mode = request.args.get('depth', 'mirror')
             event_id = '0000'
 
             if not agent_name:

@@ -626,6 +626,11 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, version
     try:
         s3_client = get_s3_client()
 
+        # Return None if S3 client is not available
+        if not s3_client:
+            logger.warning(f"S3 client unavailable, cannot load {version} {mode} analysis for {agent_name}/{event_id}")
+            return None
+
         # Special handling for 'previous' - load most recent previous file
         if version == 'previous':
             previous_prefix = f"organizations/{CANVAS_ANALYSIS_ORG}/agents/{agent_name}/_canvas/mlp/mlp-previous/{event_id}_{mode}_"
@@ -647,11 +652,16 @@ def load_analysis_doc_from_s3(agent_name: str, event_id: str, mode: str, version
 
         logger.info(f"Loaded {version} {mode} analysis from S3: {key}")
         return content
-    except s3_client.exceptions.NoSuchKey:
-        logger.info(f"No S3 {version} analysis document found for {agent_name}/{event_id}/{mode}")
+    except AttributeError as e:
+        # Handle case where s3_client is None but wasn't caught above
+        logger.warning(f"S3 client error: {e}")
         return None
     except Exception as e:
-        logger.error(f"Error loading analysis from S3: {e}", exc_info=True)
+        # Handle NoSuchKey and other S3 errors
+        if hasattr(e, '__class__') and 'NoSuchKey' in str(e.__class__.__name__):
+            logger.info(f"No S3 {version} analysis document found for {agent_name}/{event_id}/{mode}")
+        else:
+            logger.error(f"Error loading analysis from S3: {e}", exc_info=True)
         return None
 
 
