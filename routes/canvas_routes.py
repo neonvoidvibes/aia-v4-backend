@@ -555,8 +555,8 @@ This is a voice interface - every word must count.
         Returns status for the currently selected mode.
         """
         try:
-            agent_name = g.get('agent_name')
-            # Read depth from query parameters (GET request)
+            # Read agent and depth from query parameters (GET request)
+            agent_name = request.args.get('agent')
             depth_mode = request.args.get('depth', 'mirror')
             event_id = '0000'
 
