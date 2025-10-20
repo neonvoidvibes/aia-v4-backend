@@ -6072,7 +6072,21 @@ def embed_recording_route(user: SupabaseUser):
         
         # A virtual filename for metadata purposes
         virtual_filename = os.path.basename(s3_key)
-        
+
+        # Determine event_type from Supabase agent_events table for privacy filtering
+        client = get_supabase_client()
+        event_type = 'shared'  # Default for event_id '0000'
+        if event_id_param != '0000' and client:
+            try:
+                event_res = client.table("agent_events").select("type").eq("agent_name", agent_name).eq("event_id", event_id_param).limit(1).execute()
+                if event_res.data and len(event_res.data) > 0:
+                    event_type = event_res.data[0].get("type", "group")
+                else:
+                    event_type = 'group'  # Default if not found
+            except Exception as e:
+                logger.warning(f"Failed to fetch event type for event '{event_id_param}': {e}. Defaulting to 'group'.")
+                event_type = 'group'
+
         metadata_for_embedding = {
             "agent_name": agent_name,
             "source": "recording",
@@ -6080,6 +6094,7 @@ def embed_recording_route(user: SupabaseUser):
             "file_name": virtual_filename,
             "s3_key": s3_key,
             "event_id": event_id_param,
+            "event_type": event_type,  # NEW: Add event_type for privacy filtering
         }
 
         # Add the 'created_at' timestamp from S3's LastModified metadata
@@ -6167,6 +6182,20 @@ def save_chat_memory_log(user: SupabaseUser):
 
         # Upsert new vectors
         logger.info(f"Save Memory Log: Upserting new vectors to Pinecone for session '{session_id}'...")
+
+        # Determine event_type from Supabase agent_events table for privacy filtering
+        event_type = 'shared'  # Default for event_id '0000'
+        if event_id_param != '0000':
+            try:
+                event_res = client.table("agent_events").select("type").eq("agent_name", agent_name).eq("event_id", event_id_param).limit(1).execute()
+                if event_res.data and len(event_res.data) > 0:
+                    event_type = event_res.data[0].get("type", "group")
+                else:
+                    event_type = 'group'  # Default if not found
+            except Exception as e:
+                logger.warning(f"Failed to fetch event type for event '{event_id_param}': {e}. Defaulting to 'group'.")
+                event_type = 'group'
+
         metadata_for_embedding = {
             "agent_name": agent_name,
             "source_identifier": session_id,
@@ -6176,6 +6205,7 @@ def save_chat_memory_log(user: SupabaseUser):
             "triplets": triplets, # Pass the triplets to the embedding handler
             "source_type": "chat",
             "event_id": event_id_param,
+            "event_type": event_type,  # NEW: Add event_type for privacy filtering
         }
         
         try:
@@ -6359,9 +6389,25 @@ def pinecone_upsert_proxy(user: SupabaseUser):
 
     try:
         embedding_handler = EmbeddingHandler(index_name="river", namespace=agent_name)
+
+        # Determine event_type from Supabase agent_events table for privacy filtering
+        client = get_supabase_client()
+        event_type = 'shared'  # Default for event_id '0000'
+        if event_id != '0000' and client:
+            try:
+                event_res = client.table("agent_events").select("type").eq("agent_name", agent_name).eq("event_id", event_id).limit(1).execute()
+                if event_res.data and len(event_res.data) > 0:
+                    event_type = event_res.data[0].get("type", "group")
+                else:
+                    event_type = 'group'  # Default if not found
+            except Exception as e:
+                logger.warning(f"Failed to fetch event type for event '{event_id}': {e}. Defaulting to 'group'.")
+                event_type = 'group'
+
         # Enforce required metadata fields
         metadata.setdefault('agent_name', agent_name)
         metadata.setdefault('event_id', event_id)
+        metadata.setdefault('event_type', event_type)  # NEW: Add event_type for privacy filtering
         upsert_success = embedding_handler.embed_and_upsert(content, metadata)
         if not upsert_success:
             return jsonify({"error": "Failed to upsert memory"}), 500
@@ -6989,6 +7035,18 @@ def delete_message(user: SupabaseUser):
                     
                     embedding_handler.delete_document(source_identifier=chat_id)
                     logger.info(f"Deleted old vectors for {chat_id}.")
+
+                    # Determine event_id and event_type from the original memory log
+                    event_id_param = '0000'  # Default to shared
+                    event_type = 'shared'
+
+                    # Try to fetch event_id from the original memory log metadata
+                    log_detail_res = client.table('agent_memory_logs').select('*').eq('source_identifier', chat_id).execute()
+                    if log_detail_res.data and len(log_detail_res.data) > 0:
+                        # Event info might be in structured_content metadata or we default to shared
+                        event_id_param = '0000'  # Keep as shared for now
+                        event_type = 'shared'
+
                     embedding_handler.embed_and_upsert(structured_content, {
                         "agent_name": agent_name,
                         "source_identifier": chat_id,
@@ -6997,6 +7055,7 @@ def delete_message(user: SupabaseUser):
                         "triplets": triplets,
                         "source_type": "chat",
                         "event_id": event_id_param,
+                        "event_type": event_type,  # NEW: Add event_type for privacy filtering
                     })
                     logger.info(f"Successfully re-indexed conversation memory for chat {chat_id}.")
         else:

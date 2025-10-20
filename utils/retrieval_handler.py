@@ -592,6 +592,8 @@ class RetrievalHandler:
                 # Explicit policy from caller. Empty set => no T3.
                 if len(self.allowed_tier3_events) > 0:
                     t3_filter['event_id'] = {'$in': list(self.allowed_tier3_events)}
+                    # PRIVACY: Always exclude personal events from Tier-3
+                    t3_filter['event_type'] = {'$ne': 'personal'}
                     tiers.append({'filter': merge_filter(t3_filter), 'cap': caps['t3'], 'label': 't3'})
             else:
                 # No implicit cross-event search.
@@ -599,7 +601,9 @@ class RetrievalHandler:
                 # - In shared "0000": omit event_id to span all events for this agent
                 # - Else: do not run T3 (strict isolation)
                 if current_event == "0000":
-                    # For shared space, span all events (don't add event_id filter)
+                    # For shared space, span all events EXCEPT personal ones
+                    # PRIVACY: Exclude event_type='personal' to prevent privacy leaks
+                    t3_filter['event_type'] = {'$ne': 'personal'}
                     tiers.append({'filter': merge_filter(t3_filter), 'cap': caps['t3'], 'label': 't3'})
 
         all_matches = []
