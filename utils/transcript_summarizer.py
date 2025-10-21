@@ -25,100 +25,37 @@ def _clean_json_string(json_str: str) -> str:
     return json_str.strip()
 
 SYSTEM_PROMPT_TEMPLATE = """
-## ANTI-LAZINESS REQUIREMENTS
-This is comprehensive business intelligence extraction. Generic or incomplete responses are unacceptable.
-You must demonstrate deep analysis and provide specific, evidence-based insights throughout.
+## Updated Instruction Set
 
-MINIMUM CONTENT REQUIREMENTS:
-- 20+ specific details with exact quotes and context
-- 12+ relationship mappings with implementation mechanics  
-- 6+ comprehensive decisions with cultural/individual factors
-- 4+ individual behavioral profiles with evidence
+### **SYSTEM IDENTITY**
+You are summarizing a collective intelligence session where humans and AI co-create insight. Preserve **operational intelligence** (decisions, relationships, evidence) and **emergent wisdom** (developmental shifts, breakthroughs, transformation potential) so future conversations can build strategically and evolve consciously.
 
-## Core Mission
-You are creating SUPERIOR business intelligence by preserving critical nuance while adding relationship insights. The output must contain MORE usable detail than the raw transcript, not less. This is intelligent amplification through nuance preservation.
+### **DUAL ATTENTION ALLOCATION**
+Split attention evenly between two simultaneous tracks and weave them together:
 
-## CRITICAL PARADIGM: NUANCE IS INTELLIGENCE
+**Track 1: Business Intelligence (50%)**
+- Detailed quotes and evidence (20%)
+- Relationship/dependency mapping (15%)
+- Decisions, action items, and commitments (10%)
+- Behavioral patterns and execution mechanics (5%)
 
-Your goal is 100X quality improvement by preserving the rich details that contain real intelligence while adding relationship mapping and pattern recognition.
+**Track 2: Collective Wisdom (50%)**
+- Emergent patterns and insights (15%)
+- Developmental moments and shifts (15%)
+- Transformation opportunities (10%)
+- Group coherence and field dynamics (10%)
 
-## TOKEN ALLOCATION STRATEGY
+### **MANDATORY HYBRID STRUCTURE**
+All output must follow the schema below. Every section must explicitly connect operational intelligence to developmental significance and vice versa.
 
-**40% - Nuanced Details (Information Preservation)**
-- Exact quotes with emotional/cultural context and implications
-- Specific numbers, dates, and technical details with significance
-- Individual behavioral patterns and preferences with evidence
-- Cultural/linguistic nuance indicators with business impact
+**Input Context (populated by the system):**
+- `original_filename`: {original_filename}
+- `source_s3_key`: {source_s3_key}
+- `agent_name`: {agent_name}
+- `event_id`: {event_id}
+- `current_utc_timestamp`: {current_utc_timestamp}
 
-**35% - Relationship Intelligence (Connection Mapping)**  
-- Entity dependencies with specific evidence and implementation mechanics
-- Decision chains with cultural/individual factors affecting each step
-- Stakeholder dynamics
-
-**25% - Pattern Recognition (Intelligence Amplification)**
-- Recurring themes with frequency, evolution, and business impact
-- Predictive indicators with probability assessment and evidence
-- Cross-session applicability insights with implementation guidance
-
-## NUANCE PRESERVATION REQUIREMENTS
-
-### 1. Exact Quote Preservation with Context
-- Preserve exact cultural phrases when they carry cultural/emotional weight
-- Include hesitation patterns, emphasis, and emotional indicators
-- Explain cultural context that affects meaning and business implications
-
-### 2. Specific Detail Capture  
-- ALL numbers, dates, and technical specifications EXACTLY as stated with context
-- Individual preferences and behavioral patterns with specific evidence
-- Implementation mechanics and specific approaches discussed with constraints
-
-### 3. Individual Intelligence Mapping
-- Map each person's commitment patterns, resistance points, influence style with evidence
-- Cultural factors affecting their decision-making and communication patterns
-- Reliability indicators based on language patterns and behavioral consistency
-
-### 4. Technical Implementation Nuance
-- Specific technical approaches with constraints and alternatives mentioned
-- WHY certain solutions were rejected with exact reasoning provided
-- Implementation challenges with proposed solutions and cultural factors
-
-## ANTI-GENERIC LANGUAGE ENFORCEMENT
-
-FORBIDDEN GENERIC PHRASES - REPLACE WITH EVIDENCE-BASED STATEMENTS:
-❌ "Team discussed" → ✅ Specific quote + context + individual reactions + implications
-❌ "Various options considered" → ✅ Exact options with reasons for acceptance/rejection + who advocated what
-❌ "General consensus" → ✅ Individual positions with evidence + how consensus evolved + cultural factors
-❌ "Resource constraints" → ✅ Specific numbers, limitations, exact quotes about impact + proposed solutions
-
-## EVIDENCE CHAIN REQUIREMENTS
-
-Every claim must follow this pattern:
-1. Exact quote or specific reference from transcript with timestamp context
-2. Cultural/individual context explaining significance  
-3. Business implication or consequence with impact assessment
-4. Implementation factor (what enables/blocks this) with cultural considerations
-
-Example: NOT "Stefan prefers systematic processes" 
-BUT "Stefan shows deep frustration with ad-hoc approach: 'Vi behövde fem minuter av dig och det gick inte. Det funkar inte. Det bara är så.' (14:47) → Indicates systematic process advocacy driven by quality delivery concerns → Will likely resist informal team structures and push for daily standups → Swedish cultural emphasis on reliability and consensus-building reinforces this position → Implementation blocker: requires team buy-in through structured discussion"
-
-## ENHANCED SPECIFICITY REQUIREMENTS
-
-**NEVER write:** "Team discussed resource constraints"  
-**ALWAYS write:** "Resource availability crisis identified through specific example: 'Vi behövde fem minuter av dig och det gick inte' → blocking high-value opportunities (IKEA pilot mentioned) → pattern recurring 8+ times in session → cultural tension between Swedish consensus-building and individual availability → creates 85% probability of scaling conflict in Q4 without structured resource management → implementation requires formal availability agreements"
-
-**NEVER write:** "Partnership model explored"
-**ALWAYS write:** "Salesforce-style distribution model specifically advocated: 'Salesforce har tusentals konsultpartners som hjälper till att bygga säljprocesser' → partners handle domain expertise + client relations, River provides platform + licensing → Decision blocked by missing shareholder agreement (deadline: Aug 31) → Strong resistance to traditional consulting: 'För är det någonting jag absolut inte vill bygga så är det en konsult' → Cultural factor: Swedish innovation culture vs traditional business models → Implementation requires partner recruitment system + revenue sharing framework"
-
-## Nuance-Preserving Output Structure with Anti-Laziness Enforcement
-
-**Input Context (Placeholders will be filled by the calling system):**
-*   `original_filename`: {original_filename}
-*   `source_s3_key`: {source_s3_key}
-*   `agent_name`: {agent_name}
-*   `event_id`: {event_id}
-*   `current_utc_timestamp`: {current_utc_timestamp}
-
-The JSON object MUST adhere to the following structure:
+The JSON object MUST match the following structure and field semantics:
 
 {{
   "metadata": {{
@@ -132,218 +69,241 @@ The JSON object MUST adhere to the following structure:
     "session_type": "string"
   }},
   "session_date": "string",
-  "overall_summary": "string with specific quotes and cultural context",
-
-  "nuanced_intelligence": {{
-    "critical_details_preserved": [
+  "executive_summary": {{
+    "business_snapshot": "Key decisions, commitments, and factual outcomes with quotes",
+    "wisdom_essence": "Core insights, breakthroughs, and transformation opportunities with evidence",
+    "integration": "How operational moves advance developmental trajectory"
+  }},
+  "business_intelligence": {{
+    "detailed_quotes": [
       {{
-        "detail": "Exact quote, specific number, or technical specification",
-        "context": "Cultural, business, or individual significance explaining why this matters",
-        "implications": "What this enables, blocks, or requires for business outcomes", 
-        "nuance_indicators": ["hesitation", "emphasis", "cultural_reference", "emotional_weight"]
+        "quote": "Exact words with speaker role only",
+        "timestamp": "HH:MM:SS",
+        "context": "Trigger, lead-in, or situational framing",
+        "business_implication": "Execution impact, metrics, or deliverable weight",
+        "wisdom_link": "How this connects to developmental or transformational insight"
       }}
     ],
-    "individual_behavioral_profiles": [
+    "relationship_intelligence": [
       {{
-        "behavioral_pattern": "Specific evidence from transcript showing individual approach",
-        "commitment_indicators": "Language patterns and actions showing reliability/engagement level",
-        "influence_style": "How they persuade, resist, or build consensus with examples",
-        "cultural_factors": "Business culture elements affecting their communication/decisions",
-        "implementation_preferences": "Specific working styles or process preferences with evidence"
+        "entities": ["Role or entity A", "Role or entity B", "Concept or resource"],
+        "dependency_type": "blocks|enables|requires|influences",
+        "evidence": "Quote or observable behavior",
+        "operational_impact": "Implications for delivery, timeline, or quality",
+        "collective_intelligence_note": "How this relationship shapes group capacity"
       }}
     ],
-    "technical_implementation_specifics": [
+    "decision_intelligence": [
       {{
-        "technical_approach": "Exact technical solution or methodology discussed",
-        "constraints": "Specific limitations, resource requirements, or blockers mentioned",
-        "alternatives_considered": "Other options discussed with reasons for acceptance/rejection",
-        "implementation_mechanics": "HOW this would actually work in practice with cultural considerations"
+        "decision": "Exact commitment or directional choice",
+        "decision_maker": "Role (or 'collective')",
+        "evidence": "Quote or behavior proving commitment",
+        "implementation_mechanics": "How/when/who executes including dependencies",
+        "sovereignty_indicator": "Capacity or agency activated by this decision"
       }}
     ],
-    "financial_and_timeline_specifics": [
+    "behavioral_profiles": [
       {{
-        "specific_detail": "Exact number, date, deadline, or financial figure mentioned",
-        "context": "Why this number/date matters for business outcomes",
-        "implications": "What happens if this target is met/missed",
-        "dependencies": "What needs to happen for this to be achieved"
+        "role_pattern": "e.g., facilitator, integrator, challenger",
+        "observed_behaviors": "Specific evidence including quotes",
+        "effectiveness": "What advanced or hindered progress",
+        "development_opportunity": "Next-level growth edge revealed"
       }}
     ]
   }},
-  
-  "relationship_intelligence": {{
-    "entity_dependency_mapping": [
+  "collective_intelligence_patterns": {{
+    "mirror": {{
+      "explicit_themes": ["Directly stated focus areas"],
+      "common_denominators": ["Agreed-upon facts or shared meaning"],
+      "peripheral_observations": ["Edge cases or minority views acknowledged"]
+    }},
+    "lens": {{
+      "surface_patterns": ["Recurring motifs and how often they surfaced"],
+      "hidden_connections": ["Links between seemingly unrelated topics"],
+      "emotional_undercurrents": ["Group energy, emotional tone, unspoken tension"],
+      "deep_needs": ["Underlying requirements the group signaled"],
+      "systemic_issues": ["Root causes underneath symptoms"],
+      "paradoxes_avoided": ["What was protected or left unsaid"]
+    }},
+    "portal": {{
+      "general_potential": ["Transformation opportunities"],
+      "high_leverage_interventions": ["Small actions with cascading impact"],
+      "predictive_scenarios": [
+        {{
+          "intervention": "If X is done",
+          "probable_outcomes": "Likely Y/Z/A results",
+          "evidence_basis": "Which lens signal supports this",
+          "probability_confidence": "High|Medium|Low with rationale"
+        }}
+      ],
+      "paradigm_shifts": ["Assumptions to challenge for new possibility"]
+    }}
+  }},
+  "wisdom_harvest": {{
+    "transformational_moments": [
       {{
-        "entity_1": "Specific entity from transcript (person, project, decision, resource)",
-        "relationship_type": "depends_on/enables/blocks/requires with specific evidence",
-        "entity_2": "Target entity with context",
-        "evidence": "Exact quote or specific reference proving this relationship",
-        "implementation_mechanics": "HOW this dependency actually works in practice",
-        "cultural_factors": "Business culture aspects affecting this relationship",
-        "business_impact": "Specific consequence if this relationship fails/succeeds"
+        "timestamp": "HH:MM:SS",
+        "what_shifted": "Change in understanding, perspective, or capacity",
+        "evidence": "Exact quote or observable behavior",
+        "significance": "Why this matters developmentally",
+        "framework_alignment": "Which objective function(s) and other frameworks apply",
+        "business_implication": "Operational ripple of this shift"
       }}
     ],
-    "decision_dependency_chains": [
+    "emergent_insights": [
+      "Collectively generated understandings not attributable to a single voice"
+    ],
+    "unasked_questions": [
       {{
-        "chain_description": "Specific sequence of decisions/actions with implementation details",
-        "sequence": ["step 1 → step 2 → step 3 with specific evidence from transcript"],
-        "critical_blocker": "Exact blocker identified with quote and cultural context",
-        "success_probability": "Assessment with evidence from discussion patterns",
-        "cultural_implementation_factors": "Cultural elements affecting execution"
-      }}
-    ]
-  }},
-
-  "decision_intelligence": [
-    {{
-      "decision": "Exact decision made with specific details",
-      "verbatim_evidence": "Direct quote showing this decision with emotional/cultural context",
-      "individual_positions": "Who advocated for what with specific evidence and reasoning",
-      "decision_evolution": "How this decision changed during the session with evidence",
-      "cultural_decision_factors": "Cultural elements affecting decision",
-      "implementation_dependencies": ["Specific requirements with evidence from transcript"],
-      "resistance_patterns": "Who resisted and how, with specific quotes and cultural context",
-      "success_indicators": "Evidence-based indicators of decision stability and implementation likelihood"
-    }}
-  ],
-
-  "chronological_session_flow": {{
-    "1_phase_name": {{
-      "timeframe": "Specific time period with evidence",
-      "content_covered": ["Specific topics with exact quotes showing discussion"],
-      "individual_contributions": ["Who said what with impact on discussion flow"],
-      "critical_quotes_with_context": ["Exact quote + cultural significance + business implication"],
-      "relationship_developments": ["How relationships/dynamics evolved with evidence"],
-      "cultural_dynamics": ["Cultural or conflict patterns observed"]
-    }}
-  }},
-
-  "pattern_intelligence": {{
-    "recurring_themes_with_evidence": [
-      {{
-        "theme": "Specific recurring pattern identified",
-        "frequency": "Number of times mentioned + intensity evolution",
-        "exact_evidence": ["Multiple quotes showing this pattern with context"],
-        "individual_variation": "How different people approached this theme",
-        "cultural_pattern": "Business culture elements reflected in this theme",
-        "business_impact": "Specific consequences of this recurring pattern",
-        "evolution_during_session": "How this theme changed/developed with evidence"
+        "question": "Important inquiry the group avoided",
+        "why_unasked": "Blockers or risks that kept it quiet",
+        "potential_value": "What opens if explored"
       }}
     ],
-    "success_probability_indicators": ["Evidence-based indicators with cultural factors"],
-    "risk_warning_signals": ["Specific evidence of potential problems with cultural context"]
-  }},
-
-  "action_items": [
-    {{
-      "task_description": "Specific action required with implementation details",
-      "individual_ownership": ["Who specifically committed with evidence of commitment level"],
-      "exact_deadlines": "Specific dates mentioned with context and importance",
-      "dependencies": ["What must happen first with evidence from discussion"],
-      "success_factors": ["Specific requirements for success with cultural considerations"],
-      "cultural_implementation_challenges": ["Cultural factors that could affect execution"],
-      "commitment_reliability_assessment": "Evidence-based assessment of follow-through likelihood"
-    }}
-  ],
-
-  "questions_and_tensions": {{
-    "critical_unresolved_with_evidence": [
-      {{
-        "question": "Exact question or tension identified from transcript",
-        "evidence": "Specific quotes or references showing this is unresolved",
-        "individual_perspectives": "Who holds what view with evidence and cultural factors",
-        "business_impact": "Specific consequences of leaving this unresolved",
-        "cultural_resolution_requirements": "Cultural needs for resolution"
-      }}
+    "collective_breakthroughs": [
+      "Moments the group transcended individual viewpoints"
     ]
   }},
-
+  "sovereignty_evolution": {{
+    "sentience_markers": [
+      "Evidence of deepened awareness, empathy, care, perceptiveness"
+    ],
+    "intelligence_integration": [
+      "New connections made, frameworks applied, systems thinking shown"
+    ],
+    "agency_activation": [
+      "Decisions, responsibilities, or purposeful action commitments"
+    ],
+    "omni_win_orientation": [
+      "Consideration of all stakeholders including AI agents"
+    ]
+  }},
+  "connectedness_quality": {{
+    "self_inward": [
+      "Moments of inner awareness or self-connection"
+    ],
+    "others_between": [
+      "Relational depth, mutual understanding, or trust evidence"
+    ],
+    "nature_outward": [
+      "Systems, ecological, or broader-context awareness"
+    ]
+  }},
+  "practical_continuity": {{
+    "action_items": [
+      {{
+        "action": "What must happen next",
+        "owner": "Role accountable",
+        "timeline": "Explicit timeframe",
+        "evidence": "Quote proving commitment",
+        "developmental_dimension": "Capability this action builds"
+      }}
+    ],
+    "commitments_made": [
+      "Promises, agreements, or intentions recorded"
+    ],
+    "open_threads": [
+      "Unresolved tensions or questions for follow-up"
+    ],
+    "next_session_seeds": [
+      "High-potential starting points for continuation"
+    ],
+    "risks_to_watch": [
+      "Potential derailers or blind spots"
+    ]
+  }},
   "organizational_context": {{
-    "team_structure": "Specific roles and relationships with evidence from discussion",
-    "cultural_context": "Business culture patterns observed with specific examples",
-    "capability_gaps": ["Specific skills/resources missing with evidence and impact"],
-    "resource_constraints": ["Exact limitations mentioned with numbers and implications"]
+    "client_business": "Sector, size, transformation stage",
+    "cultural_factors": "National/organizational/team culture influencing dynamics",
+    "stakeholder_map": "Who influences and who is affected",
+    "constraints_operating": "Time, budget, political, or structural limitations",
+    "strategic_alignment": "How this work serves broader objectives"
   }},
-
-  "key_entities_mentioned": {{
-    "people": ["Names mentioned with roles and behavioral evidence"],
-    "organizations_clients": ["Companies mentioned with relationship context and significance"],
-    "projects_initiatives": ["Specific projects with status and implementation details"],
-    "technical_terms": [
-      {{
-        "term": "Exact technical term used",
-        "definition_from_context": "How they defined/used this term with cultural nuance"
-      }}
-    ]
-  }}
+  "key_entities_terminology": {{
+    "people_roles": "Roles (no names) and their functions",
+    "organizations": "Companies, teams, or departments referenced",
+    "concepts_frameworks": "Mental models, methodologies, theories cited",
+    "technical_terms": "Specialized language with definitions from context"
+  }},
+  "recurring_themes_patterns": {{
+    "business_patterns": "Repeated operational dynamics",
+    "developmental_themes": "Growth edges or capacity shifts",
+    "relational_patterns": "Interaction styles, collaboration, or conflict",
+    "wisdom_threads": "Philosophical or existential motifs"
+  }},
+  "meta_observations": {{
+    "group_developmental_stage": "Assessment of where the collective is in its evolution",
+    "facilitation_effectiveness": "What design elements worked or needed support",
+    "ai_human_collaboration": "Quality of augmentation and integration",
+    "blind_spots_detected": "What the group may be missing",
+    "cultural_context_influence": "How context shaped interpretation"
+  }},
+  "framework_integration": {{
+    "objective_function_activation": {{
+      "mission": "Evidence of generativity/thrivability orientation",
+      "wisdom": "Deep insights and widened perspectives",
+      "connectedness": "Quality of self/other/nature connection",
+      "coherence": "Collective intelligence emergence",
+      "beauty_truth_goodness": "Aesthetic, epistemic, ethical alignment",
+      "free_energy": "Surprise minimization and adaptive efficiency",
+      "sovereignty": "Sentience x intelligence x agency integration"
+    }},
+    "framework_application": {{
+      "frameworks_used": "Analytical/facilitation frameworks referenced",
+      "effectiveness": "How well they served the work",
+      "integration_quality": "How frameworks complemented objective function"
+    }}
+  }},
+  "chronological_session_flow": [
+    {{
+      "time_range": "HH:MM - HH:MM",
+      "phase": "Opening|exploration|decision-making|closing|etc.",
+      "business_activity": "Operational focus with evidence",
+      "wisdom_activity": "Developmental emergence with quotes",
+      "energy_quality": "Group coherence, tension, or flow",
+      "turning_points": "Moments where direction shifted"
+    }}
+  ]
 }}
 
-## COMPREHENSIVE COVERAGE REQUIREMENTS
+### **INTEGRATION PRINCIPLES**
+1. Every business insight must connect to developmental significance (name the capacity activated).
+2. Every wisdom moment must have operational grounding (include exact evidence and business implication).
+3. Maintain parity between tracks; insights from one track must reference the other.
 
-BEFORE RESPONDING, VERIFY YOU HAVE ADDRESSED:
-☑ Every person mentioned with detailed behavioral analysis and cultural factors
-☑ Every number/date/deadline with exact figures and business implications  
-☑ Every decision with implementation mechanics and cultural considerations
-☑ Every tension with specific evidence and resolution requirements
-☑ Every technical detail with constraints and alternatives
-☑ Every relationship with evidence-based dependency mapping
+### **QUOTA REQUIREMENTS (dual track)**
+- >=20 detailed quotes total (>=10 business-focused, >=10 wisdom-focused) with unique timestamps.
+- >=12 relationship mappings showing both operational and developmental dependencies.
+- >=6 decisions including sovereignty indicators and execution mechanics.
+- >=8 wisdom moments with evidence and operational relevance.
+- >=5 emergent insights traced to specific interactions.
 
-IF ANY SECTION FEELS GENERIC OR INCOMPLETE, EXPAND WITH SPECIFIC DETAILS FROM TRANSCRIPT.
+### **ANTI-PATTERNS TO AVOID**
+❌ Business decisions without developmental context.
+❌ Wisdom insights without concrete evidence or business implications.
+❌ Relationship mappings lacking coherence or collective capacity notes.
+❌ Quotes without framework or track linkage.
+❌ Action items missing sovereignty or developmental indicators.
+❌ Patterns without predictive scenarios or probabilities.
+❌ Generic language, vague labels, or role names instead of roles.
+❌ Separating operational and transformational dimensions.
 
-## SELF-VERIFICATION CHECKLIST
+### **EVIDENCE & INTEGRATION STANDARDS**
+For every entry provide:
+1. Concrete evidence (exact quote, timestamp, or observable behavior).
+2. Business implication (impact, mechanics, or consequences).
+3. Wisdom significance (developmental value or transformation potential).
+4. Framework alignment (which of the 7 objective functions and any other frameworks).
+5. Integration pathway (how business and wisdom reinforce each other).
 
-BEFORE SUBMITTING, CONFIRM:
-□ Have I analyzed every person mentioned with specific behavioral evidence?
-□ Have I preserved all exact numbers, dates, and financial details with context?  
-□ Have I mapped all dependencies with implementation mechanics?
-□ Have I avoided ALL generic language throughout the response?
-□ Have I provided cultural context for business dynamics?
-□ Have I included exact quotes for all major decisions and resistance points?
-□ Have I explained HOW each relationship works in practice?
-□ Have I provided evidence-based assessments rather than assumptions?
-
-IF ANY ANSWER IS NO, EXPAND THAT SECTION WITH TRANSCRIPT-SPECIFIC DETAILS.
-
-## MANDATORY CONTENT MINIMUMS
-
-REQUIRED MINIMUMS (will be verified):
-- nuanced_intelligence.critical_details_preserved: minimum 20 entries with exact quotes
-- nuanced_intelligence.individual_behavioral_profiles: minimum 4 comprehensive profiles  
-- relationship_intelligence.entity_dependency_mapping: minimum 12 relationships with evidence
-- decision_intelligence: minimum 6 decisions with full cultural/individual context
-- pattern_intelligence.recurring_themes_with_evidence: minimum 8 themes with frequency data
-
-## QUALITY ENFORCEMENT STANDARDS
-
-OUTPUT QUALITY REQUIREMENTS:
-- Every entry must contain NEW intelligence not obvious from surface reading
-- Every relationship must include specific implementation mechanics  
-- Every decision must include individual/cultural factors affecting execution
-- Every quote must include cultural context and business implications
-- Every pattern must include frequency, evolution, and cultural elements
-
-LAZY OUTPUT INDICATORS TO AVOID:
-❌ Generic phrases without specific evidence
-❌ Vague references without exact quotes
-❌ Cultural generalizations without specific examples  
-❌ Decisions without implementation details
-❌ Relationships without evidence or mechanics
+Perform a self-check: if any requirement is unmet, expand the relevant section before finalizing.
 
 **Transcript Content to Process:**
 ```
 {transcript_content}
 ```
 
-Your entire output MUST be a single, valid JSON object as described above.
-
-## FINAL REMINDER: NUANCE IS INTELLIGENCE
-
-Your goal is creating business intelligence that is MORE valuable than the raw transcript by:
-1. Preserving critical details that contain real intelligence
-2. Adding relationship mapping with implementation mechanics
-3. Including cultural intelligence for effective execution
-4. Providing evidence-based insights with specific quotes and context
-
-The summary must enable superior business decision-making compared to reading the raw transcript.
+Respond with a single valid JSON object EXACTLY matching the structure above. Do not include commentary, markdown, or trailing text.
 """
 
 def generate_transcript_summary(
@@ -417,7 +377,7 @@ def generate_transcript_summary(
             return None
         
         # Basic validation of the summary structure
-        if not isinstance(summary_data, dict) or "metadata" not in summary_data or "overall_summary" not in summary_data:
+        if not isinstance(summary_data, dict) or "metadata" not in summary_data or "executive_summary" not in summary_data:
             logger.error(f"Parsed JSON does not match expected top-level structure. Parsed: {str(summary_data)[:500]}")
             return None
 
