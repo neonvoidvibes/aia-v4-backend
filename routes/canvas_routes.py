@@ -228,16 +228,6 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         event_profile = get_event_access_profile(agent_name, user.id)
         allowed_events = set(event_profile.get('allowed_events') or {"0000"}) if event_profile else {"0000"}
         event_types_map = dict(event_profile.get('event_types') or {}) if event_profile else {}
-        allowed_group_events = set(event_profile.get('allowed_group_events') or set()) if event_profile else set()
-        allow_cross_group_read = event_profile.get('allow_cross_group_read', False) if event_profile else False
-        tier3_allow_events = set()
-        if event_id == '0000' and allow_cross_group_read and allowed_group_events:
-            tier3_allow_events = set(allowed_group_events) - {'0000'}
-        else:
-            if allowed_events:
-                tier3_allow_events = {ev for ev in allowed_events if ev not in {'0000', event_id}}
-            if allowed_group_events:
-                tier3_allow_events = {ev for ev in tier3_allow_events if ev in allowed_group_events}
         logger.info(f"Canvas: event_profile loaded with {len(allowed_events)} allowed events, {len(event_types_map)} event types")
 
         # Get per-agent custom API key or fallback to default
