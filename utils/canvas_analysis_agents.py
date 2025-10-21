@@ -12,11 +12,11 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Set
 from groq import Groq
 
 from .prompt_builder import prompt_builder
-from .s3_utils import get_s3_client
+from .s3_utils import get_s3_client, get_transcript_summaries, get_transcript_summaries_multi
 from .transcript_utils import get_latest_transcript_file, read_all_transcripts_in_folder
 from .retrieval_handler import RetrievalHandler
 from .api_key_manager import get_api_key
@@ -34,6 +34,141 @@ ANALYSIS_CACHE_TTL_MINUTES = 15
 # S3 storage configuration
 CANVAS_ANALYSIS_BUCKET = os.getenv("S3_BUCKET_NAME", "aiademomagicaudio")
 CANVAS_ANALYSIS_ORG = os.getenv("S3_ORGANIZATION", "river")
+
+
+def _sanitize_memory_mode(value: Optional[str]) -> str:
+    """Normalize saved transcript memory mode values."""
+    if isinstance(value, str):
+        mode = value.strip().lower()
+        if mode in {"none", "some", "all"}:
+            return mode
+    return "none"
+
+
+def get_memorized_transcript_summaries(
+    agent_name: str,
+    event_id: str,
+    saved_transcript_memory_mode: str = "none",
+    individual_memory_toggle_states: Optional[Dict[str, bool]] = None,
+    allowed_events: Optional[set] = None,
+    event_profile: Optional[Dict[str, Any]] = None,
+    event_types_map: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve memorized transcript summaries based on Settings > Memory configuration.
+
+    Returns a list of parsed JSON summary dicts ready for downstream formatting.
+    """
+    mode = _sanitize_memory_mode(saved_transcript_memory_mode)
+    if mode not in {"all", "some"}:
+        return []
+
+    individual_memory_toggle_states = individual_memory_toggle_states or {}
+    allowed_events = allowed_events or set()
+    event_types_map = event_types_map or {}
+    allow_cross_group_read = False
+    allowed_group_events: Set[str] = set()
+
+    if event_profile:
+        allow_cross_group_read = event_profile.get("allow_cross_group_read", False)
+        allowed_group_events = set(event_profile.get("allowed_group_events") or [])
+
+    # Determine tier3 events eligible for cross-group summaries
+    tier3_allow_events: Set[str] = set()
+    if event_id == "0000" and allow_cross_group_read and allowed_group_events:
+        tier3_allow_events = set(allowed_group_events) - {"0000"}
+        if tier3_allow_events:
+            logger.info(
+                "Memorized summaries (all): cross-group enabled with %d events",
+                len(tier3_allow_events),
+            )
+    else:
+        if allowed_events:
+            tier3_allow_events = {ev for ev in allowed_events if ev not in {"0000", event_id}}
+        if allowed_group_events:
+            tier3_allow_events = {ev for ev in tier3_allow_events if ev in allowed_group_events}
+        if event_types_map:
+            tier3_allow_events = {
+                ev
+                for ev in tier3_allow_events
+                if event_types_map.get(ev, "group").lower() in {"group", "breakout"}
+            }
+
+    try:
+        if mode == "all":
+            if tier3_allow_events:
+                summaries = get_transcript_summaries_multi(agent_name, list(tier3_allow_events))
+                logger.info(
+                    "Loaded %d memorized summaries across %d tier3 events for %s",
+                    len(summaries),
+                    len(tier3_allow_events),
+                    agent_name,
+                )
+                return summaries
+            summaries = get_transcript_summaries(agent_name, event_id)
+            logger.info(
+                "Loaded %d memorized summaries for %s/%s (mode=all)",
+                len(summaries),
+                agent_name,
+                event_id,
+            )
+            return summaries
+
+        # mode == "some"
+        all_summaries = get_transcript_summaries(agent_name, event_id)
+        filtered: List[Dict[str, Any]] = []
+        logger.info(
+            "Filtering memorized summaries (some mode). Available=%d, toggles=%d",
+            len(all_summaries),
+            len(individual_memory_toggle_states),
+        )
+        for summary in all_summaries:
+            summary_filename = summary.get("metadata", {}).get("summary_filename")
+            if not summary_filename:
+                continue
+            summary_key = (
+                f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/{summary_filename}"
+            )
+            if individual_memory_toggle_states.get(summary_key):
+                filtered.append(summary)
+        logger.info(
+            "Memorized summaries selected in 'some' mode: %d",
+            len(filtered),
+        )
+        return filtered
+
+    except Exception as err:
+        logger.error(
+            "Error loading memorized summaries for %s/%s: %s",
+            agent_name,
+            event_id,
+            err,
+            exc_info=True,
+        )
+        return []
+
+
+def format_memorized_transcripts_block(summaries: List[Dict[str, Any]]) -> str:
+    """
+    Format memorized transcript summaries as a standardized block for prompts.
+    """
+    if not summaries:
+        return ""
+
+    block_parts = [
+        "=== SAVED TRANSCRIPT SUMMARIES ===",
+        "Note: The following are AI-generated summaries derived from meeting transcripts.",
+        "They are not quotes or statements from participants and should not be attributed to any speaker.\n",
+    ]
+
+    for summary_doc in summaries:
+        summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
+        block_parts.append(f"### Summary: {summary_filename}")
+        block_parts.append(json.dumps(summary_doc, indent=2, ensure_ascii=False))
+        block_parts.append("")  # Blank line between summaries
+
+    block_parts.append("=== END SAVED TRANSCRIPT SUMMARIES ===")
+    return "\n".join(block_parts)
 
 
 def get_analysis_agent_prompt(
@@ -332,6 +467,8 @@ def get_transcript_content_for_analysis(
         transcript_listen_mode: 'none' | 'latest' | 'some' | 'all' (for event's own transcripts)
         groups_read_mode: 'none' | 'latest' | 'all' | 'breakout' (for group events)
         individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode filtering
+        saved_transcript_memory_mode: Memorized transcript mode ('none'|'some'|'all')
+        individual_memory_toggle_states: Dict of summary S3 keys -> bool for "some" memory mode
         allowed_events: Set of event IDs user has access to (from get_event_access_profile)
         event_types_map: Dict mapping event_id -> event_type (from get_event_access_profile)
         event_profile: Full event profile dict (includes event_metadata for visibility_hidden check)
@@ -916,6 +1053,9 @@ def get_all_canvas_source_content(
     transcript_listen_mode: str = 'latest',
     groups_read_mode: str = 'none',
     individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
+    saved_transcript_memory_mode: str = 'none',
+    individual_memory_toggle_states: Optional[Dict[str, bool]] = None,
+    include_memorized_summaries: bool = True,
     allowed_events: Optional[set] = None,
     event_types_map: Optional[Dict[str, str]] = None,
     event_profile: Optional[Dict[str, Any]] = None
@@ -931,6 +1071,9 @@ def get_all_canvas_source_content(
         transcript_listen_mode: 'none' | 'latest' | 'some' | 'all'
         groups_read_mode: 'none' | 'latest' | 'all' | 'breakout'
         individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode
+        saved_transcript_memory_mode: 'none' | 'some' | 'all' for memorized transcripts
+        individual_memory_toggle_states: Dict for memorized transcript "some" mode
+        include_memorized_summaries: Include memorized transcript summaries in output
         allowed_events: Set of event IDs user has access to (from get_event_access_profile)
         event_types_map: Dict mapping event_id -> event_type (from get_event_access_profile)
         event_profile: Full event profile dict (includes event_metadata for visibility_hidden check)
@@ -988,6 +1131,29 @@ def get_all_canvas_source_content(
             combined_docs = "\n\n".join(docs_parts)
             parts.append(f"=== ADDITIONAL DOCUMENTS ===\n{combined_docs}\n=== END ADDITIONAL DOCUMENTS ===")
             logger.info(f"Loaded {len(canvas_docs)} additional documents: {len(combined_docs)} chars")
+
+    # 3. Memorized transcript summaries
+    if include_memorized_summaries:
+        summaries = get_memorized_transcript_summaries(
+            agent_name=agent_name,
+            event_id=event_id,
+            saved_transcript_memory_mode=saved_transcript_memory_mode,
+            individual_memory_toggle_states=individual_memory_toggle_states,
+            allowed_events=allowed_events,
+            event_profile=event_profile,
+            event_types_map=event_types_map,
+        )
+
+        if summaries:
+            summaries_block = format_memorized_transcripts_block(summaries)
+            parts.append(summaries_block)
+            logger.info(
+                "Loaded memorized transcript summaries for %s/%s: %d summaries (%d chars)",
+                agent_name,
+                event_id,
+                len(summaries),
+                len(summaries_block),
+            )
 
     if not parts:
         logger.warning("No source content available (no transcripts, no canvas docs)")
@@ -1222,6 +1388,8 @@ def get_or_generate_analysis_doc(
     transcript_listen_mode: str = 'latest',
     groups_read_mode: str = 'none',
     individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
+    saved_transcript_memory_mode: str = 'none',
+    individual_memory_toggle_states: Optional[Dict[str, bool]] = None,
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
     personal_event_id: Optional[str] = None,
@@ -1304,6 +1472,8 @@ def get_or_generate_analysis_doc(
         transcript_listen_mode=transcript_listen_mode,
         groups_read_mode=groups_read_mode,
         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+        saved_transcript_memory_mode=saved_transcript_memory_mode,
+        individual_memory_toggle_states=individual_memory_toggle_states,
         allowed_events=allowed_events,
         event_types_map=event_types_map,
         event_profile=event_profile

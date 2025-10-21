@@ -368,29 +368,42 @@ def generate_transcript_summary(
         # Clean and parse JSON
         cleaned_llm_output = _clean_json_string(raw_llm_output)
         
+        parsed_successfully = True
         try:
             summary_data = json.loads(cleaned_llm_output)
             logger.info("Successfully parsed JSON.")
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from LLM response: {e}")
-            logger.error(f"Response sample: {raw_llm_output[:1000]}...")
+            parsed_successfully = False
+            logger.warning(f"Failed to parse JSON from LLM response (will use raw fallback): {e}")
+            summary_data = {
+                "metadata": {},
+                "raw_summary_text": raw_llm_output,
+                "cleaned_summary_text": cleaned_llm_output,
+                "parse_error": str(e),
+            }
+
+        # Basic validation of the summary structure. Only enforce executive_summary when parsing succeeded.
+        if not isinstance(summary_data, dict) or "metadata" not in summary_data:
+            logger.error(f"Parsed summary is not a dict with metadata. Parsed: {str(summary_data)[:500]}")
             return None
-        
-        # Basic validation of the summary structure
-        if not isinstance(summary_data, dict) or "metadata" not in summary_data or "executive_summary" not in summary_data:
-            logger.error(f"Parsed JSON does not match expected top-level structure. Parsed: {str(summary_data)[:500]}")
+
+        if parsed_successfully and "executive_summary" not in summary_data:
+            logger.error(f"Parsed JSON missing required 'executive_summary'. Parsed: {str(summary_data)[:500]}")
             return None
 
         # Inject the source_s3_key and other crucial metadata again, overriding if LLM tried to fill them.
         # This ensures system-provided values are authoritative.
-        summary_data["metadata"]["original_filename"] = original_filename
-        summary_data["metadata"]["source_s3_key"] = source_s3_key
-        summary_data["metadata"]["agent_name"] = agent_name
-        summary_data["metadata"]["event_id"] = event_id
-        summary_data["metadata"]["summarization_timestamp_utc"] = current_utc_timestamp
+        metadata = summary_data.setdefault("metadata", {})
+        metadata["original_filename"] = original_filename
+        metadata["source_s3_key"] = source_s3_key
+        metadata["agent_name"] = agent_name
+        metadata["event_id"] = event_id
+        metadata["summarization_timestamp_utc"] = current_utc_timestamp
+        metadata["parsing_status"] = "parsed" if parsed_successfully else "raw_fallback"
 
 
-        logger.info(f"Successfully generated and parsed summary for '{original_filename}'.")
+        status_msg = "parsed" if parsed_successfully else "stored raw fallback"
+        logger.info(f"Successfully generated summary for '{original_filename}' ({status_msg}).")
         return summary_data
 
     except APIError as e:

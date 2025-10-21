@@ -14,7 +14,12 @@ from anthropic import Anthropic, AnthropicError
 from tenacity import RetryError
 from utils.s3_utils import get_cached_s3_file, find_file_any_extension, get_objective_function
 from utils.api_key_manager import get_api_key
-from utils.canvas_analysis_agents import get_or_generate_analysis_doc, get_analysis_status
+from utils.canvas_analysis_agents import (
+    get_analysis_status,
+    get_all_canvas_source_content,
+    get_memorized_transcript_summaries,
+    format_memorized_transcripts_block,
+)
 from utils.canvas_concurrent_analysis import run_concurrent_mlp_analysis
 
 logger = logging.getLogger(__name__)
@@ -200,6 +205,14 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         force_refresh_analysis = data.get('forceRefreshAnalysis', False)  # Manual refresh button
         clear_previous_analysis = data.get('clearPrevious', False)  # Clear previous on new context
         individual_raw_transcript_toggle_states = data.get('individualRawTranscriptToggleStates', {})  # For "some" mode
+        saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'none')
+        if isinstance(saved_transcript_memory_mode, str):
+            saved_transcript_memory_mode = saved_transcript_memory_mode.strip().lower()
+        else:
+            saved_transcript_memory_mode = 'none'
+        if saved_transcript_memory_mode not in {'none', 'some', 'all'}:
+            saved_transcript_memory_mode = 'none'
+        individual_memory_toggle_states = data.get('individualMemoryToggleStates', {}) or {}
         event_id = '0000'  # Canvas always uses event 0000
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
         temperature = 0.7
@@ -215,6 +228,16 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
         event_profile = get_event_access_profile(agent_name, user.id)
         allowed_events = set(event_profile.get('allowed_events') or {"0000"}) if event_profile else {"0000"}
         event_types_map = dict(event_profile.get('event_types') or {}) if event_profile else {}
+        allowed_group_events = set(event_profile.get('allowed_group_events') or set()) if event_profile else set()
+        allow_cross_group_read = event_profile.get('allow_cross_group_read', False) if event_profile else False
+        tier3_allow_events = set()
+        if event_id == '0000' and allow_cross_group_read and allowed_group_events:
+            tier3_allow_events = set(allowed_group_events) - {'0000'}
+        else:
+            if allowed_events:
+                tier3_allow_events = {ev for ev in allowed_events if ev not in {'0000', event_id}}
+            if allowed_group_events:
+                tier3_allow_events = {ev for ev in tier3_allow_events if ev in allowed_group_events}
         logger.info(f"Canvas: event_profile loaded with {len(allowed_events)} allowed events, {len(event_types_map)} event types")
 
         # Get per-agent custom API key or fallback to default
@@ -250,6 +273,8 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         transcript_listen_mode=transcript_listen_mode,
                         groups_read_mode=groups_read_mode,
                         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+                        saved_transcript_memory_mode=saved_transcript_memory_mode,
+                        individual_memory_toggle_states=individual_memory_toggle_states,
                         event_type='shared',  # Canvas typically uses shared context
                         personal_layer=None,  # Canvas doesn't use personal layers for now
                         personal_event_id=None,
@@ -277,17 +302,21 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         if mode not in analyses:
                             analyses[mode] = {'current': None, 'previous': None}
 
+                memorized_summaries = []
+                memorized_context_block = ""
+
                 # Get raw transcript content based on Settings toggles
                 raw_transcript_content = None
                 try:
-                    from utils.canvas_analysis_agents import get_all_canvas_source_content
-
                     raw_transcript_content = get_all_canvas_source_content(
                         agent_name=agent_name,
                         event_id=event_id,
                         transcript_listen_mode=transcript_listen_mode,
                         groups_read_mode=groups_read_mode,
                         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+                        saved_transcript_memory_mode='none',  # summaries handled separately for prompt
+                        individual_memory_toggle_states=individual_memory_toggle_states,
+                        include_memorized_summaries=False,
                         allowed_events=allowed_events,
                         event_types_map=event_types_map,
                         event_profile=event_profile
@@ -300,6 +329,32 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                 except Exception as source_err:
                     logger.error(f"Error loading source content for canvas: {source_err}", exc_info=True)
                     raw_transcript_content = None
+
+                # Memorized transcript summaries (saved memories)
+                try:
+                    memorized_summaries = get_memorized_transcript_summaries(
+                        agent_name=agent_name,
+                        event_id=event_id,
+                        saved_transcript_memory_mode=saved_transcript_memory_mode,
+                        individual_memory_toggle_states=individual_memory_toggle_states,
+                        allowed_events=allowed_events,
+                        event_profile=event_profile,
+                        event_types_map=event_types_map,
+                    )
+
+                    if memorized_summaries:
+                        memorized_context_block = format_memorized_transcripts_block(memorized_summaries)
+                        logger.info(
+                            "Canvas: Loaded %d memorized transcript summaries (%d chars)",
+                            len(memorized_summaries),
+                            len(memorized_context_block),
+                        )
+                    else:
+                        logger.info("Canvas: No memorized transcript summaries added (mode=%s)", saved_transcript_memory_mode)
+                except Exception as memory_err:
+                    logger.error(f"Error loading memorized transcript summaries: {memory_err}", exc_info=True)
+                    memorized_summaries = []
+                    memorized_context_block = ""
 
                 # RAG retrieval for canvas agent
                 rag_context = None
@@ -407,7 +462,11 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                     system_prompt += raw_transcript_content
                     system_prompt += "\n=== END RAW SOURCES ==="
 
-                # 6. Previous analyses (branches - historical context for all modes)
+                # 6. Memorized transcript summaries (optional memories)
+                if memorized_context_block:
+                    system_prompt += f"\n\n{memorized_context_block}"
+
+                # 7. Previous analyses (branches - historical context for all modes)
                 has_previous_analyses = any(analyses[mode]['previous'] for mode in ['mirror', 'lens', 'portal'])
                 if has_previous_analyses:
                     system_prompt += f"\n\n=== PREVIOUS ANALYSES (HISTORICAL CONTEXT) ==="
@@ -417,7 +476,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                             system_prompt += f"\n\n--- Previous {mode_label} Analysis ---\n{analyses[mode]['previous']}"
                     system_prompt += f"\n\n=== END PREVIOUS ANALYSES ==="
 
-                # 7. Current analyses (branches - fresh content for all modes)
+                # 8. Current analyses (branches - fresh content for all modes)
                 has_current_analyses = any(analyses[mode]['current'] for mode in ['mirror', 'lens', 'portal'])
                 if has_current_analyses:
                     system_prompt += f"\n\n=== CURRENT ANALYSES (COMPREHENSIVE CONTEXT) ==="
@@ -435,7 +494,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                     system_prompt += f"=== END CURRENT ANALYSES ==="
 
-                # 8. Mode emphasis (guidance based on selected mode)
+                # 9. Mode emphasis (guidance based on selected mode)
                 if depth_mode == 'mirror':
                     mode_emphasis_text = "\n=== MODE EMPHASIS: MIRROR ===\nThe user has selected MIRROR mode. When relevant to their question:\n- Prioritize insights from the Mirror analysis (explicit/peripheral information)\n- Surface edge cases and minority viewpoints\n- Focus on what was actually stated but sits at the margins\nHowever, you may draw on Lens or Portal analyses if they better serve the user's question.\n=== END MODE EMPHASIS ==="
                 elif depth_mode == 'lens':
@@ -447,7 +506,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
 
                 system_prompt += f"\n\n{mode_emphasis_text}"
 
-                # 9. CRITICAL: Brevity booster (reinforce after heavy context)
+                # 10. CRITICAL: Brevity booster (reinforce after heavy context)
                 brevity_booster = """
 
 === CRITICAL REMINDER ===
@@ -460,7 +519,7 @@ This is a voice interface - every word must count.
 === END REMINDER ==="""
                 system_prompt += brevity_booster
 
-                # 10. Current time (leaves - immediate moment)
+                # 11. Current time (leaves - immediate moment)
                 system_prompt += time_section
 
                 # Build prompt type description for logging (matches tree order)
@@ -479,6 +538,9 @@ This is a voice interface - every word must count.
                 # Track raw sources if present
                 if raw_transcript_content:
                     prompt_components.append(f"raw_sources({len(raw_transcript_content)})")
+
+                if memorized_context_block:
+                    prompt_components.append(f"memorized({len(memorized_summaries)})")
 
                 # Count loaded analyses (all three modes)
                 loaded_current = [mode for mode in ['mirror', 'lens', 'portal'] if analyses[mode]['current']]
@@ -585,6 +647,14 @@ This is a voice interface - every word must count.
             agent_name = data.get('agent')
             clear_previous = data.get('clearPrevious', False)  # Clear previous on new context
             individual_raw_transcript_toggle_states = data.get('individualRawTranscriptToggleStates', {})  # For "some" mode
+            saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'none')
+            if isinstance(saved_transcript_memory_mode, str):
+                saved_transcript_memory_mode = saved_transcript_memory_mode.strip().lower()
+            else:
+                saved_transcript_memory_mode = 'none'
+            if saved_transcript_memory_mode not in {'none', 'some', 'all'}:
+                saved_transcript_memory_mode = 'none'
+            individual_memory_toggle_states = data.get('individualMemoryToggleStates', {}) or {}
             event_id = '0000'
 
             if not agent_name:
@@ -613,6 +683,8 @@ This is a voice interface - every word must count.
                     transcript_listen_mode=transcript_listen_mode,
                     groups_read_mode=groups_read_mode,
                     individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
+                    saved_transcript_memory_mode=saved_transcript_memory_mode,
+                    individual_memory_toggle_states=individual_memory_toggle_states,
                     event_type='shared',
                     personal_layer=None,
                     personal_event_id=None,
