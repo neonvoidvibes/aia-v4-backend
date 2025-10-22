@@ -43,7 +43,13 @@ from simple_websocket.errors import ConnectionClosed
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError, AuthRetryableError
 from gotrue.types import User as SupabaseUser
-from utils.supabase_client import get_supabase_client
+from utils.supabase_client import (
+    get_supabase_client,
+    execute_supabase_operation,
+    SupabaseUnavailableError,
+    mark_supabase_client_stale,
+    is_supabase_disconnect_error,
+)
 
 from langchain_core.documents import Document
 from utils.retrieval_handler import RetrievalHandler
@@ -102,6 +108,14 @@ TRANSCRIPT_PREFIX = os.environ.get('TRANSCRIPT_PREFIX', 'organizations/river/age
 SESSION_ADAPTER = SessionAdapter(dg_client=DG_CLIENT, whisper_client=WHISPER_CLIENT,
                                  s3_client=S3_CLIENT, bucket=TRANSCRIPT_BUCKET,
                                  base_prefix=TRANSCRIPT_PREFIX)
+
+
+def _should_bubble_supabase_disconnect(exc: Exception, context: str) -> bool:
+    """Mark the Supabase client stale and signal to bubble the exception when the link drops."""
+    if is_supabase_disconnect_error(exc):
+        mark_supabase_client_stale(f"{context}: {exc}")
+        return True
+    return False
 
 
 def build_batch_transcriber(
@@ -1399,11 +1413,6 @@ def verify_user(token: Optional[str]) -> Optional[SupabaseUser]:
         return None
 
 def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) -> Tuple[Optional[SupabaseUser], Optional[Response]]:
-    client = get_supabase_client()
-    if not client:
-        logger.error("Auth check failed: Supabase client not available.")
-        return None, jsonify({"error": "Auth service unavailable"}, 503)
-
     user = verify_user(token)
     if not user: 
         return None, jsonify({"error": "Unauthorized: Invalid or missing token"}, 401)
@@ -1413,7 +1422,10 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         return user, None
 
     try:
-        agent_res = client.table("agents").select("id").eq("name", agent_name).limit(1).execute()
+        agent_res = execute_supabase_operation(
+            lambda client: client.table("agents").select("id").eq("name", agent_name).limit(1).execute(),
+            context="auth.fetch_agent_id",
+        )
         if hasattr(agent_res, 'error') and agent_res.error:
             logger.error(f"Database error finding agent_id for name '{agent_name}': {agent_res.error}")
             return None, jsonify({"error": "Database error checking agent"}), 500
@@ -1424,12 +1436,15 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         agent_id = agent_res.data[0]['id']
         logger.debug(f"Found agent_id '{agent_id}' for name '{agent_name}'.")
 
-        access_res = client.table("user_agent_access") \
-            .select("agent_id") \
-            .eq("user_id", user.id) \
-            .eq("agent_id", agent_id) \
-            .limit(1) \
-            .execute()
+        access_res = execute_supabase_operation(
+            lambda client: client.table("user_agent_access")
+            .select("agent_id")
+            .eq("user_id", user.id)
+            .eq("agent_id", agent_id)
+            .limit(1)
+            .execute(),
+            context="auth.check_user_agent_access",
+        )
 
         logger.debug(f"DB Check for user {user.id} accessing agent {agent_name} (ID: {agent_id}): {access_res.data}")
 
@@ -1444,11 +1459,12 @@ def verify_user_agent_access(token: Optional[str], agent_name: Optional[str]) ->
         logger.info(f"Access Granted: User {user.id} authorized for agent {agent_name} (ID: {agent_id}).")
         return user, None 
 
-    except (httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
-        # Re-raise exceptions that the retry decorator should handle
-        logger.warning(f"Retryable network error during agent access check: {e}")
-        raise e
+    except SupabaseUnavailableError as e:
+        logger.error(f"Auth check failed: Supabase unavailable during agent lookup: {e}")
+        return None, jsonify({"error": "Auth service unavailable"}, 503)
     except Exception as e:
+        if _should_bubble_supabase_disconnect(e, "auth.verify_user_agent_access"):
+            raise
         logger.error(f"Unexpected error during agent access check for user {user.id} / agent {agent_name}: {e}", exc_info=True)
         return None, jsonify({"error": "Internal server error during authorization"}, 500)
 
@@ -1456,29 +1472,36 @@ import httpx
 
 def get_user_role(user_id: str) -> Optional[str]:
     """Retrieves a user's role from the database."""
-    client = get_supabase_client()
-    if not client:
-        logger.error(f"Cannot get role for user {user_id}: Supabase client not available.")
-        return None
     try:
-        # tolerate zero rows; do not throw
-        res = client.table("user_roles").select("role").eq("user_id", user_id).maybe_single().execute()
+        res = execute_supabase_operation(
+            lambda client: client.table("user_roles")
+            .select("role")
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute(),
+            context="auth.get_user_role",
+        )
         role = getattr(res, "data", None) or {}
         return role.get("role") or "user"
+    except SupabaseUnavailableError as e:
+        logger.error(f"Cannot get role for user {user_id}: Supabase unavailable ({e}).")
+        return None
     except Exception as e:
+        if _should_bubble_supabase_disconnect(e, "auth.get_user_role"):
+            raise
         logger.error(f"Unexpected error fetching role for user {user_id}: {e}", exc_info=True)
         return "user"
 
 
 def _fetch_agent_event_rows(agent_name: str) -> List[Dict[str, Any]]:
-    client = get_supabase_client()
-    if not client:
-        logger.warning("Agent events fetch skipped: Supabase client unavailable.")
-        return []
     try:
-        res = client.table("agent_events").select(
-            "event_id,type,visibility_hidden,owner_user_id,workspace_id,created_at"
-        ).eq("agent_name", agent_name).execute()
+        res = execute_supabase_operation(
+            lambda client: client.table("agent_events")
+            .select("event_id,type,visibility_hidden,owner_user_id,workspace_id,created_at")
+            .eq("agent_name", agent_name)
+            .execute(),
+            context="auth.fetch_agent_events",
+        )
         if getattr(res, "error", None):
             logger.error(
                 "Error querying agent_events for agent '%s': %s",
@@ -1487,7 +1510,12 @@ def _fetch_agent_event_rows(agent_name: str) -> List[Dict[str, Any]]:
             )
             return []
         return res.data or []
+    except SupabaseUnavailableError:
+        logger.warning("Agent events fetch skipped: Supabase client unavailable.")
+        return []
     except Exception as exc:
+        if _should_bubble_supabase_disconnect(exc, "auth.fetch_agent_events"):
+            raise
         logger.warning(
             "Unexpected error fetching agent_events for agent '%s': %s",
             agent_name,
@@ -1497,11 +1525,15 @@ def _fetch_agent_event_rows(agent_name: str) -> List[Dict[str, Any]]:
 
 
 def _fetch_user_event_memberships(agent_name: str, user_id: str) -> Set[str]:
-    client = get_supabase_client()
-    if not client:
-        return set()
     try:
-        res = client.table("event_members").select("event_id").eq("agent_name", agent_name).eq("user_id", user_id).execute()
+        res = execute_supabase_operation(
+            lambda client: client.table("event_members")
+            .select("event_id")
+            .eq("agent_name", agent_name)
+            .eq("user_id", user_id)
+            .execute(),
+            context="auth.fetch_event_members",
+        )
         if getattr(res, "error", None):
             logger.error(
                 "Error querying event_members for agent '%s' user '%s': %s",
@@ -1517,7 +1549,11 @@ def _fetch_user_event_memberships(agent_name: str, user_id: str) -> Set[str]:
             if raw_event_id:
                 memberships.add(raw_event_id.strip().lower())
         return memberships
+    except SupabaseUnavailableError:
+        return set()
     except Exception as exc:
+        if _should_bubble_supabase_disconnect(exc, "auth.fetch_event_members"):
+            raise
         logger.warning(
             "Unexpected error fetching event_members for agent '%s' user '%s': %s",
             agent_name,
@@ -6516,9 +6552,22 @@ def save_chat_history(user: SupabaseUser):
         logger.warning(f"BLOCKED: Suspicious agent name in chat save: '{agent_name}' by user {user.id}, session: {client_session_id}")
         return jsonify({'success': True, 'chatId': None, 'message': 'Invalid agent name pattern'}), 200
 
-    client = get_supabase_client()
-    if not client: return jsonify({'error': 'Database not available'}), 503
-    agent_result = client.table('agents').select('id').eq('name', agent_name).single().execute()
+    def run_supabase(operation, context):
+        return execute_supabase_operation(operation, context=context)
+
+    try:
+        agent_result = run_supabase(
+            lambda client: client.table('agents').select('id').eq('name', agent_name).maybe_single().execute(),
+            context="chat_history.save.lookup_agent",
+        )
+    except SupabaseUnavailableError:
+        return jsonify({'error': 'Database not available'}), 503
+    except Exception as exc:
+        if _should_bubble_supabase_disconnect(exc, "chat_history.save.lookup_agent"):
+            raise
+        logger.error(f"Error saving chat history during agent lookup: {exc}", exc_info=True)
+        return jsonify({'error': 'Failed to save chat history'}), 500
+
     if not agent_result.data:
         return jsonify({'error': 'Agent not found'}), 404
     agent_id = agent_result.data['id']
@@ -6527,15 +6576,21 @@ def save_chat_history(user: SupabaseUser):
     existing_session_chat = None
     if client_session_id and not chat_id:
         try:
-            existing_session_chat = client.table('chat_history') \
-                .select('id, title') \
-                .eq('user_id', user.id) \
-                .eq('agent_id', agent_id) \
-                .eq('client_session_id', client_session_id) \
-                .single().execute()
+            existing_session_chat = run_supabase(
+                lambda client: client.table('chat_history')
+                .select('id, title')
+                .eq('user_id', user.id)
+                .eq('agent_id', agent_id)
+                .eq('client_session_id', client_session_id)
+                .maybe_single()
+                .execute(),
+                context="chat_history.save.lookup_session_chat",
+            )
             if existing_session_chat and existing_session_chat.data:
                 logger.info(f"Found existing chat for session {client_session_id}: {existing_session_chat.data['id']}")
-        except Exception:
+        except Exception as exc:
+            if _should_bubble_supabase_disconnect(exc, "chat_history.save.lookup_session_chat"):
+                raise
             existing_session_chat = None
 
     if not title and not chat_id and messages:
@@ -6593,10 +6648,20 @@ def save_chat_history(user: SupabaseUser):
             # Defensive: Fetch existing title to avoid overwriting good titles with fallbacks
             existing_title = None
             try:
-                existing_res = client.table('chat_history').select('messages, title').eq('id', chat_id).eq('user_id', user.id).single().execute()
+                existing_res = run_supabase(
+                    lambda client: client.table('chat_history')
+                    .select('messages, title')
+                    .eq('id', chat_id)
+                    .eq('user_id', user.id)
+                    .maybe_single()
+                    .execute(),
+                    context="chat_history.save.fetch_existing_for_update",
+                )
                 existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
                 existing_title = existing_res.data.get('title') if existing_res and existing_res.data else None
-            except Exception:
+            except Exception as exc:
+                if _should_bubble_supabase_disconnect(exc, "chat_history.save.fetch_existing_for_update"):
+                    raise
                 existing_msgs = []
                 existing_title = None
 
@@ -6624,22 +6689,36 @@ def save_chat_history(user: SupabaseUser):
             # Attempt to include event_id if column exists
             try:
                 update_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
-                client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
-            except Exception:
+                run_supabase(
+                    lambda client: client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute(),
+                    context="chat_history.save.update_existing_chat",
+                )
+            except Exception as exc:
+                if _should_bubble_supabase_disconnect(exc, "chat_history.save.update_existing_chat"):
+                    raise
                 # retry without event_id if migration not applied
                 update_payload.pop('event_id', None)
-                result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+                result = run_supabase(
+                    lambda client: client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute(),
+                    context="chat_history.save.update_existing_chat.fallback",
+                )
         else:
             # Idempotent creation by client_session_id, if provided
             if client_session_id:
                 try:
-                    existing = client.table('chat_history') \
-                        .select('id, title') \
-                        .eq('user_id', user.id) \
-                        .eq('agent_id', agent_id) \
-                        .eq('client_session_id', client_session_id) \
-                        .single().execute()
-                except Exception:
+                    existing = run_supabase(
+                        lambda client: client.table('chat_history')
+                        .select('id, title')
+                        .eq('user_id', user.id)
+                        .eq('agent_id', agent_id)
+                        .eq('client_session_id', client_session_id)
+                        .maybe_single()
+                        .execute(),
+                        context="chat_history.save.lookup_existing_by_session",
+                    )
+                except Exception as exc:
+                    if _should_bubble_supabase_disconnect(exc, "chat_history.save.lookup_existing_by_session"):
+                        raise
                     existing = None
                 if existing and existing.data:
                     chat_id = existing.data['id']
@@ -6652,13 +6731,26 @@ def save_chat_history(user: SupabaseUser):
                     if last_message_id:
                         update_payload['last_message_id_at_save'] = last_message_id
                     try:
-                        existing_res = client.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
+                        existing_res = run_supabase(
+                            lambda client: client.table('chat_history')
+                            .select('messages')
+                            .eq('id', chat_id)
+                            .eq('user_id', user.id)
+                            .maybe_single()
+                            .execute(),
+                            context="chat_history.save.merge_existing_session_messages",
+                        )
                         existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
                         merged_msgs = _merge_messages(existing_msgs, messages)
                         update_payload['messages'] = merged_msgs
-                    except Exception:
+                    except Exception as exc:
+                        if _should_bubble_supabase_disconnect(exc, "chat_history.save.merge_existing_session_messages"):
+                            raise
                         pass
-                    client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+                    run_supabase(
+                        lambda client: client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute(),
+                        context="chat_history.save.update_existing_session_chat",
+                    )
                     return jsonify({'success': True, 'chatId': chat_id, 'title': existing.data.get('title', title)})
 
             # Before creating a new chat, check for recent duplicates to prevent race condition artifacts
@@ -6666,7 +6758,17 @@ def save_chat_history(user: SupabaseUser):
             from datetime import datetime, timedelta
             cutoff_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
             
-            recent_chats = client.table('chat_history').select('id, title, messages, created_at').eq('user_id', user.id).eq('agent_id', agent_id).eq('title', title).gte('created_at', cutoff_time).order('created_at', desc=True).execute()
+            recent_chats = run_supabase(
+                lambda client: client.table('chat_history')
+                .select('id, title, messages, created_at')
+                .eq('user_id', user.id)
+                .eq('agent_id', agent_id)
+                .eq('title', title)
+                .gte('created_at', cutoff_time)
+                .order('created_at', desc=True)
+                .execute(),
+                context="chat_history.save.recent_chats_lookup",
+            )
             
             # If we find a recent chat with the same title, check if it's likely a duplicate
             if recent_chats.data:
@@ -6688,14 +6790,27 @@ def save_chat_history(user: SupabaseUser):
                             if last_message_id:
                                 update_payload['last_message_id_at_save'] = last_message_id
                             try:
-                                existing_res = client.table('chat_history').select('messages').eq('id', chat_id).eq('user_id', user.id).single().execute()
+                                existing_res = run_supabase(
+                                    lambda client: client.table('chat_history')
+                                    .select('messages')
+                                    .eq('id', chat_id)
+                                    .eq('user_id', user.id)
+                                    .maybe_single()
+                                    .execute(),
+                                    context="chat_history.save.merge_recent_duplicate_messages",
+                                )
                                 existing_msgs = existing_res.data.get('messages') if existing_res and existing_res.data else []
                                 merged_msgs = _merge_messages(existing_msgs, messages)
                                 update_payload['messages'] = merged_msgs
-                            except Exception:
+                            except Exception as exc:
+                                if _should_bubble_supabase_disconnect(exc, "chat_history.save.merge_recent_duplicate_messages"):
+                                    raise
                                 pass
                             
-                            result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+                            result = run_supabase(
+                                lambda client: client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute(),
+                                context="chat_history.save.update_recent_duplicate",
+                            )
                             break
                         
                         # Fallback: Check by content if IDs don't match
@@ -6712,7 +6827,10 @@ def save_chat_history(user: SupabaseUser):
                             if last_message_id:
                                 update_payload['last_message_id_at_save'] = last_message_id
                             
-                            result = client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute()
+                            result = run_supabase(
+                                lambda client: client.table('chat_history').update(update_payload).eq('id', chat_id).eq('user_id', user.id).execute(),
+                                context="chat_history.save.update_recent_duplicate",
+                            )
                             break
                 else:
                     # No duplicate found, proceed with insert
@@ -6731,10 +6849,18 @@ def save_chat_history(user: SupabaseUser):
                     # Try with event_id; on failure, retry without
                     try:
                         insert_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
-                        result = client.table('chat_history').insert(insert_payload).execute()
-                    except Exception:
+                        result = run_supabase(
+                            lambda client: client.table('chat_history').insert(insert_payload).execute(),
+                            context="chat_history.save.insert_with_event",
+                        )
+                    except Exception as exc:
+                        if _should_bubble_supabase_disconnect(exc, "chat_history.save.insert_with_event"):
+                            raise
                         insert_payload.pop('event_id', None)
-                        result = client.table('chat_history').insert(insert_payload).execute()
+                        result = run_supabase(
+                            lambda client: client.table('chat_history').insert(insert_payload).execute(),
+                            context="chat_history.save.insert_without_event",
+                        )
                     chat_id = result.data[0]['id'] if result.data else None
                     title = result.data[0]['title'] if result.data else title
             else:
@@ -6752,15 +6878,27 @@ def save_chat_history(user: SupabaseUser):
                     insert_payload['last_message_id_at_save'] = last_message_id
                 try:
                     insert_payload['event_id'] = request.args.get('event') or g.json_data.get('event') or '0000'
-                    result = client.table('chat_history').insert(insert_payload).execute()
-                except Exception:
+                    result = run_supabase(
+                        lambda client: client.table('chat_history').insert(insert_payload).execute(),
+                        context="chat_history.save.insert_with_event",
+                    )
+                except Exception as exc:
+                    if _should_bubble_supabase_disconnect(exc, "chat_history.save.insert_with_event"):
+                        raise
                     insert_payload.pop('event_id', None)
-                    result = client.table('chat_history').insert(insert_payload).execute()
+                    result = run_supabase(
+                        lambda client: client.table('chat_history').insert(insert_payload).execute(),
+                        context="chat_history.save.insert_without_event",
+                    )
                 chat_id = result.data[0]['id'] if result.data else None
                 title = result.data[0]['title'] if result.data else title
         
         return jsonify({'success': True, 'chatId': chat_id, 'title': title})
+    except SupabaseUnavailableError:
+        return jsonify({'error': 'Database not available'}), 503
     except Exception as e:
+        if _should_bubble_supabase_disconnect(e, "chat_history.save"):
+            raise
         logger.error(f"Error saving chat history: {e}", exc_info=True)
         return jsonify({'error': 'Failed to save chat history'}), 500
 
@@ -6770,63 +6908,65 @@ def save_chat_history(user: SupabaseUser):
 def list_chat_history(user: SupabaseUser):
     agent_name = request.args.get('agentName')
     event_id = request.args.get('event')  # optional filter
-    client = get_supabase_client()
-    if not agent_name or not client:
-        return jsonify({'error': 'agentName parameter is required or DB is unavailable'}), 400
+    if not agent_name:
+        return jsonify({'error': 'agentName parameter is required'}), 400
 
     try:
-        # Robust agent lookup with small retry to handle transient HTTP/2 disconnects
-        agent_result = None
-        last_err = None
-        for i in range(3):
-            try:
-                agent_result = client.table('agents').select('id').eq('name', agent_name).single().execute()
-                break
-            except (httpx.RequestError, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
-                last_err = e
-                time.sleep(min(1.5, 0.2 * (2 ** i)))
-        if agent_result is None:
-            raise last_err or Exception('Unknown error fetching agent id')
+        agent_result = execute_supabase_operation(
+            lambda client: client.table('agents').select('id').eq('name', agent_name).maybe_single().execute(),
+            context="chat_history.list.lookup_agent",
+        )
         if not agent_result.data:
             return jsonify([])
         agent_id = agent_result.data['id']
 
-        try:
-            # Try selecting with event_id (new schema)
-            base_query = client.table('chat_history') \
-                .select('id, title, last_message_at, agent_id, messages, event_id') \
-                .eq('user_id', user.id) \
-                .eq('agent_id', agent_id)
-            if event_id:
-                base_query = base_query.eq('event_id', event_id)
-            history_result = base_query.order('last_message_at', desc=True).limit(100).execute()
-
-            # If no rows and event filter was applied, retry without the event filter (legacy rows)
-            if event_id and (not history_result.data or len(history_result.data) == 0):
-                history_result = client.table('chat_history') \
-                    .select('id, title, last_message_at, agent_id, messages') \
+        def _build_history_query(include_event_column: bool, apply_event_filter: bool):
+            def _runner(client):
+                select_fields = 'id, title, last_message_at, agent_id, messages'
+                if include_event_column:
+                    select_fields += ', event_id'
+                query = client.table('chat_history').select(select_fields) \
                     .eq('user_id', user.id) \
-                    .eq('agent_id', agent_id) \
-                    .order('last_message_at', desc=True).limit(100).execute()
-                logger.info(f"Chat history fallback (no event filter) returned {len(history_result.data or [])} rows.")
+                    .eq('agent_id', agent_id)
+                if event_id and apply_event_filter:
+                    query = query.eq('event_id', event_id)
+                return query.order('last_message_at', desc=True).limit(100).execute()
+            return _runner
+
+        try:
+            history_result = execute_supabase_operation(
+                _build_history_query(include_event_column=True, apply_event_filter=True),
+                context="chat_history.list.primary_query",
+            )
+        except SupabaseUnavailableError:
+            raise
         except Exception as e:
-            # Schema likely missing event_id; select without it
+            if _should_bubble_supabase_disconnect(e, "chat_history.list.primary_query"):
+                raise
             logger.info(f"Chat history: event_id column not available or query failed ({e}); retrying without event column.")
-            history_result = client.table('chat_history') \
-                .select('id, title, last_message_at, agent_id, messages') \
-                .eq('user_id', user.id) \
-                .eq('agent_id', agent_id) \
-                .order('last_message_at', desc=True).limit(100).execute()
+            history_result = execute_supabase_operation(
+                _build_history_query(include_event_column=False, apply_event_filter=bool(event_id)),
+                context="chat_history.list.schema_fallback",
+            )
+
+        if event_id and (not history_result.data or len(history_result.data) == 0):
+            history_result = execute_supabase_operation(
+                _build_history_query(include_event_column=True, apply_event_filter=False),
+                context="chat_history.list.filter_fallback",
+            )
+            logger.info(f"Chat history fallback (no event filter) returned {len(history_result.data or [])} rows.")
 
         if not history_result.data:
             return jsonify([])
 
         chat_ids = [chat['id'] for chat in history_result.data]
-        
-        memory_logs_result = client.table('agent_memory_logs') \
-            .select('source_identifier') \
-            .eq('agent_name', agent_name) \
-            .execute()
+        memory_logs_result = execute_supabase_operation(
+            lambda client: client.table('agent_memory_logs')
+            .select('source_identifier')
+            .eq('agent_name', agent_name)
+            .execute(),
+            context="chat_history.list.memory_lookup",
+        )
 
         saved_conversation_ids = set()
         saved_message_ids = set()
@@ -6872,7 +7012,11 @@ def list_chat_history(user: SupabaseUser):
             })
 
         return jsonify(formatted_history)
+    except SupabaseUnavailableError:
+        return jsonify({'error': 'Database not available'}), 503
     except Exception as e:
+        if _should_bubble_supabase_disconnect(e, "chat_history.list"):
+            raise
         logger.error(f"Error listing chat history for agent '{agent_name}': {e}", exc_info=True)
         return jsonify({'error': 'Failed to list chat history'}), 500
 
@@ -6881,12 +7025,19 @@ def list_chat_history(user: SupabaseUser):
 @retry_strategy_supabase
 def get_chat_history(user: SupabaseUser):
     chat_id = request.args.get('chatId')
-    client = get_supabase_client()
-    if not chat_id or not client:
-        return jsonify({'error': 'Chat ID is required or DB is unavailable'}), 400
+    if not chat_id:
+        return jsonify({'error': 'Chat ID is required'}), 400
 
     try:
-        chat_result = client.table('chat_history').select('*, agents(name)').eq('id', chat_id).eq('user_id', user.id).single().execute()
+        chat_result = execute_supabase_operation(
+            lambda client: client.table('chat_history')
+            .select('*, agents(name)')
+            .eq('id', chat_id)
+            .eq('user_id', user.id)
+            .maybe_single()
+            .execute(),
+            context="chat_history.get.fetch_chat",
+        )
         
         if not chat_result.data:
             return jsonify({'error': 'Chat not found or access denied'}), 404
@@ -6903,12 +7054,16 @@ def get_chat_history(user: SupabaseUser):
         conversation_memory_id = None
 
         # Check for full conversation save first
-        convo_memory_log_res = client.table('agent_memory_logs') \
-            .select('id, created_at') \
-            .eq('agent_name', agent_name) \
-            .eq('source_identifier', chat_id) \
-            .order('created_at', desc=True) \
-            .limit(1).execute()
+        convo_memory_log_res = execute_supabase_operation(
+            lambda client: client.table('agent_memory_logs')
+            .select('id, created_at')
+            .eq('agent_name', agent_name)
+            .eq('source_identifier', chat_id)
+            .order('created_at', desc=True)
+            .limit(1)
+            .execute(),
+            context="chat_history.get.convo_memory_lookup",
+        )
 
         if convo_memory_log_res.data:
             is_conversation_saved = True
@@ -6922,11 +7077,14 @@ def get_chat_history(user: SupabaseUser):
             like_patterns = [f"message_{msg_id}_%" for msg_id in message_ids_in_chat]
             
             # Use 'or' filter to match any of the patterns
-            message_memory_logs_res = client.table('agent_memory_logs') \
-                .select('id, source_identifier, created_at') \
-                .eq('agent_name', agent_name) \
-                .or_(','.join([f'source_identifier.like.{p}' for p in like_patterns])) \
-                .execute()
+            message_memory_logs_res = execute_supabase_operation(
+                lambda client: client.table('agent_memory_logs')
+                .select('id, source_identifier, created_at')
+                .eq('agent_name', agent_name)
+                .or_(','.join([f'source_identifier.like.{p}' for p in like_patterns]))
+                .execute(),
+                context="chat_history.get.message_memory_lookup",
+            )
 
             if message_memory_logs_res.data:
                 for log in message_memory_logs_res.data:
@@ -6950,7 +7108,11 @@ def get_chat_history(user: SupabaseUser):
 
         return jsonify(chat_data), 200
 
+    except SupabaseUnavailableError:
+        return jsonify({'error': 'Database not available'}), 503
     except Exception as e:
+        if _should_bubble_supabase_disconnect(e, "chat_history.get"):
+            raise
         logger.error(f"Error getting chat history for ID '{chat_id}': {e}", exc_info=True)
         return jsonify({'error': 'Failed to get chat history'}), 500
 
