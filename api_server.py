@@ -5196,6 +5196,15 @@ def handle_chat(user: SupabaseUser):
     event_id_raw = data.get('event', '0000')
     event_id = event_id_raw.strip().lower() if isinstance(event_id_raw, str) else '0000'
     transcript_listen_mode = data.get('transcriptListenMode', 'latest')
+
+    # Transcript Groups Mode (for raw transcripts)
+    transcript_groups_mode = data.get('transcriptGroupsMode', None)  # UI override
+    if isinstance(transcript_groups_mode, str):
+        transcript_groups_mode = transcript_groups_mode.strip().lower()
+        if transcript_groups_mode not in {'none', 'latest', 'all', 'breakout'}:
+            transcript_groups_mode = None  # Invalid, will fall back to Supabase
+
+    # Saved Transcript Groups Mode (for memorized summaries)
     saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled')
     saved_transcript_groups_mode = data.get('savedTranscriptGroupsMode', 'none')
     if isinstance(saved_transcript_groups_mode, str):
@@ -5787,7 +5796,13 @@ When you identify information that should be permanently stored in your agent do
                             final_system_prompt += f"\n\n=== HISTORICAL MEETING TRANSCRIPT (OLDEST FIRST) ===\n{historical_block}\n=== END HISTORICAL MEETING TRANSCRIPT ==="
 
             # --- Groups Transcript Reading (Independent from 0000's own transcripts) ---
-            groups_mode = event_profile.get('groups_read_mode', 'none') if event_profile else 'none'
+            # Priority: 1) UI toggle (transcript_groups_mode), 2) Supabase default, 3) 'none'
+            groups_mode = transcript_groups_mode if transcript_groups_mode is not None else (
+                event_profile.get('groups_read_mode', 'none') if event_profile else 'none'
+            )
+            source = "UI" if transcript_groups_mode is not None else "Supabase"
+            logger.info(f"Groups mode for transcripts: '{groups_mode}' (source: {source})")
+
             if not is_wizard and event_id == '0000' and (tier3_allow_events or groups_mode == 'breakout'):
 
                 if groups_mode == 'latest':
