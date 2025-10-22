@@ -1116,7 +1116,7 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
                     filename,
                 )
                 return False
-            if event_type == 'group':
+            if event_type in {'group', 'breakout'}:
                 allow_cross = profile.get('allow_cross_group_read', False)
                 is_member = event_id in profile.get('allowed_group_events', set())
                 if not is_member and not allow_cross:
@@ -1163,7 +1163,7 @@ def verify_s3_key_ownership(s3_key: str, user: SupabaseUser) -> bool:
                         event_id,
                     )
                     return False
-                if event_type == 'group':
+                if event_type in {'group', 'breakout'}:
                     allow_cross = profile.get('allow_cross_group_read', False)
                     is_member = event_id in profile.get('allowed_group_events', set())
                     if not is_member and not allow_cross:
@@ -1603,7 +1603,7 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
                 if is_owner:
                     allowed = True
                     visible = True
-            elif event_type == "group":
+            elif event_type in {"group", "breakout"}:
                 if is_member:
                     allowed = True
                     visible = not visibility_hidden
@@ -1622,7 +1622,7 @@ def get_event_access_profile(agent_name: str, user_id: str) -> Optional[Dict[str
                     allowed_personal_events.add(event_id)
                     if not personal_event_id:
                         personal_event_id = event_id
-            elif event_type == "group":
+            elif event_type in {"group", "breakout"}:
                 allowed_group_events.add(event_id)
 
         if visible and event_id not in visible_events:
