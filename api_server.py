@@ -5602,7 +5602,8 @@ When you identify information that should be permanently stored in your agent do
                 historical_context_parts.append(meeting_content_instructions)
 
                 # Add summaries to historical context
-                if saved_transcript_memory_mode in {'all', 'some'}:
+                # Call if either: main memory mode is enabled OR groups mode is active
+                if saved_transcript_memory_mode in {'all', 'some'} or saved_transcript_groups_mode != 'none':
                     summaries_to_add = get_memorized_transcript_summaries(
                         agent_name=agent_name,
                         event_id=event_id,

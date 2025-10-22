@@ -147,13 +147,18 @@ def get_memorized_transcript_summaries(
     Returns a list of parsed JSON summary dicts ready for downstream formatting.
     """
     mode = _sanitize_memory_mode(saved_transcript_memory_mode)
-    if mode not in {"all", "some"}:
-        return []
-
     toggle_states = individual_memory_toggle_states or {}
     allowed_events = allowed_events or set()
     event_types_map = event_types_map or {}
     groups_mode = _sanitize_groups_mode(groups_mode)
+
+    # If groups mode is active but main memory mode is disabled,
+    # treat as 'all' mode so group summaries can be fetched
+    if groups_mode != 'none' and mode not in {"all", "some"}:
+        mode = "all"
+
+    if mode not in {"all", "some"}:
+        return []
 
     allow_cross_group_read = False
     allowed_group_events: Set[str] = set()
