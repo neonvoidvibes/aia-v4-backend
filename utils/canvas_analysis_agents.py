@@ -181,9 +181,14 @@ def get_memorized_transcript_summaries(
         if scope_enabled and groups_mode == "none":
             return False
         if groups_mode == "breakout":
+            # Only breakout events
             return event_types_map.get(target_event, "group").lower() == "breakout"
         if groups_mode in {"latest", "all"}:
-            return target_event in allowed_group_events
+            # Only non-breakout group events (matches transcripts behavior)
+            return (
+                target_event in allowed_group_events
+                and event_types_map.get(target_event, "group").lower() == "group"
+            )
         if not scope_enabled:
             # Workspace override: fall back to legacy behaviour.
             return target_event in allowed_group_events or target_event in allowed_events
@@ -194,13 +199,19 @@ def get_memorized_transcript_summaries(
             return []
         candidate: Set[str] = set()
         if groups_mode == "breakout":
+            # Only breakout events
             candidate = {
                 ev
                 for ev in allowed_group_events
                 if event_types_map.get(ev, "group").lower() == "breakout"
             }
         elif groups_mode in {"latest", "all"}:
-            candidate = set(allowed_group_events)
+            # Only non-breakout group events (matches transcripts Groups: Latest/All behavior)
+            candidate = {
+                ev
+                for ev in allowed_group_events
+                if event_types_map.get(ev, "group").lower() == "group"
+            }
         elif not scope_enabled:
             candidate = set(allowed_group_events) or {
                 ev for ev in allowed_events if ev not in {event_id, "0000"}
