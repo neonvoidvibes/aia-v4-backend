@@ -57,6 +57,7 @@ from utils.s3_utils import (
     write_agent_doc, write_event_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure,
     get_personal_agent_layer, list_saved_transcripts_multi, get_transcript_summaries_multi, get_event_docs_multi,
 )
+from utils.canvas_analysis_agents import get_memorized_transcript_summaries
 from utils.workspace_utils import memorized_transcript_scoping_enabled
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript
