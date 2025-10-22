@@ -147,17 +147,20 @@ def get_memorized_transcript_summaries(
     Returns a list of parsed JSON summary dicts ready for downstream formatting.
     """
     mode = _sanitize_memory_mode(saved_transcript_memory_mode)
+    original_mode = mode  # Track original mode to determine if we load primary event summaries
     toggle_states = individual_memory_toggle_states or {}
     allowed_events = allowed_events or set()
     event_types_map = event_types_map or {}
     groups_mode = _sanitize_groups_mode(groups_mode)
 
-    # If groups mode is active but main memory mode is disabled,
-    # treat as 'all' mode so group summaries can be fetched
-    if groups_mode != 'none' and mode not in {"all", "some"}:
-        mode = "all"
+    # Determine what to load based on user settings:
+    # - load_primary: Load the current event's summaries (when mode is 'all' or 'some')
+    # - load_groups: Load cross-group summaries (when groups_mode is not 'none')
+    load_primary = (original_mode in {"all", "some"})
+    load_groups = (groups_mode != 'none')
 
-    if mode not in {"all", "some"}:
+    # If neither primary nor groups mode is enabled, return empty
+    if not load_primary and not load_groups:
         return []
 
     allow_cross_group_read = False
@@ -206,39 +209,50 @@ def get_memorized_transcript_summaries(
         return sorted(candidate)
 
     try:
-        if mode == "all":
-            primary = get_transcript_summaries(agent_name, event_id)
-            logger.info(
-                "Loaded %d memorized summaries for %s/%s (mode=all)",
-                len(primary),
-                agent_name,
-                event_id,
-            )
-            group_events = _resolve_group_events_for_mode()
-            if not group_events:
-                return primary
+        # Use "all" mode logic when either:
+        # 1. User explicitly set memory mode to 'all', OR
+        # 2. User set groups mode (even if memory mode is 'none')
+        if original_mode == "all" or (original_mode not in {"all", "some"} and load_groups):
+            results = []
 
-            cross = get_transcript_summaries_multi(agent_name, group_events)
-            if groups_mode == "breakout":
-                valid_ids = set(group_events)
-                cross = [
-                    summary
-                    for summary in cross
-                    if summary.get("metadata", {}).get("event_id") in valid_ids
-                ]
-            elif groups_mode == "latest":
-                cross = _latest_summary_per_event(cross)
+            # Load primary event summaries if enabled
+            if load_primary:
+                primary = get_transcript_summaries(agent_name, event_id)
+                logger.info(
+                    "Loaded %d memorized summaries for %s/%s (mode=all)",
+                    len(primary),
+                    agent_name,
+                    event_id,
+                )
+                results.extend(primary)
 
-            logger.info(
-                "Loaded %d memorized summaries across %d group events for %s (groups_mode=%s)",
-                len(cross),
-                len(group_events),
-                agent_name,
-                groups_mode,
-            )
-            return primary + cross
+            # Load cross-group summaries if enabled
+            if load_groups:
+                group_events = _resolve_group_events_for_mode()
+                if group_events:
+                    cross = get_transcript_summaries_multi(agent_name, group_events)
+                    if groups_mode == "breakout":
+                        valid_ids = set(group_events)
+                        cross = [
+                            summary
+                            for summary in cross
+                            if summary.get("metadata", {}).get("event_id") in valid_ids
+                        ]
+                    elif groups_mode == "latest":
+                        cross = _latest_summary_per_event(cross)
 
-        # mode == "some"
+                    logger.info(
+                        "Loaded %d memorized summaries across %d group events for %s (groups_mode=%s)",
+                        len(cross),
+                        len(group_events),
+                        agent_name,
+                        groups_mode,
+                    )
+                    results.extend(cross)
+
+            return results
+
+        # original_mode == "some"
         selected_keys = {
             key: bool(value)
             for key, value in toggle_states.items()
