@@ -235,6 +235,10 @@ def _load_transcript_summary_object(
     if summary_content_str is None:
         return None
 
+    if not filename:
+        logger.debug("Skipping summary file with empty filename: %s", s3_key)
+        return None
+
     # Attempt JSON parse first
     try:
         summary_data = json.loads(summary_content_str)
@@ -976,6 +980,10 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
             if 'Contents' in page:
                 for obj in page['Contents']:
                     s3_key = obj['Key']
+                    if s3_key == summaries_prefix:
+                        continue
+                    if s3_key.endswith('/') and obj.get('Size', 0) == 0:
+                        continue
                     filename = os.path.basename(s3_key)
                     logger.info(f"Processing summary candidate file: {s3_key}") # Changed from debug to info
                     summary_data = _load_transcript_summary_object(s3_key, filename, agent_name, event_id)
@@ -1117,6 +1125,10 @@ def get_transcript_summaries_multi(agent_name: str, event_ids: List[str]) -> Lis
                 if 'Contents' in page:
                     for obj in page['Contents']:
                         s3_key = obj['Key']
+                        if s3_key == summaries_prefix:
+                            continue
+                        if s3_key.endswith('/') and obj.get('Size', 0) == 0:
+                            continue
                         filename = os.path.basename(s3_key)
                         summary_data = _load_transcript_summary_object(s3_key, filename, agent_name, event_id)
                         if summary_data:
