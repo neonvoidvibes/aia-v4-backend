@@ -1,6 +1,7 @@
 # utils/s3_utils.py
 """Utilities for interacting with AWS S3."""
 
+# pylint: disable=too-many-lines
 import os
 import re
 import boto3
@@ -26,6 +27,8 @@ S3_CACHE_TTL_DEFAULT = timedelta(minutes=120)
 S3_CACHE_TTL_NOT_FOUND = timedelta(minutes=1)
 
 EVENT_DOC_KEY_PATTERN = re.compile(r'/agents/([^/]+)/events/([^/]+)/docs/([^/]+)$')
+SUMMARY_FALLBACK_PARSED = "parsed_json"
+SUMMARY_FALLBACK_RAW = "raw_text"
 
 
 def parse_event_doc_key(s3_key: str) -> Optional[Tuple[str, str, str]]:
@@ -176,7 +179,7 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
         logger.error("S3 client or bucket not available for listing objects.")
         return []
 
-    objects_metadata = []
+    objects_metadata: List[Dict[str, Any]] = []
     try:
         logger.info(f"S3 LIST [BEGIN]: Bucket='{aws_s3_bucket}', Prefix='{base_key_prefix}'")
         paginator = s3.get_paginator('list_objects_v2')
@@ -217,6 +220,54 @@ def list_s3_objects_metadata(base_key_prefix: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"S3 LIST [ERROR]: Error listing objects in S3 for prefix '{base_key_prefix}': {e}", exc_info=True)
         return []
+
+
+def _load_transcript_summary_object(
+    s3_key: str,
+    filename: str,
+    agent_name: str,
+    event_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Load and normalize a transcript summary file into a dictionary regardless of file extension.
+    """
+    summary_content_str = read_file_content(s3_key, f"summary file {filename}")
+    if summary_content_str is None:
+        return None
+
+    # Attempt JSON parse first
+    try:
+        summary_data = json.loads(summary_content_str)
+        if not isinstance(summary_data, dict):
+            raise ValueError("Summary JSON root is not an object.")
+        metadata = summary_data.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            summary_data["metadata"] = metadata
+        metadata["summary_filename"] = filename
+        metadata["event_id"] = event_id
+        metadata.setdefault("agent_name", agent_name)
+        metadata["source_s3_key"] = s3_key
+        metadata.setdefault("parsing_status", SUMMARY_FALLBACK_PARSED)
+        return summary_data
+    except (json.JSONDecodeError, ValueError) as json_err:
+        logger.warning(
+            "Failed to parse JSON summary '%s': %s. Falling back to raw text representation.",
+            s3_key,
+            json_err,
+        )
+
+    metadata = {
+        "summary_filename": filename,
+        "event_id": event_id,
+        "agent_name": agent_name,
+        "source_s3_key": s3_key,
+        "parsing_status": SUMMARY_FALLBACK_RAW,
+    }
+    return {
+        "metadata": metadata,
+        "content": summary_content_str,
+    }
 
 def create_agent_structure(agent_name: str) -> bool:
     """
@@ -925,29 +976,14 @@ def get_transcript_summaries(agent_name: str, event_id: str) -> List[Dict[str, A
             if 'Contents' in page:
                 for obj in page['Contents']:
                     s3_key = obj['Key']
-                    if not s3_key.endswith('.json'):
-                        continue # Skip non-JSON files
-
                     filename = os.path.basename(s3_key)
                     logger.info(f"Processing summary candidate file: {s3_key}") # Changed from debug to info
-                    try:
-                        summary_content_str = read_file_content(s3_key, f"summary file {filename}")
-                        if summary_content_str:
-                            logger.debug(f"Successfully read content for {s3_key}, length {len(summary_content_str)}")
-                            summary_data = json.loads(summary_content_str)
-                            # Add filename to the summary data itself for easier reference later
-                            if 'metadata' in summary_data and isinstance(summary_data['metadata'], dict):
-                                summary_data['metadata']['summary_filename'] = filename
-                            else:
-                                summary_data['metadata'] = {'summary_filename': filename}
-                            parsed_summaries.append(summary_data)
-                            logger.info(f"Successfully parsed and added summary from {filename} to list. Current total parsed: {len(parsed_summaries)}")
-                        else:
-                            logger.warning(f"Empty content for summary file: {s3_key}")
-                    except json.JSONDecodeError as e_json:
-                        logger.error(f"Failed to parse JSON for summary file {s3_key}: {e_json}")
-                    except Exception as e_read:
-                        logger.error(f"Failed to read or process summary file {s3_key}: {e_read}")
+                    summary_data = _load_transcript_summary_object(s3_key, filename, agent_name, event_id)
+                    if summary_data:
+                        parsed_summaries.append(summary_data)
+                        logger.info(f"Successfully parsed and added summary from {filename} to list. Current total parsed: {len(parsed_summaries)}")
+                    else:
+                        logger.warning(f"Summary file could not be processed: {s3_key}")
 
         logger.info(f"Fetched and parsed {len(parsed_summaries)} transcript summaries for {agent_name}/{event_id}.")
         # Optional: Sort summaries, e.g., by a timestamp within their metadata if available
@@ -1081,22 +1117,12 @@ def get_transcript_summaries_multi(agent_name: str, event_ids: List[str]) -> Lis
                 if 'Contents' in page:
                     for obj in page['Contents']:
                         s3_key = obj['Key']
-                        if not s3_key.endswith('.json'):
-                            continue
-
                         filename = os.path.basename(s3_key)
-                        try:
-                            summary_content_str = read_file_content(s3_key, f"summary file {filename}")
-                            if summary_content_str:
-                                summary_data = json.loads(summary_content_str)
-                                # Add event_id and filename to metadata
-                                if 'metadata' not in summary_data or not isinstance(summary_data['metadata'], dict):
-                                    summary_data['metadata'] = {}
-                                summary_data['metadata']['event_id'] = event_id
-                                summary_data['metadata']['summary_filename'] = filename
-                                all_summaries.append(summary_data)
-                        except (json.JSONDecodeError, Exception) as e:
-                            logger.error(f"Failed to read/parse summary {s3_key}: {e}")
+                        summary_data = _load_transcript_summary_object(s3_key, filename, agent_name, event_id)
+                        if summary_data:
+                            all_summaries.append(summary_data)
+                        else:
+                            logger.warning("Skipped unreadable summary '%s'", s3_key)
         except Exception as e:
             logger.error(f"Error fetching summaries for event {event_id}: {e}", exc_info=True)
             continue

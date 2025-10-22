@@ -9,6 +9,7 @@ This module runs specialized analysis agents that:
 """
 
 import os
+import re
 import json
 import logging
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from .transcript_utils import get_latest_transcript_file, read_all_transcripts_i
 from .retrieval_handler import RetrievalHandler
 from .api_key_manager import get_api_key
 from .groq_rate_limiter import get_groq_rate_limiter
+from .workspace_utils import memorized_transcript_scoping_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +47,99 @@ def _sanitize_memory_mode(value: Optional[str]) -> str:
     return "none"
 
 
+def _sanitize_groups_mode(value: Optional[str]) -> str:
+    """Normalize Memorized Transcript groups mode values."""
+    if isinstance(value, str):
+        mode = value.strip().lower()
+        if mode in {"none", "latest", "all", "breakout"}:
+            return mode
+    return "none"
+
+
+SUMMARY_TOGGLE_KEY_PATTERN = re.compile(
+    r"organizations/[^/]+/agents/[^/]+/events/(?P<event>[^/]+)/transcripts/summarized/(?P<filename>[^/]+)$"
+)
+
+
+def _parse_toggle_key(toggle_key: str) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(toggle_key, str):
+        return None, None
+    match = SUMMARY_TOGGLE_KEY_PATTERN.search(toggle_key)
+    if not match:
+        return None, None
+    return match.group("event"), match.group("filename")
+
+
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value or not isinstance(value, str):
+        return None
+    sanitized = value.strip()
+    if not sanitized:
+        return None
+    try:
+        if sanitized.endswith("Z"):
+            sanitized = sanitized[:-1] + "+00:00"
+        return datetime.fromisoformat(sanitized)
+    except Exception:
+        return None
+
+
+def _latest_summary_per_event(summaries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    latest: Dict[str, Tuple[datetime, Dict[str, Any]]] = {}
+    for summary in summaries:
+        metadata = summary.get("metadata", {})
+        event_id = metadata.get("event_id")
+        if not event_id:
+            continue
+        timestamp = (
+            _parse_iso_timestamp(metadata.get("summarization_timestamp_utc"))
+            or _parse_iso_timestamp(metadata.get("updated_at"))
+            or _parse_iso_timestamp(metadata.get("created_at"))
+        )
+        if timestamp is None:
+            timestamp = datetime.min.replace(tzinfo=timezone.utc)
+        existing = latest.get(event_id)
+        if not existing or timestamp >= existing[0]:
+            latest[event_id] = (timestamp, summary)
+    ordered = sorted(latest.values(), key=lambda item: item[0], reverse=True)
+    return [entry[1] for entry in ordered]
+
+
+def _is_toggle_selected_for_summary(
+    summary_filename: str,
+    event_id: str,
+    toggle_states: Dict[str, Any],
+) -> bool:
+    if not summary_filename or not toggle_states:
+        return False
+
+    normalized_suffix = f"/events/{event_id}/transcripts/summarized/{summary_filename}"
+    for key, value in toggle_states.items():
+        if not value or not isinstance(key, str):
+            continue
+        if key.endswith(normalized_suffix):
+            return True
+
+    # Legacy fallback: match by filename and accept when event is unspecified or matches.
+    for key, value in toggle_states.items():
+        if not value or not isinstance(key, str):
+            continue
+        if key.endswith(f"/{summary_filename}"):
+            toggle_event, _ = _parse_toggle_key(key)
+            if toggle_event is None or toggle_event == event_id:
+                return True
+    return False
+
+
 def get_memorized_transcript_summaries(
     agent_name: str,
     event_id: str,
     saved_transcript_memory_mode: str = "none",
-    individual_memory_toggle_states: Optional[Dict[str, bool]] = None,
+    individual_memory_toggle_states: Optional[Dict[str, Any]] = None,
     allowed_events: Optional[set] = None,
     event_profile: Optional[Dict[str, Any]] = None,
     event_types_map: Optional[Dict[str, str]] = None,
+    groups_mode: str = "none",
 ) -> List[Dict[str, Any]]:
     """
     Retrieve memorized transcript summaries based on Settings > Memory configuration.
@@ -63,79 +150,138 @@ def get_memorized_transcript_summaries(
     if mode not in {"all", "some"}:
         return []
 
-    individual_memory_toggle_states = individual_memory_toggle_states or {}
+    toggle_states = individual_memory_toggle_states or {}
     allowed_events = allowed_events or set()
     event_types_map = event_types_map or {}
+    groups_mode = _sanitize_groups_mode(groups_mode)
+
     allow_cross_group_read = False
     allowed_group_events: Set[str] = set()
-
     if event_profile:
         allow_cross_group_read = event_profile.get("allow_cross_group_read", False)
         allowed_group_events = set(event_profile.get("allowed_group_events") or [])
 
-    # Determine tier3 events eligible for cross-group summaries
-    tier3_allow_events: Set[str] = set()
-    if event_id == "0000" and allow_cross_group_read and allowed_group_events:
-        tier3_allow_events = set(allowed_group_events) - {"0000"}
-        if tier3_allow_events:
-            logger.info(
-                "Memorized summaries (all): cross-group enabled with %d events",
-                len(tier3_allow_events),
-            )
-    else:
-        if allowed_events:
-            tier3_allow_events = {ev for ev in allowed_events if ev not in {"0000", event_id}}
-        if allowed_group_events:
-            tier3_allow_events = {ev for ev in tier3_allow_events if ev in allowed_group_events}
-        if event_types_map:
-            tier3_allow_events = {
+    scope_enabled = memorized_transcript_scoping_enabled(agent_name)
+
+    def _event_allowed_for_memory(target_event: str) -> bool:
+        if target_event == event_id:
+            return True
+        if target_event not in allowed_events:
+            return False
+        if not allow_cross_group_read:
+            return False
+        if scope_enabled and groups_mode == "none":
+            return False
+        if groups_mode == "breakout":
+            return event_types_map.get(target_event, "group").lower() == "breakout"
+        if groups_mode in {"latest", "all"}:
+            return target_event in allowed_group_events
+        if not scope_enabled:
+            # Workspace override: fall back to legacy behaviour.
+            return target_event in allowed_group_events or target_event in allowed_events
+        return False
+
+    def _resolve_group_events_for_mode() -> List[str]:
+        if not allow_cross_group_read:
+            return []
+        candidate: Set[str] = set()
+        if groups_mode == "breakout":
+            candidate = {
                 ev
-                for ev in tier3_allow_events
-                if event_types_map.get(ev, "group").lower() in {"group", "breakout"}
+                for ev in allowed_group_events
+                if event_types_map.get(ev, "group").lower() == "breakout"
             }
+        elif groups_mode in {"latest", "all"}:
+            candidate = set(allowed_group_events)
+        elif not scope_enabled:
+            candidate = set(allowed_group_events) or {
+                ev for ev in allowed_events if ev not in {event_id, "0000"}
+            }
+        candidate.discard(event_id)
+        return sorted(candidate)
 
     try:
         if mode == "all":
-            if tier3_allow_events:
-                summaries = get_transcript_summaries_multi(agent_name, list(tier3_allow_events))
-                logger.info(
-                    "Loaded %d memorized summaries across %d tier3 events for %s",
-                    len(summaries),
-                    len(tier3_allow_events),
-                    agent_name,
-                )
-                return summaries
-            summaries = get_transcript_summaries(agent_name, event_id)
+            primary = get_transcript_summaries(agent_name, event_id)
             logger.info(
                 "Loaded %d memorized summaries for %s/%s (mode=all)",
-                len(summaries),
+                len(primary),
                 agent_name,
                 event_id,
             )
-            return summaries
+            group_events = _resolve_group_events_for_mode()
+            if not group_events:
+                return primary
+
+            cross = get_transcript_summaries_multi(agent_name, group_events)
+            if groups_mode == "breakout":
+                valid_ids = set(group_events)
+                cross = [
+                    summary
+                    for summary in cross
+                    if summary.get("metadata", {}).get("event_id") in valid_ids
+                ]
+            elif groups_mode == "latest":
+                cross = _latest_summary_per_event(cross)
+
+            logger.info(
+                "Loaded %d memorized summaries across %d group events for %s (groups_mode=%s)",
+                len(cross),
+                len(group_events),
+                agent_name,
+                groups_mode,
+            )
+            return primary + cross
 
         # mode == "some"
-        all_summaries = get_transcript_summaries(agent_name, event_id)
-        filtered: List[Dict[str, Any]] = []
-        logger.info(
-            "Filtering memorized summaries (some mode). Available=%d, toggles=%d",
-            len(all_summaries),
-            len(individual_memory_toggle_states),
-        )
-        for summary in all_summaries:
-            summary_filename = summary.get("metadata", {}).get("summary_filename")
-            if not summary_filename:
-                continue
-            summary_key = (
-                f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/{summary_filename}"
+        selected_keys = {
+            key: bool(value)
+            for key, value in toggle_states.items()
+            if value
+        }
+        if not selected_keys:
+            logger.info("Memorized summaries selected in 'some' mode: 0 (no toggles enabled)")
+            return []
+
+        events_to_fetch: Set[str] = {event_id}
+        for key in selected_keys:
+            toggle_event, _ = _parse_toggle_key(key)
+            if toggle_event and toggle_event != event_id:
+                if _event_allowed_for_memory(toggle_event):
+                    events_to_fetch.add(toggle_event)
+                else:
+                    logger.info(
+                        "Skipping toggled summary from disallowed event '%s' for agent '%s'",
+                        toggle_event,
+                        agent_name,
+                    )
+
+        collected: List[Dict[str, Any]] = []
+        for target_event in sorted(events_to_fetch):
+            summaries = get_transcript_summaries(agent_name, target_event)
+            logger.info(
+                "Candidate memorized summaries for %s/%s (some mode): %d",
+                agent_name,
+                target_event,
+                len(summaries),
             )
-            if individual_memory_toggle_states.get(summary_key):
-                filtered.append(summary)
+            for summary in summaries:
+                metadata = summary.get("metadata", {})
+                filename = metadata.get("summary_filename")
+                summary_event_id = metadata.get("event_id", target_event)
+                if not filename:
+                    continue
+                if not _event_allowed_for_memory(summary_event_id):
+                    if summary_event_id != event_id:
+                        continue
+                if _is_toggle_selected_for_summary(filename, summary_event_id, selected_keys):
+                    collected.append(summary)
+
         logger.info(
             "Memorized summaries selected in 'some' mode: %d",
-            len(filtered),
+            len(collected),
         )
-        return filtered
+        return collected
 
     except Exception as err:
         logger.error(
@@ -1055,6 +1201,7 @@ def get_all_canvas_source_content(
     individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
     saved_transcript_memory_mode: str = 'none',
     individual_memory_toggle_states: Optional[Dict[str, bool]] = None,
+    saved_transcript_groups_mode: str = 'none',
     include_memorized_summaries: bool = True,
     allowed_events: Optional[set] = None,
     event_types_map: Optional[Dict[str, str]] = None,
@@ -1142,6 +1289,7 @@ def get_all_canvas_source_content(
             allowed_events=allowed_events,
             event_profile=event_profile,
             event_types_map=event_types_map,
+            groups_mode=saved_transcript_groups_mode,
         )
 
         if summaries:
@@ -1390,6 +1538,7 @@ def get_or_generate_analysis_doc(
     individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
     saved_transcript_memory_mode: str = 'none',
     individual_memory_toggle_states: Optional[Dict[str, bool]] = None,
+    saved_transcript_groups_mode: str = 'none',
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
     personal_event_id: Optional[str] = None,
@@ -1410,6 +1559,9 @@ def get_or_generate_analysis_doc(
         transcript_listen_mode: Listen mode for event's own transcripts (none/latest/some/all)
         groups_read_mode: Groups read mode from settings (none/latest/all/breakout)
         individual_raw_transcript_toggle_states: Dict of s3Key -> bool for "some" mode filtering
+        saved_transcript_memory_mode: Memorized transcript include mode
+        individual_memory_toggle_states: Toggle states for memorized transcript "some" mode
+        saved_transcript_groups_mode: Groups mode for memorized transcripts (none/latest/all/breakout)
         event_type: Event type
         personal_layer: Personal agent layer
         personal_event_id: Personal event ID
@@ -1474,6 +1626,7 @@ def get_or_generate_analysis_doc(
         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
         saved_transcript_memory_mode=saved_transcript_memory_mode,
         individual_memory_toggle_states=individual_memory_toggle_states,
+        saved_transcript_groups_mode=saved_transcript_groups_mode,
         allowed_events=allowed_events,
         event_types_map=event_types_map,
         event_profile=event_profile

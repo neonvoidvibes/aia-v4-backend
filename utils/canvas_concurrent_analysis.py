@@ -26,6 +26,7 @@ def run_concurrent_mlp_analysis(
     individual_raw_transcript_toggle_states: Optional[Dict[str, bool]] = None,
     saved_transcript_memory_mode: str = 'none',
     individual_memory_toggle_states: Optional[Dict[str, bool]] = None,
+    saved_transcript_groups_mode: str = 'none',
     event_type: str = 'shared',
     personal_layer: Optional[str] = None,
     personal_event_id: Optional[str] = None,
@@ -53,6 +54,7 @@ def run_concurrent_mlp_analysis(
         individual_raw_transcript_toggle_states: Toggle states for 'some' mode
         saved_transcript_memory_mode: Memorized transcript mode ('none'|'some'|'all')
         individual_memory_toggle_states: Toggle states for memorized transcript 'some' mode
+        saved_transcript_groups_mode: Memorized transcript groups mode ('none'|'latest'|'all'|'breakout')
         event_type: Event type
         personal_layer: Personal layer content
         personal_event_id: Personal event ID
@@ -105,6 +107,7 @@ def run_concurrent_mlp_analysis(
                 individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                 saved_transcript_memory_mode=saved_transcript_memory_mode,
                 individual_memory_toggle_states=individual_memory_toggle_states,
+                saved_transcript_groups_mode=saved_transcript_groups_mode,
                 event_type=event_type,
                 personal_layer=personal_layer,
                 personal_event_id=personal_event_id,

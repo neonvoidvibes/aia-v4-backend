@@ -57,6 +57,7 @@ from utils.s3_utils import (
     write_agent_doc, write_event_doc, S3_CACHE_LOCK, S3_FILE_CACHE, create_agent_structure,
     get_personal_agent_layer, list_saved_transcripts_multi, get_transcript_summaries_multi, get_event_docs_multi,
 )
+from utils.workspace_utils import memorized_transcript_scoping_enabled
 from utils.transcript_summarizer import generate_transcript_summary # Added import
 from utils.multi_agent_summarizer.pipeline import summarize_transcript as ma_summarize_transcript
 from utils.pinecone_utils import init_pinecone, create_namespace
@@ -1486,11 +1487,10 @@ def _fetch_agent_event_rows(agent_name: str) -> List[Dict[str, Any]]:
             return []
         return res.data or []
     except Exception as exc:
-        logger.error(
+        logger.warning(
             "Unexpected error fetching agent_events for agent '%s': %s",
             agent_name,
             exc,
-            exc_info=True,
         )
         return []
 
@@ -1517,12 +1517,11 @@ def _fetch_user_event_memberships(agent_name: str, user_id: str) -> Set[str]:
                 memberships.add(raw_event_id.strip().lower())
         return memberships
     except Exception as exc:
-        logger.error(
+        logger.warning(
             "Unexpected error fetching event_members for agent '%s' user '%s': %s",
             agent_name,
             user_id,
             exc,
-            exc_info=True,
         )
         return set()
 
@@ -4546,57 +4545,66 @@ def list_s3_documents(user: SupabaseUser):
 
             if event_id == '0000' and allow_cross_group_read and allowed_group_events:
                 is_summarized = '/transcripts/summarized/' in (s3_prefix or '')
-                # Use multi-event listing
-                logger.info(f"Cross-group read: listing {'summarized' if is_summarized else 'saved'} transcripts from {len(allowed_group_events)} events")
-                try:
-                    formatted_files = []
-                    if is_summarized:
-                        # get_transcript_summaries_multi returns parsed JSON summary objects
-                        summaries = get_transcript_summaries_multi(agent_name, list(allowed_group_events))
-                        for summary in summaries:
-                            metadata = summary.get('metadata', {})
-                            event_id_from_meta = metadata.get('event_id', '0000')
-                            filename = metadata.get('summary_filename', 'summary.json')
-                            # Reconstruct S3 key
-                            s3_key = f"organizations/river/agents/{agent_name}/events/{event_id_from_meta}/transcripts/summarized/{filename}"
-                            # Estimate size from JSON string
-                            try:
-                                size = len(json.dumps(summary))
-                            except:
-                                size = 0
-                            # Get timestamp from metadata if available
-                            created_at = metadata.get('created_at')
-                            last_modified = None
-                            if created_at:
+                scoping_enabled = memorized_transcript_scoping_enabled(agent_name)
+                if is_summarized and scoping_enabled:
+                    logger.info(
+                        "Memorized transcript scoping enabled for agent '%s'; "
+                        "skipping multi-event listing for summarized transcripts.",
+                        agent_name,
+                    )
+                else:
+                    # Use multi-event listing
+                    logger.info(f"Cross-group read: listing {'summarized' if is_summarized else 'saved'} transcripts from {len(allowed_group_events)} events")
+                    try:
+                        formatted_files = []
+                        if is_summarized:
+                            # get_transcript_summaries_multi returns parsed JSON summary objects
+                            summaries = get_transcript_summaries_multi(agent_name, list(allowed_group_events))
+                            for summary in summaries:
+                                metadata = summary.get('metadata', {})
+                                event_id_from_meta = metadata.get('event_id', '0000')
+                                filename = metadata.get('summary_filename', 'summary.json')
+                                # Reconstruct S3 key
+                                s3_key = f"organizations/river/agents/{agent_name}/events/{event_id_from_meta}/transcripts/summarized/{filename}"
+                                # Estimate size from JSON string
                                 try:
-                                    from dateutil import parser as date_parser
-                                    last_modified = date_parser.parse(created_at).isoformat()
+                                    size = len(json.dumps(summary))
                                 except:
-                                    pass
-                            formatted_files.append({
-                                "name": filename,
-                                "size": size,
-                                "lastModified": last_modified,
-                                "s3Key": s3_key,
-                                "type": "application/json",
-                                "event_id": event_id_from_meta
-                            })
-                    else:
-                        # list_saved_transcripts_multi returns S3 object metadata
-                        items = list_saved_transcripts_multi(agent_name, list(allowed_group_events))
-                        for item in items:
-                            formatted_files.append({
-                                "name": item['filename'] if 'filename' in item else os.path.basename(item['Key']),
-                                "size": item['Size'],
-                                "lastModified": item['LastModified'].isoformat() if item.get('LastModified') else None,
-                                "s3Key": item['Key'],
-                                "type": "text/plain",
-                                "event_id": item.get('event_id', '0000')
-                            })
-                    return jsonify(formatted_files), 200
-                except Exception as e:
-                    logger.error(f"Error in multi-event listing: {e}", exc_info=True)
-                    return jsonify({"error": "Internal server error listing multi-event transcripts"}), 500
+                                    size = 0
+                                # Get timestamp from metadata if available
+                                created_at = metadata.get('created_at')
+                                last_modified = None
+                                if created_at:
+                                    try:
+                                        from dateutil import parser as date_parser
+                                        last_modified = date_parser.parse(created_at).isoformat()
+                                    except:
+                                        pass
+                                file_type = "application/json" if filename.lower().endswith('.json') else "text/plain"
+                                formatted_files.append({
+                                    "name": filename,
+                                    "size": size,
+                                    "lastModified": last_modified,
+                                    "s3Key": s3_key,
+                                    "type": file_type,
+                                    "event_id": event_id_from_meta
+                                })
+                        else:
+                            # list_saved_transcripts_multi returns S3 object metadata
+                            items = list_saved_transcripts_multi(agent_name, list(allowed_group_events))
+                            for item in items:
+                                formatted_files.append({
+                                    "name": item['filename'] if 'filename' in item else os.path.basename(item['Key']),
+                                    "size": item['Size'],
+                                    "lastModified": item['LastModified'].isoformat() if item.get('LastModified') else None,
+                                    "s3Key": item['Key'],
+                                    "type": "text/plain",
+                                    "event_id": item.get('event_id', '0000')
+                                })
+                        return jsonify(formatted_files), 200
+                    except Exception as e:
+                        logger.error(f"Error in multi-event listing: {e}", exc_info=True)
+                        return jsonify({"error": "Internal server error listing multi-event transcripts"}), 500
 
     # Standard single-prefix listing
     if not s3_prefix:
@@ -5188,6 +5196,13 @@ def handle_chat(user: SupabaseUser):
     event_id = event_id_raw.strip().lower() if isinstance(event_id_raw, str) else '0000'
     transcript_listen_mode = data.get('transcriptListenMode', 'latest')
     saved_transcript_memory_mode = data.get('savedTranscriptMemoryMode', 'disabled')
+    saved_transcript_groups_mode = data.get('savedTranscriptGroupsMode', 'none')
+    if isinstance(saved_transcript_groups_mode, str):
+        saved_transcript_groups_mode = saved_transcript_groups_mode.strip().lower()
+        if saved_transcript_groups_mode not in {'none', 'latest', 'all', 'breakout'}:
+            saved_transcript_groups_mode = 'none'
+    else:
+        saved_transcript_groups_mode = 'none'
     transcription_language_setting = data.get('transcriptionLanguage', 'any')
     # Get default model from the existing LLM_MODEL_NAME env var, with a hardcoded fallback.
     default_model = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
@@ -5206,6 +5221,7 @@ def handle_chat(user: SupabaseUser):
     signal_bias = data.get('signalBias', 'medium') # 'low' | 'medium' | 'high'
 
     event_profile = get_event_access_profile(agent_name, user.id) if agent_name else None
+    memorized_scope_enabled = memorized_transcript_scoping_enabled(agent_name) if agent_name else True
     allowed_events: Set[str] = {"0000"}
     event_types_map: Dict[str, str] = {}
     personal_event_id: Optional[str] = None
@@ -5585,119 +5601,109 @@ When you identify information that should be permanently stored in your agent do
                 historical_context_parts.append(meeting_content_instructions)
 
                 # Add summaries to historical context
-                if saved_transcript_memory_mode == 'all' or (saved_transcript_memory_mode == 'some' and individual_memory_toggle_states):
+                if saved_transcript_memory_mode in {'all', 'some'}:
+                    summaries_to_add = get_memorized_transcript_summaries(
+                        agent_name=agent_name,
+                        event_id=event_id,
+                        saved_transcript_memory_mode=saved_transcript_memory_mode,
+                        individual_memory_toggle_states=individual_memory_toggle_states,
+                        allowed_events=allowed_events,
+                        event_profile=event_profile,
+                        event_types_map=event_types_map,
+                        groups_mode=saved_transcript_groups_mode,
+                    )
+                else:
                     summaries_to_add = []
-                    if saved_transcript_memory_mode == 'all':
-                        # Use multi-event summaries when cross-group read is enabled and in event 0000
-                        if event_id == '0000' and allow_cross_group_read and tier3_allow_events:
-                            logger.info(f"Cross-group read: fetching summaries from {len(tier3_allow_events)} events")
-                            summaries_to_add = get_transcript_summaries_multi(agent_name, list(tier3_allow_events))
-                        else:
-                            summaries_to_add = get_transcript_summaries(agent_name, event_id)
-                    else: # 'some'
-                        # For 'some' mode, still fetch from single event (cross-group not applicable here)
-                        all_summaries = get_transcript_summaries(agent_name, event_id)
-                        summaries_to_add = []
-                        logger.info(f"Filtering summaries in 'some' mode. Available summaries: {len(all_summaries)}, Toggle states: {individual_memory_toggle_states}")
-                        for s in all_summaries:
-                            # Construct the summary S3 key that matches what frontend sends
-                            summary_filename = s.get("metadata", {}).get("summary_filename", "")
-                            if summary_filename:
-                                summary_s3_key = f"organizations/river/agents/{agent_name}/events/{event_id}/transcripts/summarized/{summary_filename}"
-                                is_selected = individual_memory_toggle_states.get(summary_s3_key, False)
-                                logger.info(f"Summary check: filename='{summary_filename}', constructed_key='{summary_s3_key}', selected={is_selected}")
-                                if is_selected:
-                                    summaries_to_add.append(s)
+
+                # Add ANALYZED MEETING SUMMARIES (new multi-agent summaries from vector DB)
+                analyzed_summaries_context = ""
+                try:
+                    # Multi-pass retrieval: Phase 1 - Metadata filtering + Phase 2 - Semantic search
+                    # Tier-3 policy: ON for "0000" (spans all events by default), OFF for isolated events
+                    if event_id == "0000":
+                        meeting_retriever = RetrievalHandler(
+                            index_name="river",
+                            agent_name=agent_name,
+                            event_id=event_id,
+                            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                            openai_api_key=get_api_key(agent_name, 'openai'),
+                            event_type=current_event_type,
+                            personal_event_id=personal_event_id,
+                            include_t3=True,
+                            allowed_tier3_events=None,  # No allowlist => span all events
+                            include_personal_tier=(current_event_type == 'personal')
+                        )
+                    else:
+                        meeting_retriever = RetrievalHandler(
+                            index_name="river",
+                            agent_name=agent_name,
+                            event_id=event_id,
+                            anthropic_api_key=get_api_key(agent_name, 'anthropic'),
+                            openai_api_key=get_api_key(agent_name, 'openai'),
+                            event_type=current_event_type,
+                            personal_event_id=personal_event_id,
+                            include_t3=False,
+                            allowed_tier3_events=set(),  # Strict isolation
+                            include_personal_tier=(current_event_type == 'personal')
+                        )
                     
-                    # Add ANALYZED MEETING SUMMARIES (new multi-agent summaries from vector DB)
-                    analyzed_summaries_context = ""
-                    try:
-                        # Multi-pass retrieval: Phase 1 - Metadata filtering + Phase 2 - Semantic search
-                        # Tier-3 policy: ON for "0000" (spans all events by default), OFF for isolated events
-                        if event_id == "0000":
-                            meeting_retriever = RetrievalHandler(
-                                index_name="river",
-                                agent_name=agent_name,
-                                event_id=event_id,
-                                anthropic_api_key=get_api_key(agent_name, 'anthropic'),
-                                openai_api_key=get_api_key(agent_name, 'openai'),
-                                event_type=current_event_type,
-                                personal_event_id=personal_event_id,
-                                include_t3=True,
-                                allowed_tier3_events=None,  # No allowlist => span all events
-                                include_personal_tier=(current_event_type == 'personal')
-                            )
-                        else:
-                            meeting_retriever = RetrievalHandler(
-                                index_name="river",
-                                agent_name=agent_name,
-                                event_id=event_id,
-                                anthropic_api_key=get_api_key(agent_name, 'anthropic'),
-                                openai_api_key=get_api_key(agent_name, 'openai'),
-                                event_type=current_event_type,
-                                personal_event_id=personal_event_id,
-                                include_t3=False,
-                                allowed_tier3_events=set(),  # Strict isolation
-                                include_personal_tier=(current_event_type == 'personal')
-                            )
-                        
-                        # Build metadata filter for meeting summaries from this event
-                        metadata_filter = {
-                            "content_category": "meeting_summary",
-                            "event_id": event_id,
-                            "analysis_type": "multi_agent"
-                        }
-                        
-                        # Retrieve meeting summaries with contextual ranking (recent first)
-                        meeting_docs = meeting_retriever.get_relevant_context_tiered(
-                            query="recent meeting summaries and decisions", 
-                            tier_caps=[5, 0, 0],  # Focus on event-specific content only
-                            mmr_lambda=0.3,  # Lower diversity, higher relevance for meetings
-                            mmr_k=8,         # Get up to 8 meeting summary chunks
-                            include_t3=False,  # No cross-event contamination
-                            metadata_filter=metadata_filter  # Apply our content category filter
+                    # Build metadata filter for meeting summaries from this event
+                    metadata_filter = {
+                        "content_category": "meeting_summary",
+                        "event_id": event_id,
+                        "analysis_type": "multi_agent"
+                    }
+                    
+                    # Retrieve meeting summaries with contextual ranking (recent first)
+                    meeting_docs = meeting_retriever.get_relevant_context_tiered(
+                        query="recent meeting summaries and decisions", 
+                        tier_caps=[5, 0, 0],  # Focus on event-specific content only
+                        mmr_lambda=0.3,  # Lower diversity, higher relevance for meetings
+                        mmr_k=8,         # Get up to 8 meeting summary chunks
+                        include_t3=False,  # No cross-event contamination
+                        metadata_filter=metadata_filter  # Apply our content category filter
+                    )
+                    
+                    if meeting_docs:
+                        analyzed_summaries_context = (
+                            "=== ANALYZED MEETING SUMMARIES ===\n"
+                            "Note: The following sections are AI-generated analyses of the meetings.\n"
+                            "They are not quotes or statements from participants and should not be attributed to any speaker.\n\n"
                         )
                         
-                        if meeting_docs:
-                            analyzed_summaries_context = (
-                                "=== ANALYZED MEETING SUMMARIES ===\n"
-                                "Note: The following sections are AI-generated analyses of the meetings.\n"
-                                "They are not quotes or statements from participants and should not be attributed to any speaker.\n\n"
-                            )
+                        # Group and sort by meeting date (recent first)
+                        meeting_summaries = {}
+                        for doc in meeting_docs:
+                            meeting_date = doc.metadata.get('meeting_date', 'unknown')
+                            file_name = doc.metadata.get('file_name', 'unknown')
                             
-                            # Group and sort by meeting date (recent first)
-                            meeting_summaries = {}
-                            for doc in meeting_docs:
-                                meeting_date = doc.metadata.get('meeting_date', 'unknown')
-                                file_name = doc.metadata.get('file_name', 'unknown')
-                                
-                                if meeting_date not in meeting_summaries:
-                                    meeting_summaries[meeting_date] = {
-                                        'date': meeting_date,
-                                        'file_name': file_name,
-                                        'content_chunks': []
-                                    }
-                                meeting_summaries[meeting_date]['content_chunks'].append(doc.page_content)
-                            
-                            # Sort by date (recent first) and format
-                            for meeting_date in sorted(meeting_summaries.keys(), reverse=True):
-                                summary_data = meeting_summaries[meeting_date]
-                                analyzed_summaries_context += f"**[Meeting Analysis - {event_id} - {summary_data['date']}]**\n"
-                                analyzed_summaries_context += f"**Source:** {summary_data['file_name']}\n\n"
-                                
-                                # Combine content chunks
-                                combined_content = "\n\n---\n\n".join(summary_data['content_chunks'])
-                                analyzed_summaries_context += f"{combined_content}\n\n"
-                            
-                            analyzed_summaries_context += "=== END ANALYZED MEETING SUMMARIES ==="
-                            historical_context_parts.append(analyzed_summaries_context)
-                            
-                            logger.info(f"Retrieved {len(meeting_docs)} meeting summary chunks for {event_id}")
+                            if meeting_date not in meeting_summaries:
+                                meeting_summaries[meeting_date] = {
+                                    'date': meeting_date,
+                                    'file_name': file_name,
+                                    'content_chunks': []
+                                }
+                            meeting_summaries[meeting_date]['content_chunks'].append(doc.page_content)
                         
-                    except Exception as e:
-                        logger.warning(f"Failed to retrieve meeting summaries for {event_id}: {e}")
-                        # Fallback to empty - don't break the flow
+                        # Sort by date (recent first) and format
+                        for meeting_date in sorted(meeting_summaries.keys(), reverse=True):
+                            summary_data = meeting_summaries[meeting_date]
+                            analyzed_summaries_context += f"**[Meeting Analysis - {event_id} - {summary_data['date']}]**\n"
+                            analyzed_summaries_context += f"**Source:** {summary_data['file_name']}\n\n"
+                            
+                            # Combine content chunks
+                            combined_content = "\n\n---\n\n".join(summary_data['content_chunks'])
+                            analyzed_summaries_context += f"{combined_content}\n\n"
+                        
+                        analyzed_summaries_context += "=== END ANALYZED MEETING SUMMARIES ==="
+                        historical_context_parts.append(analyzed_summaries_context)
+                        
+                        logger.info(f"Retrieved {len(meeting_docs)} meeting summary chunks for {event_id}")
                     
+                except Exception as e:
+                    logger.warning(f"Failed to retrieve meeting summaries for {event_id}: {e}")
+                    # Fallback to empty - don't break the flow
+                
                     if summaries_to_add:
                         summaries_context_str = (
                             "=== SAVED TRANSCRIPT SUMMARIES ===\n"

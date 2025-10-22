@@ -212,6 +212,13 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
             saved_transcript_memory_mode = 'none'
         if saved_transcript_memory_mode not in {'none', 'some', 'all'}:
             saved_transcript_memory_mode = 'none'
+        saved_transcript_groups_mode = data.get('savedTranscriptGroupsMode', 'none')
+        if isinstance(saved_transcript_groups_mode, str):
+            saved_transcript_groups_mode = saved_transcript_groups_mode.strip().lower()
+        else:
+            saved_transcript_groups_mode = 'none'
+        if saved_transcript_groups_mode not in {'none', 'latest', 'all', 'breakout'}:
+            saved_transcript_groups_mode = 'none'
         individual_memory_toggle_states = data.get('individualMemoryToggleStates', {}) or {}
         event_id = '0000'  # Canvas always uses event 0000
         model_selection = os.getenv("LLM_MODEL_NAME", "claude-sonnet-4-5-20250929")
@@ -265,6 +272,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                         saved_transcript_memory_mode=saved_transcript_memory_mode,
                         individual_memory_toggle_states=individual_memory_toggle_states,
+                        saved_transcript_groups_mode=saved_transcript_groups_mode,
                         event_type='shared',  # Canvas typically uses shared context
                         personal_layer=None,  # Canvas doesn't use personal layers for now
                         personal_event_id=None,
@@ -306,6 +314,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                         saved_transcript_memory_mode='none',  # summaries handled separately for prompt
                         individual_memory_toggle_states=individual_memory_toggle_states,
+                        saved_transcript_groups_mode=saved_transcript_groups_mode,
                         include_memorized_summaries=False,
                         allowed_events=allowed_events,
                         event_types_map=event_types_map,
@@ -330,6 +339,7 @@ def register_canvas_routes(app, anthropic_client, supabase_auth_required):
                         allowed_events=allowed_events,
                         event_profile=event_profile,
                         event_types_map=event_types_map,
+                        groups_mode=saved_transcript_groups_mode,
                     )
 
                     if memorized_summaries:
@@ -644,6 +654,13 @@ This is a voice interface - every word must count.
                 saved_transcript_memory_mode = 'none'
             if saved_transcript_memory_mode not in {'none', 'some', 'all'}:
                 saved_transcript_memory_mode = 'none'
+            saved_transcript_groups_mode = data.get('savedTranscriptGroupsMode', 'none')
+            if isinstance(saved_transcript_groups_mode, str):
+                saved_transcript_groups_mode = saved_transcript_groups_mode.strip().lower()
+            else:
+                saved_transcript_groups_mode = 'none'
+            if saved_transcript_groups_mode not in {'none', 'latest', 'all', 'breakout'}:
+                saved_transcript_groups_mode = 'none'
             individual_memory_toggle_states = data.get('individualMemoryToggleStates', {}) or {}
             event_id = '0000'
 
@@ -675,6 +692,7 @@ This is a voice interface - every word must count.
                     individual_raw_transcript_toggle_states=individual_raw_transcript_toggle_states,
                     saved_transcript_memory_mode=saved_transcript_memory_mode,
                     individual_memory_toggle_states=individual_memory_toggle_states,
+                    saved_transcript_groups_mode=saved_transcript_groups_mode,
                     event_type='shared',
                     personal_layer=None,
                     personal_event_id=None,
