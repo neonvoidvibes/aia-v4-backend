@@ -5704,18 +5704,18 @@ When you identify information that should be permanently stored in your agent do
                 except Exception as e:
                     logger.warning(f"Failed to retrieve meeting summaries for {event_id}: {e}")
                     # Fallback to empty - don't break the flow
-                
-                    if summaries_to_add:
-                        summaries_context_str = (
-                            "=== SAVED TRANSCRIPT SUMMARIES ===\n"
-                            "Note: The following are AI-generated summaries derived from meeting transcripts.\n"
-                            "They are not quotes or statements from participants and should not be attributed to any speaker.\n\n"
-                        )
-                        for summary_doc in summaries_to_add:
-                            summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
-                            summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
-                        summaries_context_str += "=== END SAVED TRANSCRIPT SUMMARIES ==="
-                        historical_context_parts.append(summaries_context_str)
+
+                if summaries_to_add:
+                    summaries_context_str = (
+                        "=== SAVED TRANSCRIPT SUMMARIES ===\n"
+                        "Note: The following are AI-generated summaries derived from meeting transcripts.\n"
+                        "They are not quotes or statements from participants and should not be attributed to any speaker.\n\n"
+                    )
+                    for summary_doc in summaries_to_add:
+                        summary_filename = summary_doc.get("metadata", {}).get("summary_filename", "unknown_summary.json")
+                        summaries_context_str += f"### Summary: {summary_filename}\n{json.dumps(summary_doc, indent=2, ensure_ascii=False)}\n\n"
+                    summaries_context_str += "=== END SAVED TRANSCRIPT SUMMARIES ==="
+                    historical_context_parts.append(summaries_context_str)
 
             if historical_context_parts:
                 final_system_prompt += "\n\n" + "\n\n".join(historical_context_parts)
