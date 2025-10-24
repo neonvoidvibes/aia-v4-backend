@@ -1833,10 +1833,32 @@ def list_users(user: SupabaseUser):
     if not client:
         return jsonify({"error": "Database service unavailable"}), 503
     try:
-        users_response = client.auth.admin.list_users()
-        # The response is an iterator, so we consume it into a list
-        users = [{'id': u.id, 'email': u.email} for u in users_response]
-        return jsonify(users), 200
+        # Fetch all users with pagination (default is 50 per page)
+        all_users = []
+        page = 1
+        per_page = 1000  # Max per page supported by Supabase
+
+        while True:
+            users_response = client.auth.admin.list_users(
+                page=page,
+                per_page=per_page
+            )
+            # The response is an iterator, so we consume it into a list
+            users_page = [{'id': u.id, 'email': u.email} for u in users_response]
+
+            if not users_page:  # No more users
+                break
+
+            all_users.extend(users_page)
+
+            # If we got fewer than per_page, we're done
+            if len(users_page) < per_page:
+                break
+
+            page += 1
+
+        logger.info(f"Fetched {len(all_users)} total users across {page} page(s)")
+        return jsonify(all_users), 200
     except Exception as e:
         logger.error(f"Error listing users: {e}", exc_info=True)
         return jsonify({"error": "Failed to list users"}), 500
