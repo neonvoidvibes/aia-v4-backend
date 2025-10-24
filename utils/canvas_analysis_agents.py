@@ -176,6 +176,12 @@ def get_memorized_transcript_summaries(
             return True
         if target_event not in allowed_events:
             return False
+
+        # Enforce sandboxing: Cross-group memory access only allowed when in shared event '0000'
+        # When user is in a specific group/breakout, they should only see that group's content
+        if event_id != '0000':
+            return False
+
         if not allow_cross_group_read:
             return False
         if scope_enabled and groups_mode == "none":
